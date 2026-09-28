@@ -510,6 +510,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
               </div>`;
             }).join("")}
           </fieldset>`).join("")}
+        ${data.setup_code_required ? `<p class="meta-line">🔑 This server has no access token yet, so saving asks for the <b>setup code</b> printed in the server's log (<code>docker compose logs magpie</code>). Setting an access token below removes that step.</p>` : ""}
         <p class="meta-line">Values saved here are stored in <code>${esc(data.settings_file)}</code> and take precedence over environment variables. Changes apply immediately.</p>
         <div class="actions sticky-actions">
           <button class="btn primary" type="submit">Save settings</button>
@@ -601,12 +602,25 @@ async function saveSettings(form) {
   await putSettings(changes);
 }
 
+let setupCode = null;  // this server's setup code (only needed while it has no access token)
+
 async function putSettings(changes) {
   try {
-    settingsData = await api("/api/settings", {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ changes }),
-    });
+    const headers = { "Content-Type": "application/json" };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    settingsData = await api("/api/settings", { method: "PUT", headers, body: JSON.stringify({ changes }) });
   } catch (e) {
+    if (e instanceof HttpError && e.status === 403) {
+      let detail = {};
+      try { detail = JSON.parse(e.message); } catch {}
+      if (detail.code === "setup_code_required") {
+        const again = setupCode ? "That setup code didn't match. " : "";
+        const code = prompt(`${again}${detail.message}\n\nSetup code:`);
+        if (!code) return toast("Settings not saved.");
+        setupCode = code.trim();
+        return putSettings(changes);
+      }
+    }
     if (e instanceof HttpError && e.status === 422) {
       let errors = {};
       try { errors = JSON.parse(e.message).errors || {}; } catch {}
@@ -615,12 +629,13 @@ async function putSettings(changes) {
     }
     return toast(`Couldn't save settings: ${e.message}`);
   }
+  for (const notice of settingsData.notices || []) toast(notice);
   // A new access token applies to this device too.
   if (changes.MAGPIE_API_TOKEN) await setToken(changes.MAGPIE_API_TOKEN);
   state.server = settingsData.status;
   renderServerStatus();
   renderSyncStatus();
-  toast("Settings saved.");
+  if (!(settingsData.notices || []).length) toast("Settings saved.");
   showSettings();
 }
 

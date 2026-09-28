@@ -5,6 +5,7 @@ import hmac
 import logging
 import mimetypes
 import re
+import secrets
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -79,6 +80,10 @@ def create_app(
             settings.load_errors.append(f"Settings could not be loaded: {e}")
     rt = _Runtime(settings)
     rt.open_database()
+
+    def log_setup_code() -> None:
+        log.warning("No access token is set. Setup code for changing settings in the web app: %s "
+                    "(new on every start; not needed once MAGPIE_API_TOKEN is set)", rt.setup_code)
     db = rt.db  # a proxy: answers 503 with the reason while the database is unavailable
     state: dict = {}
 
@@ -122,6 +127,8 @@ def create_app(
         for problem in settings.problems():
             if problem["level"] != "info":
                 log.warning("Setup: %s", problem["message"])
+        if not settings.api_token:
+            log_setup_code()
         yield
         if rt.worker_task:
             rt.worker_task.cancel()
@@ -204,6 +211,7 @@ def create_app(
         return {
             "groups": [{"name": name, "settings": items} for name, items in groups.items()],
             "data_dir": str(settings.data_dir), "settings_file": str(settings.overrides_path),
+            "setup_code_required": not settings.api_token,
             "status": server_status(),
         }
 
@@ -212,16 +220,28 @@ def create_app(
         return settings_payload()
 
     @app.put("/api/settings")
-    async def put_settings(update: SettingsUpdate):
+    async def put_settings(update: SettingsUpdate, request: Request):
+        # Without an access token anyone who can reach the server gets this far, so changing settings
+        # also needs the setup code from the server's log. (Not "localhost is fine": DNS rebinding lets
+        # a web page send requests that look local.)
+        if not settings.api_token and not _setup_code_ok(request.headers.get("x-magpie-setup-code"), rt.setup_code):
+            raise HTTPException(403, {
+                "code": "setup_code_required",
+                "message": "This server has no access token yet. Enter the setup code printed in the server's log "
+                           "(docker compose logs magpie), or set MAGPIE_API_TOKEN.",
+            })
+        had_token = bool(settings.api_token)
         try:
-            settings.save_overrides(update.changes)
+            notices = settings.save_overrides(update.changes)
         except OSError as e:
             raise HTTPException(500, f"Couldn't save settings to {settings.overrides_path}: {e}")
         except ValueError as e:  # SettingsError
             raise HTTPException(422, {"message": "Some values are invalid", "errors": getattr(e, "errors", {"_": str(e)})})
         if "pipeline" in state:
             reconfigure()
-        return settings_payload()
+        if had_token and not settings.api_token:
+            log_setup_code()  # the token was just removed: settings changes need the code again
+        return {**settings_payload(), "notices": notices}
 
     @app.get("/api/sync")
     def sync(since: str | None = Query(None, description="server_time returned by the previous sync")):
@@ -413,6 +433,13 @@ def _normalize_time(value: str | None) -> str | None:
 
 
 INTERRUPTED = "The server stopped before this finished. Re-analyze to try again."
+SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I: easy to copy from a log
+
+
+def _setup_code_ok(supplied: str | None, expected: str) -> bool:
+    def normalize(value: str | None) -> bytes:
+        return re.sub(r"[^A-Z0-9]", "", (value or "").upper()).encode()
+    return bool(supplied) and hmac.compare_digest(normalize(supplied), normalize(expected))
 
 
 class _Runtime:
@@ -428,6 +455,8 @@ class _Runtime:
         self.analyzer_error: str | None = None
         self.startup_errors: list[str] = []
         self.worker_task: asyncio.Task | None = None
+        # Guards PUT /api/settings while no access token is set; printed in the server log.
+        self.setup_code = "-".join("".join(secrets.choice(SETUP_ALPHABET) for _ in range(5)) for _ in range(3))
         self._last_attempt = 0.0
 
     @property

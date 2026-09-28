@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
 
@@ -234,8 +235,9 @@ class Settings:
             except ValueError:
                 pass  # reported by problems()
 
-    def save_overrides(self, changes: dict) -> None:
-        """Merge `changes` (env name -> value; None or "" removes the override) and persist them.
+    def save_overrides(self, changes: dict) -> list[str]:
+        """Merge `changes` (env name -> value; None removes the saved value, back to env/default) and
+        persist them. For secrets, "" saves an explicit "no key". Returns notices for the user.
         Raises ValueError for unknown names or invalid values, OSError if the file can't be written."""
         errors = {}
         for env, raw in changes.items():
@@ -249,12 +251,23 @@ class Settings:
                 errors[env] = str(e)
         if errors:
             raise SettingsError(errors)
+        notices = []
+        changes = dict(changes)
+        # The local LLM key is sent to LOCAL_LLM_URL: never let it follow the URL to another server.
+        if "LOCAL_LLM_URL" in changes and "LOCAL_LLM_API_KEY" not in changes and self.local_llm_api_key:
+            spec = SPEC_BY_ENV["LOCAL_LLM_URL"]
+            new_url = parse_value(spec, changes["LOCAL_LLM_URL"]) or parse_value(spec, _env_value(spec))
+            if _origin(new_url) != _origin(self.local_llm_url):
+                changes["LOCAL_LLM_API_KEY"] = ""
+                notices.append("The local LLM API key was removed because the server URL now points to a different "
+                               "server. Enter the key again if the new server needs one.")
         merged = dict(self.overrides)
         for env, raw in changes.items():
-            if raw is None or (isinstance(raw, str) and raw.strip() == ""):
+            blank = raw is None or (isinstance(raw, str) and raw.strip() == "")
+            if raw is None or (blank and SPEC_BY_ENV[env].kind != "secret"):
                 merged.pop(env, None)
             else:
-                merged[env] = raw
+                merged[env] = "" if blank else raw
         self.data_dir.mkdir(parents=True, exist_ok=True)
         tmp = self.overrides_path.with_suffix(".tmp")
         tmp.write_text(json.dumps(merged, indent=2, sort_keys=True))
@@ -264,6 +277,7 @@ class Settings:
             pass
         tmp.replace(self.overrides_path)
         self.reload_from(merged)
+        return notices
 
     def reload_from(self, overrides: dict) -> None:
         """Recompute every setting from the environment plus `overrides` (in place)."""
@@ -350,6 +364,15 @@ class Settings:
     @property
     def uploads_dir(self) -> Path:
         return self.data_dir / "uploads"
+
+
+def _origin(url: str | None) -> tuple:
+    parts = urlsplit((url or "").strip().lower())
+    try:
+        port = parts.port
+    except ValueError:  # malformed port: treat as its own origin
+        port = parts.netloc
+    return parts.scheme, parts.hostname, port
 
 
 class SettingsError(ValueError):

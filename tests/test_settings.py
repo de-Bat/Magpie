@@ -23,6 +23,11 @@ def app_for(tmp_path, **kw):
     return create_app(Settings.load() if not kw else Settings(**kw), http=httpx.AsyncClient())
 
 
+def setup_code(client) -> dict:
+    """Without an access token, changing settings needs the setup code from the server log."""
+    return {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+
+
 def test_invalid_environment_values_fall_back_and_are_reported(tmp_path, monkeypatch):
     monkeypatch.setenv("MAGPIE_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MAGPIE_ESCALATE_BELOW", "high")
@@ -66,7 +71,8 @@ def test_saving_settings_applies_them_live_and_persists(tmp_path, monkeypatch):
     app = app_for(tmp_path)
     with TestClient(app) as client:
         assert client.get("/api/health").json()["analyzer"] == "ocr"
-        r = client.put("/api/settings", json={"changes": {"ANTHROPIC_API_KEY": "sk-ant-secret-1234", "MAGPIE_EFFORT": "low"}})
+        r = client.put("/api/settings", json={"changes": {"ANTHROPIC_API_KEY": "sk-ant-secret-1234", "MAGPIE_EFFORT": "low"}},
+                       headers=setup_code(client))
         assert r.status_code == 200
         body = r.json()
         key = next(s for g in body["groups"] for s in g["settings"] if s["env"] == "ANTHROPIC_API_KEY")
@@ -82,14 +88,14 @@ def test_saving_settings_applies_them_live_and_persists(tmp_path, monkeypatch):
 
     # Resetting removes the saved value: back to the environment/default.
     with TestClient(app_for(tmp_path)) as client:
-        client.put("/api/settings", json={"changes": {"MAGPIE_EFFORT": None}})
+        client.put("/api/settings", json={"changes": {"MAGPIE_EFFORT": None}}, headers=setup_code(client))
     assert json.loads((tmp_path / "settings.json").read_text()) == {"ANTHROPIC_API_KEY": "sk-ant-secret-1234"}
 
 
 def test_invalid_settings_are_rejected_per_field(tmp_path):
     with TestClient(create_app(Settings(data_dir=tmp_path), http=httpx.AsyncClient())) as client:
         r = client.put("/api/settings", json={"changes": {"MAGPIE_ESCALATE_BELOW": "150", "MAGPIE_EFFORT": "extreme",
-                                                          "NOT_A_SETTING": "1"}})
+                                                          "NOT_A_SETTING": "1"}}, headers=setup_code(client))
     assert r.status_code == 422
     errors = r.json()["detail"]["errors"]
     assert set(errors) == {"MAGPIE_ESCALATE_BELOW", "MAGPIE_EFFORT", "NOT_A_SETTING"}
@@ -137,3 +143,50 @@ def test_unexpected_errors_return_json(tmp_path):
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.get("/api/boom")
     assert r.status_code == 500 and "kaput" in r.json()["detail"]
+
+
+def test_without_a_token_settings_need_the_setup_code(tmp_path, caplog):
+    """Security: an unauthenticated client must not be able to reconfigure the server (e.g. point
+    LOCAL_LLM_URL at itself to capture the key, or set an access token to lock the owner out)."""
+    caplog.set_level("WARNING")
+    with TestClient(create_app(Settings(data_dir=tmp_path), http=httpx.AsyncClient())) as client:
+        code = client.app.state.runtime.setup_code
+        attack = {"changes": {"MAGPIE_API_TOKEN": "attacker", "LOCAL_LLM_URL": "https://evil.example/v1"}}
+        for headers in ({}, {"X-Magpie-Setup-Code": "AAAAA-AAAAA-AAAAA"}):
+            r = client.put("/api/settings", json=attack, headers=headers)
+            assert r.status_code == 403 and r.json()["detail"]["code"] == "setup_code_required"
+        assert not (tmp_path / "settings.json").exists()
+        assert client.get("/api/settings").json()["setup_code_required"] is True
+        # The owner has the code from the log; it's forgiving about case and dashes.
+        assert code in caplog.text
+        ok = client.put("/api/settings", json={"changes": {"MAGPIE_EFFORT": "low"}},
+                        headers={"X-Magpie-Setup-Code": code.lower().replace("-", " ")})
+        assert ok.status_code == 200
+        # Once a token is set, the token (not the code) is what's required.
+        client.put("/api/settings", json={"changes": {"MAGPIE_API_TOKEN": "owner"}}, headers={"X-Magpie-Setup-Code": code})
+        assert client.put("/api/settings", json=attack, headers={"X-Magpie-Setup-Code": code}).status_code == 401
+        assert client.get("/api/settings", headers={"Authorization": "Bearer owner"}).json()["setup_code_required"] is False
+
+
+def test_local_llm_key_does_not_follow_the_url_to_another_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("MAGPIE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MAGPIE_API_TOKEN", "t")
+    monkeypatch.setenv("LOCAL_LLM_URL", "https://integrate.api.nvidia.com/v1")
+    monkeypatch.setenv("LOCAL_LLM_API_KEY", "nvapi-owner-key")
+    settings = Settings.load()
+    auth = {"Authorization": "Bearer t"}
+    with TestClient(create_app(settings, http=httpx.AsyncClient())) as client:
+        # Same server, different path: the key stays.
+        r = client.put("/api/settings", json={"changes": {"LOCAL_LLM_URL": "https://integrate.api.nvidia.com/v2"}}, headers=auth)
+        assert r.status_code == 200 and not r.json()["notices"] and settings.local_llm_api_key == "nvapi-owner-key"
+        # Another server: the key is dropped, and the user is told.
+        r = client.put("/api/settings", json={"changes": {"LOCAL_LLM_URL": "https://evil.example/v1"}}, headers=auth)
+        assert r.status_code == 200 and "removed" in r.json()["notices"][0]
+        assert settings.local_llm_api_key is None and settings.local_llm_url == "https://evil.example/v1"
+    assert json.loads((tmp_path / "settings.json").read_text())["LOCAL_LLM_API_KEY"] == ""
+    assert Settings.load().local_llm_api_key is None  # an explicit "no key" beats the key in the environment
+    # Changing both together is fine: the user supplied the key for the new server.
+    with TestClient(create_app(settings, http=httpx.AsyncClient())) as client:
+        r = client.put("/api/settings", json={"changes": {"LOCAL_LLM_URL": "http://ollama:11434/v1",
+                                                          "LOCAL_LLM_API_KEY": "new-key"}}, headers=auth)
+        assert not r.json()["notices"] and settings.local_llm_api_key == "new-key"
