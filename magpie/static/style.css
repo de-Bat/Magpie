@@ -282,3 +282,39 @@ body { padding-bottom: env(safe-area-inset-bottom); -webkit-tap-highlight-color:
   .link-form { width: 100%; }
   .detail .media .shared-link { min-width: 220px; }
 }
+
+/* ---- server status & settings ---- */
+.settings-btn { position: relative; font-size: 17px; line-height: 1; padding: 6px 10px; }
+.status-dot {
+  position: absolute; top: -3px; right: -3px; width: 11px; height: 11px; border-radius: 50%;
+  border: 2px solid var(--bg); background: var(--warn);
+}
+.status-dot.error { background: var(--err); }
+.banner.error { background: color-mix(in srgb, var(--err) 14%, var(--surface)); border: 1px solid color-mix(in srgb, var(--err) 45%, transparent); }
+.settings-panel { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; position: relative; }
+dialog:has(.settings-panel) { width: min(720px, calc(100vw - 32px)); }
+.banner-msg { flex: 1; min-width: 200px; }
+.settings-panel h2 { margin: 0; padding-right: 48px; }
+.settings-panel .close { position: absolute; top: 10px; right: 12px; }
+.problems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.problems li { padding: 8px 12px; border-radius: 8px; font-size: 14px; background: var(--surface-2); }
+.problems li.error { background: color-mix(in srgb, var(--err) 14%, var(--surface)); }
+.problems li.warning { background: color-mix(in srgb, var(--warn) 22%, var(--surface)); }
+.ok-line { margin: 0; color: var(--ok); }
+#settings-form { display: flex; flex-direction: column; gap: 14px; }
+#settings-form fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px 12px; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+#settings-form legend { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 0 6px; }
+.setting { display: flex; flex-direction: column; gap: 4px; }
+.setting label { font-size: 14px; font-weight: 600; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.setting-input { display: flex; gap: 6px; }
+.setting-input input, .setting-input select {
+  flex: 1; min-width: 0; font: inherit; font-size: 15px; color: var(--text); background: var(--bg);
+  border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+}
+.setting.has-error .setting-input :is(input, select) { border-color: var(--err); }
+.setting.has-warning .setting-input :is(input, select) { border-color: var(--warn); }
+.field-error { color: var(--err); font-size: 13px; }
+.field-warning { color: var(--muted); font-size: 13px; }
+.pill { font-size: 11px; font-weight: 500; color: var(--muted); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
+.pill.ok { color: var(--ok); }
+.sticky-actions { position: sticky; bottom: -20px; background: var(--surface); padding: 10px 0; display: flex; gap: 8px; }

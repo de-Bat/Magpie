@@ -139,6 +139,15 @@ class Database:
                     self.conn.execute(f"ALTER TABLE items ADD COLUMN {column} {ddl}")
             self.conn.execute("CREATE INDEX IF NOT EXISTS items_source_url ON items(source_url)")
 
+    def fail_interrupted(self, message: str) -> int:
+        """Items left 'processing' by a previous run (the server stopped mid-analysis) would wait
+        forever; mark them failed so the user can re-analyze. Items queued for a batch are fine."""
+        with self.conn:
+            cur = self.conn.execute(
+                "UPDATE items SET status = 'error', error = ?, updated_at = ? WHERE status = 'processing' "
+                "AND id NOT IN (SELECT item_id FROM batch_jobs)", (message, now()))
+        return cur.rowcount
+
     # ---- items -------------------------------------------------------------
 
     def create_item(

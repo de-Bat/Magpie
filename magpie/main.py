@@ -5,6 +5,7 @@ import hmac
 import logging
 import mimetypes
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -22,9 +23,11 @@ from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
-from .config import Settings
+from .config import SPECS, Settings, mask
 from .db import Database
 from .pipeline import Pipeline
+
+log = logging.getLogger("magpie")
 
 STATIC_DIR = Path(__file__).parent / "static"
 mimetypes.add_type("application/manifest+json", ".webmanifest")
@@ -55,40 +58,87 @@ class ItemPatch(BaseModel):
     tags: list[str] | None = None
 
 
+class SettingsUpdate(BaseModel):
+    # env name -> new value; null or "" removes the value saved from the UI (back to env/default)
+    changes: dict[str, Any]
+
+
 def create_app(
     settings: Settings | None = None,
     analyzer: Any = None,
     http: httpx.AsyncClient | None = None,
     start_batch_worker: bool = True,
 ) -> FastAPI:
-    settings = settings or Settings()
-    settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-    db = Database(settings.db_path)
+    # Nothing in here may stop the server from starting: problems are recorded and shown in the UI.
+    if settings is None:
+        try:
+            settings = Settings.load()
+        except Exception as e:  # defensive: Settings.load() already tolerates bad values
+            log.exception("Settings could not be loaded; using defaults")
+            settings = Settings()
+            settings.load_errors.append(f"Settings could not be loaded: {e}")
+    rt = _Runtime(settings)
+    rt.open_database()
+    db = rt.db  # a proxy: answers 503 with the reason while the database is unavailable
     state: dict = {}
+
+    def build_analyzer(client: httpx.AsyncClient) -> Any:
+        if analyzer is not None:
+            return analyzer
+        try:
+            chosen = AnalyzerRouter(settings, client)
+            rt.analyzer_error = None
+            return chosen
+        except Exception as e:  # misconfiguration: keep serving, report it in the UI and on each item
+            log.error("Analyzer not available: %s", e)
+            rt.analyzer_error = str(e)
+            return _Unavailable(str(e))
+
+    def start_worker(chosen: Any) -> None:
+        if rt.worker_task:
+            rt.worker_task.cancel()
+            rt.worker_task = None
+        if (isinstance(chosen, AnalyzerRouter) and chosen.batch and chosen.claude is not None
+                and start_batch_worker and rt.db_ok):
+            app.state.batch_worker = BatchWorker(db, state["pipeline"], chosen.claude.client, settings.batch_poll_seconds)
+            rt.worker_task = asyncio.create_task(app.state.batch_worker.run_forever())
+
+    def reconfigure() -> None:
+        """Apply changed settings without a restart."""
+        pipeline = state["pipeline"]
+        pipeline.analyzer = build_analyzer(pipeline.http)
+        start_worker(pipeline.analyzer)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         client = http or httpx.AsyncClient(timeout=20)
-        chosen = analyzer
-        if chosen is None:
-            try:
-                chosen = AnalyzerRouter(settings, client)
-            except ValueError as e:  # misconfiguration: keep serving, report it on each item
-                logging.getLogger("magpie").error("Analyzer not available: %s", e)
-                chosen = _Unavailable(str(e))
+        chosen = build_analyzer(client)
         state["pipeline"] = app.state.pipeline = Pipeline(db, settings, chosen, client)
-        worker_task = None
-        if isinstance(chosen, AnalyzerRouter) and chosen.batch and chosen.claude is not None and start_batch_worker:
-            app.state.batch_worker = BatchWorker(db, state["pipeline"], chosen.claude.client, settings.batch_poll_seconds)
-            worker_task = asyncio.create_task(app.state.batch_worker.run_forever())
+        try:
+            start_worker(chosen)
+        except Exception as e:
+            log.exception("Batch worker not started")
+            rt.startup_errors.append(f"The Claude batch worker could not start: {e}")
+        for problem in settings.problems():
+            if problem["level"] != "info":
+                log.warning("Setup: %s", problem["message"])
         yield
-        if worker_task:
-            worker_task.cancel()
+        if rt.worker_task:
+            rt.worker_task.cancel()
         if http is None:
             await client.aclose()
 
     app = FastAPI(title="Magpie", lifespan=lifespan)
     app.state.db = db
+    app.state.runtime = rt
+
+    @app.exception_handler(Exception)
+    async def unexpected_error(request: Request, exc: Exception):
+        log.exception("Unhandled error on %s %s", request.method, request.url.path)
+        return JSONResponse({"detail": f"Internal server error ({type(exc).__name__}: {exc})"}, status_code=500)
+
+    # Endpoints that keep working while the database is unavailable, so the UI can say why.
+    no_db_paths = {"/api/health", "/api/status", "/api/settings"}
 
     @app.middleware("http")
     async def require_token(request: Request, call_next):
@@ -99,14 +149,79 @@ def create_app(
             supplied = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else unquote(request.cookies.get("magpie_token") or request.cookies.get("keeper_token", ""))
             if not hmac.compare_digest(supplied.encode(), settings.api_token.encode()):
                 return JSONResponse({"detail": "Missing or invalid API token"}, status_code=401)
+        if protected and path not in no_db_paths and not rt.db_ok:
+            rt.open_database(retry=True)  # the data directory may have been fixed since
+            if not rt.db_ok:
+                return JSONResponse({"detail": f"Storage unavailable: {rt.db_error}"}, status_code=503)
         return await call_next(request)
+
+    def status_report() -> dict:
+        problems = [{"level": "error", "key": None, "message": m} for m in rt.startup_errors]
+        if not rt.db_ok:
+            problems.append({"level": "error", "key": None, "message": f"Storage unavailable: {rt.db_error}"})
+        settings_problems = settings.problems() if analyzer is None else [
+            p for p in settings.problems() if p["key"] not in ("ANTHROPIC_API_KEY", "LOCAL_LLM_URL")]
+        problems += settings_problems
+        if rt.analyzer_error and not any(p["level"] == "error" for p in settings_problems):
+            problems.append({"level": "error", "key": None, "message": f"Analyzer not available: {rt.analyzer_error}"})
+        levels = {p["level"] for p in problems}
+        status = "error" if "error" in levels else "warning" if "warning" in levels else "ok"
+        return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer()}
 
     @app.get("/api/health")
     def health():
+        report = status_report()
         return {
             "ok": True, "api_version": API_VERSION, "auth_required": bool(settings.api_token),
-            "analyzer": settings.resolved_analyzer(),
+            "analyzer": settings.resolved_analyzer(), "status": report["status"],
+            "errors": sum(p["level"] == "error" for p in report["problems"]),
+            "warnings": sum(p["level"] == "warning" for p in report["problems"]),
         }
+
+    @app.get("/api/status")
+    def server_status():
+        """Everything that's wrong or missing in the setup, most serious first."""
+        report = status_report()
+        order = {"error": 0, "warning": 1, "info": 2}
+        report["problems"].sort(key=lambda p: order.get(p["level"], 3))
+        return report
+
+    def settings_payload() -> dict:
+        problems = {p["key"]: p for p in settings.problems() if p["key"]}
+        groups: dict[str, list] = {}
+        for spec in SPECS:
+            value = getattr(settings, spec.attr)
+            entry = {
+                "env": spec.env, "label": spec.label, "help": spec.help, "kind": spec.kind,
+                "choices": list(spec.choices), "default": None if spec.kind == "secret" else spec.default,
+                "source": settings.source_of(spec), "is_set": value not in (None, ""),
+                "value": mask(value) if spec.kind == "secret" else value,
+                "problem": problems.get(spec.env),
+            }
+            if spec.kind != "secret" and spec.env in settings.overrides:
+                entry["saved"] = settings.overrides[spec.env]  # what was typed, even if invalid
+            groups.setdefault(spec.group, []).append(entry)
+        return {
+            "groups": [{"name": name, "settings": items} for name, items in groups.items()],
+            "data_dir": str(settings.data_dir), "settings_file": str(settings.overrides_path),
+            "status": server_status(),
+        }
+
+    @app.get("/api/settings")
+    def get_settings():
+        return settings_payload()
+
+    @app.put("/api/settings")
+    async def put_settings(update: SettingsUpdate):
+        try:
+            settings.save_overrides(update.changes)
+        except OSError as e:
+            raise HTTPException(500, f"Couldn't save settings to {settings.overrides_path}: {e}")
+        except ValueError as e:  # SettingsError
+            raise HTTPException(422, {"message": "Some values are invalid", "errors": getattr(e, "errors", {"_": str(e)})})
+        if "pipeline" in state:
+            reconfigure()
+        return settings_payload()
 
     @app.get("/api/sync")
     def sync(since: str | None = Query(None, description="server_time returned by the previous sync")):
@@ -295,6 +410,63 @@ def _normalize_time(value: str | None) -> str | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
+INTERRUPTED = "The server stopped before this finished. Re-analyze to try again."
+
+
+class _Runtime:
+    """What the server found at startup, and the database once it could be opened."""
+
+    RETRY_SECONDS = 10
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.db = _DatabaseProxy(self)
+        self.real_db: Database | None = None
+        self.db_error: str | None = None
+        self.analyzer_error: str | None = None
+        self.startup_errors: list[str] = []
+        self.worker_task: asyncio.Task | None = None
+        self._last_attempt = 0.0
+
+    @property
+    def db_ok(self) -> bool:
+        return self.real_db is not None
+
+    def open_database(self, retry: bool = False) -> None:
+        if self.real_db is not None:
+            return
+        if retry and time.monotonic() - self._last_attempt < self.RETRY_SECONDS:
+            return
+        self._last_attempt = time.monotonic()
+        try:
+            self.settings.uploads_dir.mkdir(parents=True, exist_ok=True)
+            db = Database(self.settings.db_path)
+        except Exception as e:
+            self.db_error = (f"can't use the data directory {self.settings.data_dir} ({type(e).__name__}: {e}). "
+                             "Check that it exists and that the server may write to it (MAGPIE_DATA_DIR).")
+            log.error("Storage unavailable: %s", self.db_error)
+            return
+        self.real_db, self.db_error = db, None
+        try:
+            if n := db.fail_interrupted(INTERRUPTED):
+                log.warning("%d item(s) were interrupted by a restart and marked failed", n)
+        except Exception:
+            log.exception("Couldn't check for interrupted items")
+
+
+class _DatabaseProxy:
+    """Stands in for the Database: forwards to it, or answers 503 while it's unavailable."""
+
+    def __init__(self, runtime: _Runtime):
+        self._runtime = runtime
+
+    def __getattr__(self, name: str):
+        real = self._runtime.real_db
+        if real is None:
+            raise HTTPException(503, f"Storage unavailable: {self._runtime.db_error}")
+        return getattr(real, name)
 
 
 class _Unavailable:
