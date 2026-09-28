@@ -13,8 +13,8 @@
   --shadow: 0 1px 2px rgb(0 0 0 / .06), 0 4px 16px rgb(0 0 0 / .05);
   --radius: 12px;
   --on-accent: #fff;
-  --logo-bg: transparent;
-  --logo-pad: 0;
+  --logo-light-display: block;
+  --logo-dark-display: none;
   color-scheme: light;
 }
 /* Dark theme: follows the device unless this device chose Light (Settings → Appearance), or forced with Dark. */
@@ -34,8 +34,8 @@
     --shadow: 0 1px 2px rgb(0 0 0 / .4);
     color-scheme: dark;
     --on-accent: #0b1530;
-    --logo-bg: #f4efe6;
-    --logo-pad: 2px;
+    --logo-light-display: none;
+    --logo-dark-display: block;
   }
 }
 :root[data-theme="dark"] {
@@ -53,8 +53,8 @@
   --shadow: 0 1px 2px rgb(0 0 0 / .4);
   color-scheme: dark;
   --on-accent: #0b1530;
-  --logo-bg: #f4efe6;
-  --logo-pad: 2px;
+  --logo-light-display: none;
+  --logo-dark-display: block;
 }
 :root[data-theme="light"] { color-scheme: light; }
 
@@ -80,8 +80,9 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 19px; letter-spacing: -0.01em; white-space: nowrap; }
-/* in dark mode the magpie's dark head and tail vanish on the bar: --logo-bg sits it on a light badge */
-.brand img { width: 36px; height: 36px; display: block; background: var(--logo-bg); border-radius: 10px; padding: var(--logo-pad); box-sizing: border-box; }
+/* Dark theme uses logo-96-dark.png: the near-black plumage is lifted to navy so the bird doesn't vanish. */
+.brand img { width: 36px; height: 36px; display: var(--logo-light-display); }
+.brand img.logo-dark { display: var(--logo-dark-display); }
 #search {
   flex: 1; min-width: 0;
   padding: 9px 14px;

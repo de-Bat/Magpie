@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/magpie-logo.png" alt="Magpie logo: a magpie whose wing feathers carry icons for images, code, TV, food and shopping" width="200"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/magpie-logo-dark.png"><img src="assets/magpie-logo.png" alt="Magpie logo: a magpie whose wing feathers carry icons for images, code, TV, food and shopping" width="200"></picture></p>
 
 <h1 align="center">Magpie</h1>
 
