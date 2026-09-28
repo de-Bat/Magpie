@@ -486,6 +486,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
     <div class="settings-panel">
       <button class="btn close" data-action="close" aria-label="Close">✕</button>
       <h2>Settings</h2>
+      ${appearanceHtml()}
       ${problems.length ? `<ul class="problems">${problems.map((p) => `
         <li class="${esc(p.level)}"><span aria-hidden="true">${problemIcon(p.level)}</span> ${esc(p.message)}${
           p.key ? ` <a href="#set-${esc(p.key)}" data-focus="set-${esc(p.key)}">Fix</a>` : ""}</li>`).join("")}</ul>`
@@ -518,13 +519,50 @@ function settingsHtml(data, errors = {}, typed = {}) {
     </div>`;
 }
 
+// ---- appearance (per device) --------------------------------------------------
+
+const THEME_COLORS = { light: "#f6f5f2", dark: "#151412" };
+
+function getTheme() {
+  try { return localStorage.getItem("magpie.theme") || "system"; } catch { return "system"; }
+}
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+  else delete root.dataset.theme;
+  // Browser/PWA chrome colour: forced themes override both media-specific values.
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    const scheme = (m.media.match(/(light|dark)/) || [])[1] || "light";
+    m.content = THEME_COLORS[theme === "light" || theme === "dark" ? theme : scheme];
+  });
+}
+
+function setTheme(theme) {
+  try {
+    if (theme === "system") localStorage.removeItem("magpie.theme");
+    else localStorage.setItem("magpie.theme", theme);
+  } catch {}
+  applyTheme(theme);
+  document.querySelectorAll(".segmented [data-theme-choice]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.themeChoice === theme)));
+}
+
+function appearanceHtml() {
+  const current = getTheme();
+  return `<div class="appearance"><h4>Appearance</h4><div class="segmented" role="group" aria-label="Appearance">${
+    [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
+      `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${label}</button>`).join("")
+  }</div><span class="meta-line">This device only</span></div>`;
+}
+
 let settingsData = null;
 
 async function showSettings(errors = {}, typed = {}) {
   const dlg = $("#detail");
   dlg.dataset.id = "";
   if (!settingsData || !Object.keys(errors).length) {
-    dlg.innerHTML = `<div class="settings-panel"><button class="btn close" data-action="close" aria-label="Close">✕</button><h2>Settings</h2><p class="meta-line">Loading…</p></div>`;
+    dlg.innerHTML = `<div class="settings-panel"><button class="btn close" data-action="close" aria-label="Close">✕</button><h2>Settings</h2>${appearanceHtml()}<p class="meta-line server-state">Loading server settings…</p></div>`;
     if (!dlg.open) dlg.showModal();
     try {
       settingsData = await api("/api/settings");
@@ -534,7 +572,7 @@ async function showSettings(errors = {}, typed = {}) {
         : e instanceof HttpError && e.status === 404
           ? "This server is too old to change settings from here. Update it, or edit its .env file."
           : `Can't reach the server (${e.message}). Settings can only be changed while connected.`;
-      dlg.querySelector(".meta-line").textContent = msg;
+      dlg.querySelector(".server-state").textContent = msg;
       return;
     }
   }
@@ -986,8 +1024,9 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus]");
+  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice]");
   if (!t) return;
+  if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.reset !== undefined) {
     return putSettings({ [t.dataset.reset]: null });
   }
@@ -1093,6 +1132,7 @@ setInterval(() => { if (document.visibilityState === "visible" && (state.ops.len
 // ---- boot ------------------------------------------------------------------
 
 async function boot() {
+  applyTheme(getTheme());
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("Service worker not registered:", e));
   }

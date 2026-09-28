@@ -25,7 +25,7 @@ Every identification comes with a **confidence score** and, when the model isn't
 
 **Coming next:** text selections and notes as items, and sharing links/text straight from other apps. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**Clients:** an installable **PWA** (Add to Home Screen on iPhone) and a native **iOS app** with a Share Extension. Both work **offline** and sync when they can reach your self-hosted server.
+**Clients:** an installable **PWA** (Add to Home Screen on iPhone) and a native **iOS app** with a Share Extension. Both work **offline** and sync when they can reach your self-hosted server, and both have **light and dark themes**: they follow the device by default, or pick one under Settings → Appearance.
 
 ## How it works
 

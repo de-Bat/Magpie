@@ -12,6 +12,7 @@ struct SettingsView: View {
     @State private var confirmReset = false
     @State private var usage: UsageReport?
     @State private var usageError: String?
+    @AppStorage(Appearance.storageKey, store: Appearance.store) private var appearance = Appearance.system
 
     var body: some View {
         NavigationStack {
@@ -40,6 +41,17 @@ struct SettingsView: View {
                     Text("Your Magpie server")
                 } footer: {
                     Text("The self-hosted server that identifies screenshots and stores your library. Use its LAN, Tailscale or public address.")
+                }
+
+                Section {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(Appearance.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Appearance")
+                } footer: {
+                    Text("System follows your iPhone's light or dark setting. Also used by “Share → Magpie”.")
                 }
 
                 Section("Sync") {
@@ -81,6 +93,7 @@ struct SettingsView: View {
                     Text("Clears the offline copy and downloads everything from the server again. Changes waiting to sync are kept.")
                 }
             }
+            .preferredColorScheme(appearance.colorScheme)
             .task { await loadUsage() }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

@@ -12,10 +12,14 @@
   --warn: #fbbf24;
   --shadow: 0 1px 2px rgb(0 0 0 / .06), 0 4px 16px rgb(0 0 0 / .05);
   --radius: 12px;
+  --on-accent: #fff;
+  --logo-bg: transparent;
+  --logo-pad: 0;
   color-scheme: light;
 }
+/* Dark theme: follows the device unless this device chose Light (Settings → Appearance), or forced with Dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #151412;
     --surface: #1f1d1a;
     --surface-2: #2a2824;
@@ -29,8 +33,30 @@
     --warn: #fbbf24;
     --shadow: 0 1px 2px rgb(0 0 0 / .4);
     color-scheme: dark;
+    --on-accent: #0b1530;
+    --logo-bg: #f4efe6;
+    --logo-pad: 2px;
   }
 }
+:root[data-theme="dark"] {
+  --bg: #151412;
+  --surface: #1f1d1a;
+  --surface-2: #2a2824;
+  --text: #eeebe6;
+  --muted: #a39e95;
+  --border: #3a3732;
+  --accent: #7ea6ff;
+  --accent-soft: #1b2644;
+  --ok: #4ade80;
+  --err: #f87171;
+  --warn: #fbbf24;
+  --shadow: 0 1px 2px rgb(0 0 0 / .4);
+  color-scheme: dark;
+  --on-accent: #0b1530;
+  --logo-bg: #f4efe6;
+  --logo-pad: 2px;
+}
+:root[data-theme="light"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }  /* never let a component's display rule override the hidden attribute */
@@ -54,11 +80,8 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 19px; letter-spacing: -0.01em; white-space: nowrap; }
-.brand img { width: 36px; height: 36px; display: block; }
-@media (prefers-color-scheme: dark) {
-  /* the magpie's dark head and tail vanish on a dark bar: sit it on a light badge */
-  .brand img { background: #f4efe6; border-radius: 10px; padding: 2px; box-sizing: border-box; }
-}
+/* in dark mode the magpie's dark head and tail vanish on the bar: --logo-bg sits it on a light badge */
+.brand img { width: 36px; height: 36px; display: block; background: var(--logo-bg); border-radius: 10px; padding: var(--logo-pad); box-sizing: border-box; }
 #search {
   flex: 1; min-width: 0;
   padding: 9px 14px;
@@ -72,8 +95,7 @@ a { color: var(--accent); }
   font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap; text-decoration: none;
 }
 .btn:hover { border-color: var(--muted); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-@media (prefers-color-scheme: dark) { .btn.primary { color: #0b1530; } }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.danger { color: var(--err); }
 
 .layout { display: grid; grid-template-columns: 220px 1fr; gap: 24px; padding: 20px; max-width: 1400px; margin: 0 auto; }
@@ -320,3 +342,13 @@ dialog:has(.settings-panel) { width: min(720px, calc(100vw - 32px)); }
 .pill { font-size: 11px; font-weight: 500; color: var(--muted); background: var(--surface-2); border-radius: 999px; padding: 1px 8px; }
 .pill.ok { color: var(--ok); }
 .sticky-actions { position: sticky; bottom: -20px; background: var(--surface); padding: 10px 0; display: flex; gap: 8px; }
+
+/* ---- appearance picker ---- */
+.appearance { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.appearance h4 { margin: 0; font-size: 14px; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 2px; background: var(--surface-2); }
+.segmented button {
+  font: inherit; font-size: 13px; border: 0; background: none; color: var(--text); cursor: pointer;
+  padding: 5px 12px; border-radius: 999px;
+}
+.segmented button[aria-pressed="true"] { background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
