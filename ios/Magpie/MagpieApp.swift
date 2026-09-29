@@ -22,6 +22,15 @@ struct MagpieApp: App {
                 .environmentObject(store)
                 .environmentObject(sync)
                 .preferredColorScheme(appearance.colorScheme)
+                .task(id: scenePhase) {
+                    // While the app is open, pick up captures other devices add (and their progress).
+                    guard scenePhase == .active else { return }
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(10))
+                        if Task.isCancelled { break }
+                        await sync.sync()
+                    }
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {

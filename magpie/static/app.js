@@ -324,6 +324,27 @@ let fixing = null;  // id of the item whose correction form is open
 
 function requestSync() { sync().catch((e) => console.error(e)); }
 
+// A quiet background check for what other devices added or changed: no "Syncing…" flash, no redraw when nothing changed.
+async function pollChanges() {
+  if (syncing || document.visibilityState !== "visible" || state.sync === "auth") return;
+  syncing = true;
+  let changed = false;
+  try {
+    const delta = await api(`/api/sync${state.lastSync ? `?since=${encodeURIComponent(state.lastSync)}` : ""}`, { timeout: 5000 });
+    for (const id of delta.deleted) if (!hasPendingOps(id)) { await removeItem(id); changed = true; }
+    for (const item of delta.items) if (!hasPendingOps(item.id)) { await mergeServerItem(item); changed = true; }
+    state.lastSync = delta.server_time;
+    await db.put("kv", state.lastSync, "lastSync");
+    if (state.sync === "offline") setSyncState("idle");
+  } catch {
+    syncing = false;
+    return requestSync();  // let the full sync report offline / auth / errors
+  }
+  syncing = false;
+  if (changed) render();
+  if (rerun) requestSync();
+}
+
 async function sync() {
   if (syncing) { rerun = true; return; }
   syncing = true;
@@ -1449,6 +1470,7 @@ window.addEventListener("online", requestSync);
 window.addEventListener("offline", () => setSyncState("offline"));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") requestSync(); });
 setInterval(() => { if (document.visibilityState === "visible" && (state.ops.length || state.sync !== "idle")) requestSync(); }, 30000);
+setInterval(pollChanges, 8000);  // captures added on other devices show up, with their current status
 
 // ---- boot ------------------------------------------------------------------
 
