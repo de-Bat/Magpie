@@ -557,7 +557,7 @@ function providerFormHtml(data, errors, typed) {
           `<input id="lc-url" name="lc_url" type="text" value="${esc(typed.LOCAL_LLM_URL ?? urlOf(urlS.value) ?? "")}" spellcheck="false" autocapitalize="off" placeholder="http://host:11434/v1">`,
           fieldErr(data, errors, "LOCAL_LLM_URL"))}
         ${formRow(keyLabel(local, lKey), keyHelp(local),
-          `<input id="lc-key" name="lc_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="${esc(keyPlaceholder(lKey))}">`,
+          `<input id="lc-key" name="lc_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="${esc(keyPlaceholder(lKey))}"><button class="link-btn" type="button" data-test-key="lc" title="Check the key with the provider (uses the saved key if this box is empty)">Test key</button>`,
           fieldErr(data, errors, "LOCAL_LLM_API_KEY"))}
         ${formRow("Model", "The default is used unless you pick another.",
           modelControlHtml("lc", local, modelValueOf(lModel, local), lModel.default || ""), fieldErr(data, errors, "LOCAL_LLM_MODEL"))}
@@ -570,7 +570,7 @@ function providerFormHtml(data, errors, typed) {
           `<input id="ot-url" name="ot_url" type="text" value="${esc(urlValue)}" ${hosted ? "readonly" : ""} spellcheck="false" autocapitalize="off" placeholder="http://host:11434/v1">`,
           hosted ? "" : fieldErr(data, errors, "LOCAL_LLM_URL"))}</div>
         ${formRow(keyLabel(p, key), keyHelp(p),
-          `<input id="ot-key" name="ot_key" type="password" autocomplete="new-password" spellcheck="false" value="${esc(typed[p.key_env] ?? "")}" placeholder="${esc(keyPlaceholder(key))}">`,
+          `<input id="ot-key" name="ot_key" type="password" autocomplete="new-password" spellcheck="false" value="${esc(typed[p.key_env] ?? "")}" placeholder="${esc(keyPlaceholder(key))}"><button class="link-btn" type="button" data-test-key="ot" title="Check the key with the provider (uses the saved key if this box is empty)">Test key</button>`,
           fieldErr(data, errors, p.key_env))}
         ${formRow("Model", "The default is used unless you pick another.",
           modelControlHtml("ot", p, modelValueOf(model, p), p.model || model.default || ""), fieldErr(data, errors, p.model_env))}
@@ -663,6 +663,30 @@ async function loadModels(prefix, silent = false) {
     let msg = e.message;
     try { msg = JSON.parse(e.message).message || JSON.parse(e.message).detail || msg; } catch {}
     toast(`Couldn't load models: ${msg}`);
+  }
+}
+
+// "Test key": ask the server to call the provider's model list with the typed (or saved) key.
+async function testKey(prefix) {
+  const form = $("#settings-form");
+  const p = settingsData.providers.find((x) => x.id === (prefix === "lc" ? "local" : form.elements.ot_provider.value));
+  const btn = form.querySelector(`[data-test-key="${prefix}"]`);
+  const idle = btn.textContent;
+  btn.disabled = true; btn.textContent = "Testing…";
+  const body = { provider: p.id, key: form.elements[`${prefix}_key`].value.trim() || null,
+                 url: p.id === "local" ? form.elements[`${prefix}_url`].value.trim() || null : null };
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    const res = await api("/api/models", { method: "POST", headers, body: JSON.stringify(body) });
+    modelLists[p.id] = res.models;
+    toast(`✓ ${p.label || p.id}: the key works (${res.models.length} models available).`);
+  } catch (e) {
+    let msg = e.message;
+    try { msg = JSON.parse(e.message).message || JSON.parse(e.message).detail || msg; } catch {}
+    toast(`✗ ${p.label || p.id}: ${msg}`);
+  } finally {
+    btn.disabled = false; btn.textContent = idle;
   }
 }
 
@@ -1311,10 +1335,11 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab]");
+  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
+  if (t.dataset.testKey !== undefined) return testKey(t.dataset.testKey);
   if (t.dataset.settingsTab !== undefined) return selectSettingsTab(t.dataset.settingsTab);
   if (t.dataset.reset !== undefined) {
     return putSettings({ [t.dataset.reset]: null });
