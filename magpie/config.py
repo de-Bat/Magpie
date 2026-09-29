@@ -343,18 +343,21 @@ class Settings:
                 add("error", f"{spec.label}: invalid value in {where} ({e}); using the default.", spec.env)
 
         mode = self.resolved_analyzer()
-        if mode in ("claude", "hybrid") and not self.anthropic_api_key:
-            if mode == "claude":
-                add("error", "Anthropic (Claude) is selected but its API key is not set, so screenshots can't be identified.",
-                    "ANTHROPIC_API_KEY")
-            else:
-                add("error", "The analyzer is set to Hybrid, which asks Claude when the other model is unsure, and that needs an "
-                    "Anthropic API key. Add a key, or change the analyzer to AI model.", "MAGPIE_ANALYZER")
-        if self.hosted_llm in HOSTED_LLMS and not self.llm_api_key:
+        hosted = self.hosted_llm in HOSTED_LLMS
+        if mode == "claude" and not self.anthropic_api_key:
+            add("error", "Anthropic (Claude) is selected but its API key is not set, so screenshots can't be identified.",
+                "ANTHROPIC_API_KEY")
+        if mode == "hybrid":
+            if not self.local_llm_url:
+                add("error", "Hybrid mode tries your own server first, so it needs its endpoint.", "LOCAL_LLM_URL")
+            if not hosted and not self.anthropic_api_key:
+                add("error", "Hybrid mode falls back to Claude when the first model is unsure, and that needs an Anthropic "
+                    "API key. Add one, or pick another fallback provider.", "ANTHROPIC_API_KEY")
+        if hosted and mode in ("local", "hybrid") and not self.llm_api_key:
             name = HOSTED_LLMS[self.hosted_llm][3]
             add("error", f"{name} is selected but its API key is not set.", HOSTED_LLMS[self.hosted_llm][2].upper())
-        elif mode in ("local", "hybrid") and not self.llm_url:
-            add("error", f"The {mode} analyzer needs a local LLM server URL or a hosted provider.", "LOCAL_LLM_URL")
+        elif mode == "local" and not self.llm_url:
+            add("error", "The local analyzer needs a server URL or a hosted provider.", "LOCAL_LLM_URL")
         if mode == "ocr" and self.analyzer == "auto":
             add("warning", "No AI model is configured, so screenshots are identified with OCR + rules only (rough). "
                 "Add an Anthropic API key or a local LLM URL.", "ANTHROPIC_API_KEY")
@@ -391,12 +394,14 @@ class Settings:
             return HOSTED_LLMS[self.hosted_llm][1]
         return self.local_llm_model
 
-    def resolved_llm_provider(self) -> str:
-        if self.hosted_llm in HOSTED_LLMS:
+    def resolved_llm_provider(self, local: bool = False) -> str:
+        """Wire protocol of the OpenAI-compatible model: openai | nim. `local` ignores the hosted preset."""
+        if self.hosted_llm in HOSTED_LLMS and not local:
             return "openai"
         if self.local_llm_provider != "auto":
             return self.local_llm_provider
-        url, key = (self.llm_url or "").lower(), self.llm_api_key or ""
+        url = (self.local_llm_url if local else self.llm_url) or ""
+        url, key = url.lower(), (self.local_llm_api_key if local else self.llm_api_key) or ""
         if "api.nvidia.com" in url or key.startswith("nvapi-"):
             return "nim"
         return "openai"
@@ -405,6 +410,8 @@ class Settings:
         """`auto` picks the best configured option: Claude, else the local LLM, else OCR rules."""
         if self.analyzer != "auto":
             return self.analyzer
+        if self.hosted_llm in HOSTED_LLMS:
+            return "local"
         if self.anthropic_api_key and self.llm_url:
             return "hybrid"
         if self.anthropic_api_key:

@@ -494,15 +494,16 @@ function settingEntry(data, env) {
 }
 
 // How screenshots get identified. The provider (Claude, OpenAI, …) is chosen separately.
-const MODES = { model: "AI model", hybrid: "Hybrid (Claude as fallback)", ocr: "OCR only (no AI)" };
+const MODES = { model: "AI model", hybrid: "Hybrid (own server, then fallback)", ocr: "OCR only (no AI)" };
 const MODE_OF = { claude: "model", local: "model", hybrid: "hybrid", ocr: "ocr" };  // from the resolved analyzer
 
 // Which element edits which setting, for "Go to setting" links and error focus.
 function focusIdFor(env) {
-  const map = { ANTHROPIC_API_KEY: "cl-key", MAGPIE_MODEL: "cl-model", LOCAL_LLM_URL: "ot-url", LOCAL_LLM_MODEL: "ot-model",
-    MAGPIE_LLM_PROVIDER: "ot-provider", LOCAL_LLM_API_KEY: "ot-key", OPENAI_API_KEY: "ot-key", GEMINI_API_KEY: "ot-key",
-    OPENROUTER_API_KEY: "ot-key", GROQ_API_KEY: "ot-key" };
-  return map[env] || `set-${env}`;
+  const visible = (id) => { const el = document.getElementById(id); return el && !el.closest("[hidden]") ? id : null; };
+  const map = { ANTHROPIC_API_KEY: ["ot-key"], MAGPIE_MODEL: ["ot-model"], MAGPIE_LLM_PROVIDER: ["ot-provider"],
+    LOCAL_LLM_URL: ["lc-url", "ot-url"], LOCAL_LLM_MODEL: ["lc-model", "ot-model"], LOCAL_LLM_API_KEY: ["lc-key", "ot-key"] };
+  if (/^(OPENAI|GEMINI|OPENROUTER|GROQ)_API_KEY$/.test(env)) return "ot-key";
+  return (map[env] || []).map(visible).find(Boolean) || (map[env] ? map[env][0] : `set-${env}`);
 }
 
 const otherProviders = (data) => data.providers.filter((x) => x.id !== "claude");
@@ -510,8 +511,8 @@ function currentOtherProvider(data) {
   const hosted = settingEntry(data, "MAGPIE_LLM_PROVIDER")?.value;
   return otherProviders(data).some((x) => x.id === hosted) ? hosted : "local";
 }
-// The provider picker offers Claude only when it is the single model; in Hybrid Claude is the fallback.
-const providersFor = (data, mode) => mode === "hybrid" ? otherProviders(data) : data.providers;
+// In Hybrid the first pass is your own server, so the provider picker (the fallback) has no "local" entry.
+const providersFor = (data, mode) => mode === "hybrid" ? data.providers.filter((x) => x.id !== "local") : data.providers;
 const providerOptionsHtml = (list, selected) =>
   list.map((x) => `<option value="${esc(x.id)}" ${x.id === selected ? "selected" : ""}>${esc(x.label)}</option>`).join("");
 const modelValueOf = (s, p) => "saved" in s ? s.saved : (s.source === "default" && p.model ? "" : s.value) ?? "";
@@ -531,24 +532,41 @@ const keyPlaceholder = (s) => s.is_set ? `${s.value} (leave blank to keep)` : "n
 
 function providerFormHtml(data, errors, typed) {
   const mode = MODE_OF[data.resolved_analyzer] || "model";
-  const claude = data.providers.find((x) => x.id === "claude");
-  const cKey = settingEntry(data, claude.key_env), cModel = settingEntry(data, claude.model_env);
-  const initial = data.resolved_analyzer === "claude" ? "claude" : currentOtherProvider(data);
+  const hybrid = mode === "hybrid";
+  const local = data.providers.find((x) => x.id === "local");
+  const lKey = settingEntry(data, local.key_env), lModel = settingEntry(data, local.model_env), urlS = settingEntry(data, "LOCAL_LLM_URL");
+  const hostedNow = settingEntry(data, "MAGPIE_LLM_PROVIDER")?.value;
+  const initial = data.resolved_analyzer === "claude" ? "claude"
+    : hybrid ? (otherProviders(data).some((x) => x.id === hostedNow) ? hostedNow : "claude") : currentOtherProvider(data);
   const cur = (Object.keys(errors).length && pendingProvider) || initial;
-  const p = data.providers.find((x) => x.id === cur) || data.providers[0];
+  const p = providersFor(data, mode).find((x) => x.id === cur) || providersFor(data, mode)[0];
   const isClaude = p.id === "claude";
-  const key = settingEntry(data, p.key_env), model = settingEntry(data, p.model_env), urlS = settingEntry(data, "LOCAL_LLM_URL");
+  const key = settingEntry(data, p.key_env), model = settingEntry(data, p.model_env);
   const hosted = p.url != null;
-  const urlValue = hosted ? p.url : (typed.LOCAL_LLM_URL ?? ("saved" in urlS ? urlS.saved : urlS.value) ?? "");
+  const urlOf = (v) => "saved" in urlS ? urlS.saved : v;
+  const urlValue = hosted ? p.url : (typed.LOCAL_LLM_URL ?? urlOf(urlS.value) ?? "");
+  const endpointHelp = "Any OpenAI-compatible server, e.g. http://ollama:11434/v1.";
   return `
     <div id="provider-form" data-initial-mode="${mode}" data-initial-provider="${esc(initial)}">
       ${formRow("Analyzer", "How screenshots get identified.",
         `<select id="set-MAGPIE_ANALYZER" name="analyzer">${Object.entries(MODES).map(([v, l]) =>
           `<option value="${v}" ${v === mode ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`, errors.MAGPIE_ANALYZER || "")}
+      <div class="provider-block" data-block="local" ${hybrid ? "" : "hidden"}>
+        <h4>First pass: your server</h4>
+        ${formRow("Endpoint", endpointHelp,
+          `<input id="lc-url" name="lc_url" type="text" value="${esc(typed.LOCAL_LLM_URL ?? urlOf(urlS.value) ?? "")}" spellcheck="false" autocapitalize="off" placeholder="http://host:11434/v1">`,
+          fieldErr(data, errors, "LOCAL_LLM_URL"))}
+        ${formRow(keyLabel(local, lKey), keyHelp(local),
+          `<input id="lc-key" name="lc_key" type="password" autocomplete="new-password" spellcheck="false" placeholder="${esc(keyPlaceholder(lKey))}">`,
+          fieldErr(data, errors, "LOCAL_LLM_API_KEY"))}
+        ${formRow("Model", "The default is used unless you pick another.",
+          modelControlHtml("lc", local, modelValueOf(lModel, local), lModel.default || ""), fieldErr(data, errors, "LOCAL_LLM_MODEL"))}
+      </div>
       <div class="provider-block" data-block="other" ${mode === "ocr" ? "hidden" : ""}>
-        ${formRow("Provider", "Claude, OpenAI, Gemini, OpenRouter, Groq, or your own server.",
-          `<select id="ot-provider" name="ot_provider">${providerOptionsHtml(providersFor(data, mode), p.id)}</select>`)}
-        <div id="ot-url-row" ${isClaude ? "hidden" : ""}>${formRow("Endpoint", hosted ? "Set by the provider you picked." : "Any OpenAI-compatible server, e.g. http://ollama:11434/v1.",
+        <h4 id="ot-heading" ${hybrid ? "" : "hidden"}>Fallback provider</h4>
+        ${formRow("Provider", hybrid ? "Asked when your server isn't confident enough." : "Claude, OpenAI, Gemini, OpenRouter, Groq, or your own server.",
+          `<select id="ot-provider" name="ot_provider">${providerOptionsHtml(providersFor(data, mode), p.id)}</select>`, "", 'id="ot-provider-row"')}
+        <div id="ot-url-row" ${isClaude || hybrid ? "hidden" : ""}>${formRow("Endpoint", hosted ? "Set by the provider you picked." : endpointHelp,
           `<input id="ot-url" name="ot_url" type="text" value="${esc(urlValue)}" ${hosted ? "readonly" : ""} spellcheck="false" autocapitalize="off" placeholder="http://host:11434/v1">`,
           hosted ? "" : fieldErr(data, errors, "LOCAL_LLM_URL"))}</div>
         ${formRow(keyLabel(p, key), keyHelp(p),
@@ -557,35 +575,33 @@ function providerFormHtml(data, errors, typed) {
         ${formRow("Model", "The default is used unless you pick another.",
           modelControlHtml("ot", p, modelValueOf(model, p), p.model || model.default || ""), fieldErr(data, errors, p.model_env))}
       </div>
-      <div class="provider-block" data-block="claude" ${mode === "hybrid" ? "" : "hidden"}>
-        <h4>Claude fallback</h4>
-        ${formRow(keyLabel(claude, cKey), keyHelp(claude),
-          `<input id="cl-key" name="cl_key" type="password" autocomplete="new-password" spellcheck="false" value="${esc(typed.ANTHROPIC_API_KEY ?? "")}" placeholder="${esc(keyPlaceholder(cKey))}">`,
-          fieldErr(data, errors, "ANTHROPIC_API_KEY"))}
-        ${formRow("Model", "The default is used unless you pick another.",
-          modelControlHtml("cl", claude, modelValueOf(cModel, claude), claude.model || cModel.default || ""), fieldErr(data, errors, "MAGPIE_MODEL"))}
-      </div>
     </div>`;
 }
 
 // The analyzer mode changed: show what it needs.
 function applyMode(mode) {
-  const data = settingsData, sel = $("#ot-provider");
+  const data = settingsData, sel = $("#ot-provider"), hybrid = mode === "hybrid";
   document.querySelector('[data-block="other"]').hidden = mode === "ocr";
-  document.querySelector('[data-block="claude"]').hidden = mode !== "hybrid";
+  document.querySelector('[data-block="local"]').hidden = !hybrid;
+  $("#ot-heading").hidden = !hybrid;
+  $("#ot-provider-row .setting-help").textContent = hybrid ? "Asked when your server isn't confident enough."
+    : "Claude, OpenAI, Gemini, OpenRouter, Groq, or your own server.";
   const list = providersFor(data, mode);
   const keep = list.some((x) => x.id === sel.value) ? sel.value : list[0].id;
   sel.innerHTML = providerOptionsHtml(list, keep);
   if (keep !== sel.dataset.shown) providerSwitch(sel);
+  else $("#ot-url-row").hidden = keep === "claude" || hybrid;
+  if (hybrid && $("#lc-url").value) loadModels("lc", true);
 }
 
 // The provider changed: endpoint, key and model follow it.
 function providerSwitch(sel) {
   const data = settingsData, p = data.providers.find((x) => x.id === sel.value);
+  const hybrid = $("#set-MAGPIE_ANALYZER").value === "hybrid";
   sel.dataset.shown = p.id;
   const key = settingEntry(data, p.key_env), model = settingEntry(data, p.model_env), urlS = settingEntry(data, "LOCAL_LLM_URL");
   const hosted = p.url != null;
-  $("#ot-url-row").hidden = p.id === "claude";
+  $("#ot-url-row").hidden = p.id === "claude" || hybrid;
   const url = $("#ot-url");
   url.readOnly = hosted;
   url.value = p.id === "claude" ? "" : hosted ? p.url : ("saved" in urlS ? urlS.saved : urlS.value) ?? "";
@@ -627,11 +643,11 @@ async function loadModels(prefix, silent = false) {
   const form = $("#settings-form");
   if (!form?.elements.analyzer) return;
   const data = settingsData;
-  const p = data.providers.find((x) => x.id === (prefix === "cl" ? "claude" : form.elements.ot_provider.value));
+  const p = data.providers.find((x) => x.id === (prefix === "lc" ? "local" : form.elements.ot_provider.value));
   const btn = form.querySelector(`[data-load-models="${prefix}"]`);
   if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
   const body = { provider: p.id, key: form.elements[`${prefix}_key`].value.trim() || null,
-                 url: p.id === "local" ? form.elements.ot_url.value.trim() || null : null };
+                 url: p.id === "local" ? form.elements[`${prefix}_url`].value.trim() || null : null };
   try {
     const headers = { "Content-Type": "application/json" };
     if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
@@ -663,22 +679,25 @@ function providerChanges(form, data) {
   const edit = (env, value, s, prov) => {   // a text setting: send only when it differs from what's stored
     if (value !== String(modelValueOf(s, prov))) changes[env] = value === "" ? null : value;
   };
+  const urlEdit = (value) => {
+    const urlS = settingEntry(data, "LOCAL_LLM_URL");
+    if (value !== String("saved" in urlS ? urlS.saved : urlS.value ?? "")) changes.LOCAL_LLM_URL = value === "" ? null : value;
+  };
   if (mode !== "ocr") {
-    if (p.id !== "claude" && p.id !== box.dataset.initialProvider) changes.MAGPIE_LLM_PROVIDER = p.url != null ? p.id : "none";
+    const hostedNow = settingEntry(data, "MAGPIE_LLM_PROVIDER")?.value;
+    const target = p.url != null ? p.id : "none";   // which hosted preset is in use ("none" = Claude or your own server)
+    if (target !== hostedNow) changes.MAGPIE_LLM_PROVIDER = target;
     const key = form.elements.ot_key.value.trim();
     if (key) changes[p.key_env] = key;
     edit(p.model_env, form.elements.ot_model.value.trim(), settingEntry(data, p.model_env), p);
-    if (p.id === "local") {
-      const urlS = settingEntry(data, "LOCAL_LLM_URL");
-      const url = form.elements.ot_url.value.trim();
-      if (url !== String("saved" in urlS ? urlS.saved : urlS.value ?? "")) changes.LOCAL_LLM_URL = url === "" ? null : url;
-    }
+    if (p.id === "local") urlEdit(form.elements.ot_url.value.trim());
   }
-  if (mode === "hybrid") {
-    const claude = data.providers.find((x) => x.id === "claude");
-    const key = form.elements.cl_key.value.trim();
-    if (key) changes[claude.key_env] = key;
-    edit(claude.model_env, form.elements.cl_model.value.trim(), settingEntry(data, claude.model_env), claude);
+  if (mode === "hybrid") {   // the first pass: your own server
+    const local = data.providers.find((x) => x.id === "local");
+    const key = form.elements.lc_key.value.trim();
+    if (key) changes[local.key_env] = key;
+    edit(local.model_env, form.elements.lc_model.value.trim(), settingEntry(data, local.model_env), local);
+    urlEdit(form.elements.lc_url.value.trim());
   }
   return changes;
 }
@@ -823,7 +842,7 @@ async function showSettings(errors = {}, typed = {}) {
     const shown = settingsData.providers.find((x) => x.id === $("#ot-provider").value);
     $("#ot-provider").dataset.shown = shown.id;
     if (settingEntry(settingsData, shown.key_env)?.is_set || shown.id === "local") loadModels("ot", true);
-    if ($('[data-block="claude"]:not([hidden])') && settingEntry(settingsData, "ANTHROPIC_API_KEY")?.is_set) loadModels("cl", true);
+    if ($('[data-block="local"]:not([hidden])') && $("#lc-url").value) loadModels("lc", true);
   }
   const firstBad = Object.keys(errors).map((env) => document.getElementById(focusIdFor(env))).find(Boolean);
   if (firstBad) { selectSettingsTab(firstBad.closest(".settings-section").dataset.section); firstBad.scrollIntoView({ block: "center" }); firstBad.focus(); }

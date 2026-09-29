@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, ScreenshotAnalyzer, correction_prompt, prepare_image
-from .config import Settings
+from .config import HOSTED_LLMS, Settings
 from .ocr import Ocr, OcrResult, Signals, extract_signals
 from .usage import Run, local_cost
 
@@ -133,22 +133,32 @@ class LocalLLMAnalyzer:
     RETRY_STATUSES = (429, 502, 503, 504)
     MAX_RETRIES = 3
 
-    def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None):
-        if not settings.llm_url:
+    def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None, source: str = "auto"):
+        """source: "local" = the LOCAL_LLM_* server, "hosted" = the chosen hosted provider, "auto" = whichever
+        is configured (the hosted provider wins)."""
+        hosted = source == "hosted" or (source == "auto" and settings.hosted_llm in HOSTED_LLMS)
+        if hosted:
+            if settings.hosted_llm not in HOSTED_LLMS:
+                raise ValueError("No hosted provider is selected")
+            url, key = HOSTED_LLMS[settings.hosted_llm][0], settings.llm_api_key
+            model = settings.llm_model
+            self.name, self.provider = settings.hosted_llm, "openai"
+        else:
+            url, key, model = settings.local_llm_url, settings.local_llm_api_key, settings.local_llm_model
+            self.name, self.provider = "local", settings.resolved_llm_provider(local=True)
+        if not url:
             raise ValueError("LOCAL_LLM_URL is not set")
-        self.name = settings.hosted_llm if settings.hosted_llm != "none" else "local"
-        self.provider = settings.resolved_llm_provider()
         self.max_image_edge = settings.local_llm_max_image_edge
         # NIM: JSON schema via response_format on newer releases, else its nvext.guided_json extension.
         self.formats = ("json_schema", "nvext", "json_object", "none") if self.provider == "nim" else self.FORMATS
         # NIM vision models accept JPEG/PNG only.
         self.image_types = ("image/png", "image/jpeg") if self.provider == "nim" else ("image/png", "image/jpeg", "image/webp", "image/gif")
         self._sleep = asyncio.sleep
-        self.url = settings.llm_url.rstrip("/") + "/chat/completions"
-        self.model = settings.llm_model
+        self.url = url.rstrip("/") + "/chat/completions"
+        self.model = model
         self.vision = settings.local_llm_vision
         self.timeout = settings.local_llm_timeout
-        self.headers = {"Authorization": f"Bearer {settings.llm_api_key}"} if settings.llm_api_key else {}
+        self.headers = {"Authorization": f"Bearer {key}"} if key else {}
         self.cost_per_hour = settings.local_cost_per_hour
         self.http = http or httpx.AsyncClient()
         self._format_mode = "json_schema"  # downgraded automatically if the server doesn't support it
@@ -302,21 +312,28 @@ class AnalyzerRouter:
     LOCAL_RETRY_AFTER = 300  # seconds to skip an unreachable local server in hybrid mode
 
     def __init__(self, settings: Settings, http: httpx.AsyncClient, ocr: Ocr | None = None,
-                 claude: Any = None, local: Any = None):
+                 claude: Any = None, local: Any = None, fallback: Any = None):
         self.mode = settings.resolved_analyzer()
         self.escalate_below = settings.escalate_below
         self.batch = settings.claude_batch
         self.ocr = ocr if ocr is not None else Ocr(settings.ocr_engine, settings.ocr_langs)
         self.claude = claude
         self.local = local
+        self.fallback = fallback  # hybrid: a hosted provider used instead of Claude
         self._local_down_until = 0.0
-        if self.mode in ("claude", "hybrid") and self.claude is None:
+        # Hybrid: your own server first, then the fallback provider: Claude, or the selected hosted provider.
+        hosted_fallback = self.mode == "hybrid" and settings.hosted_llm in HOSTED_LLMS
+        if self.mode in ("claude", "hybrid") and self.claude is None and not hosted_fallback:
             if not settings.anthropic_api_key:
                 raise ValueError(f"MAGPIE_ANALYZER={self.mode} needs ANTHROPIC_API_KEY")
             self.claude = ScreenshotAnalyzer(model=settings.model, effort=settings.effort or None,
                                              fetch_max_tokens=settings.fetch_max_tokens or None)
         if self.mode in ("local", "hybrid") and self.local is None:
-            self.local = LocalLLMAnalyzer(settings, http)
+            self.local = LocalLLMAnalyzer(settings, http, source="local" if self.mode == "hybrid" else "auto")
+        if hosted_fallback and self.fallback is None:
+            if not settings.llm_api_key:
+                raise ValueError(f"Hybrid fallback {settings.hosted_llm} needs its API key")
+            self.fallback = LocalLLMAnalyzer(settings, http, source="hosted")
         log.info("Analyzer: %s (OCR: %s, Claude batch: %s)", self.mode, settings.ocr_engine, self.batch)
 
     async def analyze(self, image: bytes | None, media_type: str | None, note: str | None = None,
@@ -347,6 +364,18 @@ class AnalyzerRouter:
             context["used"].append("claude")
             return result
 
+        async def fallback_step() -> dict:
+            """The stronger second opinion in hybrid mode: Claude (batchable) or the chosen hosted provider."""
+            if self.fallback is None:
+                return await claude_step()
+            try:
+                result = await self.fallback.analyze(image, media_type, note=note, correction=correction, hints=hints, **link)
+            except AnalysisError as e:
+                e.runs = context["runs"] + e.runs
+                raise
+            context["used"].append(self.fallback.label)
+            return result
+
         if self.mode == "ocr":
             result = rules_analysis(ocr, signals, note)
             context["used"].append("rules")
@@ -374,7 +403,7 @@ class AnalyzerRouter:
                 if result is not None:
                     context["runs"] += result.pop("_runs", [])
                     context["local_result"] = {k: v for k, v in result.items() if not k.startswith("_")}
-                result = await claude_step()
+                result = await fallback_step()
         return self.finish(result, context)
 
     async def finish_batch(self, params: dict, message: Any, context: dict) -> dict:

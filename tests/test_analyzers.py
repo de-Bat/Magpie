@@ -241,6 +241,26 @@ async def test_hybrid_escalates_unsure_or_failed_local_answers(tmp_path):
     assert out["_analyzer"] == ["ocr", "claude"] and claude.calls
 
 
+async def test_hybrid_falls_back_to_the_selected_hosted_provider(tmp_path):
+    s = Settings(data_dir=tmp_path, analyzer="hybrid", escalate_below=70, hosted_llm="openai", openai_api_key="o-key",
+                 anthropic_api_key=None, local_llm_url="http://ollama:11434/v1", local_llm_model="qwen")
+    sent = []
+
+    def handler(request):
+        sent.append((str(request.url), request.headers.get("authorization")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({"title": "Past Lives", "confidence": 95})}}]})
+
+    r = AnalyzerRouter(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)), ocr=FakeOcr(INSTAGRAM_POST),
+                       local=FakeBackend({**GOOD, "confidence": 30}))
+    assert r.claude is None and r.fallback.label == "openai:gpt-4o-mini"
+    out = await r.analyze(png(), "image/png")
+    assert out["_analyzer"] == ["ocr", "local:fake", "openai:gpt-4o-mini"] and out["confidence"] == 95
+    assert sent == [("https://api.openai.com/v1/chat/completions", "Bearer o-key")]
+    # the first pass is always the local server, never the hosted preset
+    assert LocalLLMAnalyzer(s, httpx.AsyncClient(), source="local").url == "http://ollama:11434/v1/chat/completions"
+    assert not [p for p in s.problems() if p["level"] == "error"]
+
+
 def test_rules_only_mode_is_always_marked_uncertain():
     out = rules_analysis(INSTAGRAM_POST, extract_signals(INSTAGRAM_POST))
     assert out["title"] == "PAST LIVES" and out["category"] == "movie" and out["source_platform"] == "instagram"
