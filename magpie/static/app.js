@@ -479,45 +479,81 @@ function settingInputHtml(s, typed = {}) {
     value="${esc(shown ?? "")}" placeholder="${esc(s.default ?? "")}" spellcheck="false" autocapitalize="off">`;
 }
 
+let settingsTab = "Appearance";  // section shown in the settings dialog
+
+function settingRowHtml(s, errors, typed) {
+  const err = errors[s.env] || (s.problem && s.problem.level === "error" ? s.problem.message : "");
+  const warn = !err && s.problem ? s.problem.message : "";
+  const wide = s.kind === "str" || s.kind === "secret";
+  return `
+    <div class="setting ${wide ? "wide" : ""} ${err ? "has-error" : warn ? "has-warning" : ""}">
+      <div class="setting-text">
+        <label for="set-${esc(s.env)}">${esc(s.label)}${s.kind === "secret" && s.is_set ? ' <span class="pill ok">Set</span>' : ""}${
+          s.source === "ui" ? ' <span class="pill">Saved here</span>' : s.source === "env" ? ' <span class="pill">Environment</span>' : ""}</label>
+        ${s.help ? `<p class="setting-help">${esc(s.help)}</p>` : ""}
+        ${err ? `<p class="field-error">${esc(err)}</p>` : warn ? `<p class="field-warning">${esc(warn)}</p>` : ""}
+      </div>
+      <div class="setting-control">
+        ${settingInputHtml(s, typed)}
+        ${s.source === "ui" ? `<button class="link-btn" type="button" data-reset="${esc(s.env)}" title="Remove the saved value and fall back to the environment or default">Reset</button>` : ""}
+      </div>
+    </div>`;
+}
+
 function settingsHtml(data, errors = {}, typed = {}) {
   const problems = data.status.problems;
-  const sourceLabel = { ui: "saved here", env: "from environment", default: "default" };
+  const names = ["Appearance", ...data.groups.map((g) => g.name)];
+  if (!names.includes(settingsTab)) settingsTab = names[0];
+  const badge = (name) => {
+    const g = data.groups.find((x) => x.name === name);
+    if (!g) return "";
+    const level = g.settings.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
+      : g.settings.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
+    return level ? `<span class="nav-dot ${level}" aria-label="${level}"></span>` : "";
+  };
+  const alerts = problems.filter((p) => p.level !== "info");
   return `
     <div class="settings-panel">
-      <button class="btn close" data-action="close" aria-label="Close">✕</button>
-      <h2>Settings</h2>
-      ${appearanceHtml()}
-      ${problems.length ? `<ul class="problems">${problems.map((p) => `
-        <li class="${esc(p.level)}"><span aria-hidden="true">${problemIcon(p.level)}</span> ${esc(p.message)}${
-          p.key ? ` <a href="#set-${esc(p.key)}" data-focus="set-${esc(p.key)}">Fix</a>` : ""}</li>`).join("")}</ul>`
-        : `<p class="ok-line">✓ Everything is set up.</p>`}
+      <header class="settings-head">
+        <h2>Settings</h2>
+        <button class="btn close" data-action="close" aria-label="Close">✕</button>
+      </header>
       <form id="settings-form" autocomplete="off">
-        ${data.groups.map((g) => `
-          <fieldset><legend>${esc(g.name)}</legend>
-            ${g.settings.map((s) => {
-              const err = errors[s.env] || (s.problem && s.problem.level === "error" ? s.problem.message : "");
-              const warn = !err && s.problem ? s.problem.message : "";
-              return `
-              <div class="setting ${err ? "has-error" : warn ? "has-warning" : ""}">
-                <label for="set-${esc(s.env)}">${esc(s.label)} ${s.kind === "secret" && s.is_set ? '<span class="pill ok">set</span>' : ""}
-                  <span class="pill">${esc(sourceLabel[s.source] || s.source)}</span></label>
-                <div class="setting-input">
-                  ${settingInputHtml(s, typed)}
-                  ${s.source === "ui" ? `<button class="btn small" type="button" data-reset="${esc(s.env)}" title="Remove the value saved here and use the environment/default">Reset</button>` : ""}
-                </div>
-                <small class="meta-line"><code>${esc(s.env)}</code>${s.help ? ` — ${esc(s.help)}` : ""}</small>
-                ${err ? `<small class="field-error">${esc(err)}</small>` : warn ? `<small class="field-warning">${esc(warn)}</small>` : ""}
-              </div>`;
-            }).join("")}
-          </fieldset>`).join("")}
-        ${data.setup_code_required ? `<p class="meta-line">🔑 This server has no access token yet, so saving asks for the <b>setup code</b> printed in the server's log (<code>docker compose logs magpie</code>). Setting an access token below removes that step.</p>` : ""}
-        <p class="meta-line">Values saved here are stored in <code>${esc(data.settings_file)}</code> and take precedence over environment variables. Changes apply immediately.</p>
-        <div class="actions sticky-actions">
-          <button class="btn primary" type="submit">Save settings</button>
-          <button class="btn" type="button" data-action="close">Cancel</button>
+        <div class="settings-body">
+          <nav class="settings-nav" role="tablist" aria-label="Settings sections">
+            ${names.map((n) => `<button type="button" role="tab" data-settings-tab="${esc(n)}" aria-selected="${n === settingsTab}">${esc(n)}${badge(n)}</button>`).join("")}
+          </nav>
+          <div class="settings-content">
+            ${alerts.length ? `<details class="status-summary ${alerts.some((p) => p.level === "error") ? "error" : "warning"}" ${alerts.length <= 2 ? "open" : ""}>
+              <summary>${alerts.length} thing${alerts.length === 1 ? "" : "s"} need${alerts.length === 1 ? "s" : ""} attention</summary>
+              <ul>${alerts.map((p) => `<li>${esc(p.message)}${p.key ? ` <a href="#set-${esc(p.key)}" data-focus="set-${esc(p.key)}">Go to setting</a>` : ""}</li>`).join("")}</ul>
+            </details>` : `<p class="ok-line">✓ Everything is set up.</p>`}
+            <section class="settings-section" data-section="Appearance" ${settingsTab === "Appearance" ? "" : "hidden"}>
+              <h3>Appearance</h3>
+              ${appearanceHtml()}
+            </section>
+            ${data.groups.map((g) => `
+              <section class="settings-section" data-section="${esc(g.name)}" ${settingsTab === g.name ? "" : "hidden"}>
+                <h3>${esc(g.name)}</h3>
+                ${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
+                ${g.name === "Security" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}
+              </section>`).join("")}
+            <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
+          </div>
         </div>
+        <footer class="settings-foot">
+          <button class="btn" type="button" data-action="close">Cancel</button>
+          <button class="btn primary" type="submit">Save changes</button>
+        </footer>
       </form>
     </div>`;
+}
+
+function selectSettingsTab(name) {
+  settingsTab = name;
+  document.querySelectorAll("[data-settings-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.settingsTab === name)));
+  document.querySelectorAll(".settings-section").forEach((s) => { s.hidden = s.dataset.section !== name; });
+  $(".settings-content")?.scrollTo({ top: 0 });
 }
 
 // ---- appearance (per device) --------------------------------------------------
@@ -551,10 +587,11 @@ function setTheme(theme) {
 
 function appearanceHtml() {
   const current = getTheme();
-  return `<div class="appearance"><h4>Appearance</h4><div class="segmented" role="group" aria-label="Appearance">${
+  return `<div class="setting"><div class="setting-text"><label>Theme</label><p class="setting-help">This device only.</p></div>
+    <div class="setting-control"><div class="segmented" role="group" aria-label="Theme">${
     [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
       `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${label}</button>`).join("")
-  }</div><span class="meta-line">This device only</span></div>`;
+  }</div></div></div>`;
 }
 
 let settingsData = null;
@@ -563,7 +600,7 @@ async function showSettings(errors = {}, typed = {}) {
   const dlg = $("#detail");
   dlg.dataset.id = "";
   if (!settingsData || !Object.keys(errors).length) {
-    dlg.innerHTML = `<div class="settings-panel"><button class="btn close" data-action="close" aria-label="Close">✕</button><h2>Settings</h2>${appearanceHtml()}<p class="meta-line server-state">Loading server settings…</p></div>`;
+    dlg.innerHTML = `<div class="settings-panel"><header class="settings-head"><h2>Settings</h2><button class="btn close" data-action="close" aria-label="Close">✕</button></header><div class="settings-content"><section class="settings-section"><h3>Appearance</h3>${appearanceHtml()}</section><p class="setting-note server-state">Loading server settings…</p></div></div>`;
     if (!dlg.open) dlg.showModal();
     try {
       settingsData = await api("/api/settings");
@@ -580,7 +617,7 @@ async function showSettings(errors = {}, typed = {}) {
   dlg.innerHTML = settingsHtml(settingsData, errors, typed);
   if (!dlg.open) dlg.showModal();
   const firstBad = Object.keys(errors).map((env) => document.getElementById(`set-${env}`)).find(Boolean);
-  if (firstBad) { firstBad.scrollIntoView({ block: "center" }); firstBad.focus(); }
+  if (firstBad) { selectSettingsTab(firstBad.closest(".settings-section").dataset.section); firstBad.scrollIntoView({ block: "center" }); firstBad.focus(); }
 }
 
 async function saveSettings(form) {
@@ -1039,15 +1076,18 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice]");
+  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
+  if (t.dataset.settingsTab !== undefined) return selectSettingsTab(t.dataset.settingsTab);
   if (t.dataset.reset !== undefined) {
     return putSettings({ [t.dataset.reset]: null });
   }
   if (t.dataset.focus !== undefined) {
     e.preventDefault();
     const field = document.getElementById(t.dataset.focus);
+    const section = field?.closest(".settings-section");
+    if (section) selectSettingsTab(section.dataset.section);
     field?.scrollIntoView({ block: "center" });
     return field?.focus();
   }
