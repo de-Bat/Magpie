@@ -126,7 +126,7 @@ Magpie records every analyzer run: model, mode (realtime, batch or local), input
 }
 ```
 
-Costs are computed from the `usage` the API returns on every response. Prices live in `magpie/usage.py`. If you have negotiated prices, or a model isn't listed, override them with `MAGPIE_PRICING='{"claude-opus-5": [5, 25]}'` (USD per million input and output tokens).
+Costs are computed from the `usage` the API returns on every response, for every provider: Claude, OpenAI, Gemini, OpenRouter and Groq (their runs have mode `hosted`). `cloud_share` (also sent as `claude_share` for older clients) is the share of screenshots sent to any paid provider. Prices live in `magpie/usage.py`; a hosted model that isn't listed is counted as $0 until you add its price. If you have negotiated prices, or a model isn't listed, override them with `MAGPIE_PRICING='{"claude-opus-5": [5, 25]}'` (USD per million input and output tokens).
 
 ### Checking the estimate
 

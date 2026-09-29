@@ -22,7 +22,7 @@ import httpx
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, ScreenshotAnalyzer, correction_prompt, prepare_image
 from .config import HOSTED_LLMS, Settings
 from .ocr import Ocr, OcrResult, Signals, extract_signals
-from .usage import Run, local_cost
+from .usage import Run, local_cost, token_cost
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +137,7 @@ class LocalLLMAnalyzer:
         """source: "local" = the LOCAL_LLM_* server, "hosted" = the chosen hosted provider, "auto" = whichever
         is configured (the hosted provider wins)."""
         hosted = source == "hosted" or (source == "auto" and settings.hosted_llm in HOSTED_LLMS)
+        self.hosted = hosted
         if hosted:
             if settings.hosted_llm not in HOSTED_LLMS:
                 raise ValueError("No hosted provider is selected")
@@ -193,7 +194,8 @@ class LocalLLMAnalyzer:
             "temperature": 0.1,
             "stream": False,
         }
-        run = Run("nim" if self.provider == "nim" else self.name, model=self.model, mode="local")
+        run = Run("nim" if self.provider == "nim" and not self.hosted else self.name, model=self.model,
+                  mode="hosted" if self.hosted else "local")
         started = time.monotonic()
         try:
             text, usage = await self._complete(body)
@@ -210,7 +212,7 @@ class LocalLLMAnalyzer:
         run.duration_ms = int((time.monotonic() - started) * 1000)
         run.input_tokens = int(usage.get("prompt_tokens") or 0)
         run.output_tokens = int(usage.get("completion_tokens") or 0)
-        run.cost_usd = local_cost(run.duration_ms, self.cost_per_hour)
+        run.cost_usd = token_cost(run) if self.hosted else local_cost(run.duration_ms, self.cost_per_hour)
         return run.to_dict()
 
     FORMATS = ("json_schema", "json_object", "none")

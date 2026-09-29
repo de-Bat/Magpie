@@ -414,6 +414,8 @@ def create_app(
         report = db.usage_report(days)
         report["config"] = {
             "analyzer": settings.resolved_analyzer(), "claude_model": settings.model, "effort": settings.effort,
+            "provider": settings.hosted_llm if settings.hosted_llm in HOSTED_LLMS else "claude",
+            "provider_model": settings.llm_model if settings.hosted_llm in HOSTED_LLMS else settings.model,
             "claude_batch": settings.claude_batch, "fetch_max_tokens": settings.fetch_max_tokens,
             "escalate_below": settings.escalate_below,
         }
