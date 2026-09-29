@@ -548,7 +548,49 @@ function formRow(label, help, control, error = "", attrs = "") {
 }
 
 const keyHelp = (p) => p.id === "local" ? "Only if the server needs one." : "Stored on the server; never shown again after saving.";
-const keyLabel = (p, s) => `${esc(p.id === "claude" ? "Anthropic" : p.label)} API key${s.is_set ? ' <span class="pill ok">Set</span>' : ""}`;
+const keyStatus = {};   // key setting -> {ok, text}: what the last test of that key found
+const keyPill = (p) => { const st = keyStatus[p.key_env]; return st ? ` <span class="pill ${st.ok ? "ok" : "bad"}" title="${esc(st.text)}">${st.ok ? "✓ Works" : "✗ Rejected"}</span>` : ""; };
+const keyLabel = (p, s) => `${esc(p.id === "claude" ? "Anthropic" : p.label)} API key${s.is_set ? ' <span class="pill ok">Set</span>' : ""}${keyPill(p)}`;
+
+// What a provider says is left, e.g. "3,950 of 4,000 requests, 1.9M tokens left".
+function limitsText(l) {
+  if (!l) return "";
+  const n = (v) => v >= 1e6 ? `${(v / 1e6).toFixed(1)}M` : v >= 1e4 ? `${Math.round(v / 1e3)}k` : Number(v).toLocaleString();
+  const part = (x, unit) => x ? `${n(x.remaining)}${x.limit ? ` of ${n(x.limit)}` : ""} ${unit}` : "";
+  const credit = l.credit && l.credit.remaining != null ? `$${Number(l.credit.remaining).toFixed(2)} credit` : "";
+  return [part(l.requests, "requests"), part(l.tokens, "tokens"), credit].filter(Boolean).join(", ") + (l.requests || l.tokens || credit ? " left" : "");
+}
+
+function setKeyStatus(p, ok, text) {
+  keyStatus[p.key_env] = { ok, text };
+  for (const prefix of ["ot", "lc"]) {   // refresh the label wherever this provider's key is shown
+    const input = $(`#${prefix}-key`);
+    const shown = prefix === "lc" ? p.id === "local" : $("#ot-provider")?.value === p.id;
+    if (input && shown) input.closest(".setting").querySelector("label").innerHTML = keyLabel(p, settingEntry(settingsData, p.key_env));
+  }
+}
+
+function errorMessage(e) {
+  let msg = e.message;
+  try { msg = JSON.parse(e.message).message || JSON.parse(e.message).detail || msg; } catch {}
+  return msg;
+}
+
+// Check a provider's key (the saved one when `key` is null) and remember the answer. Returns the server's reply, or null.
+async function verifyKey(p, key = null, url = null) {
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    const res = await api("/api/models", { method: "POST", headers, body: JSON.stringify({ provider: p.id, key, url }) });
+    modelLists[p.id] = res.models;
+    setKeyStatus(p, true, `Verified · ${res.models.length} models${res.limits ? " · " + limitsText(res.limits) : ""}`);
+    return res;
+  } catch (e) {
+    const msg = errorMessage(e);
+    if (/rejected/i.test(msg)) setKeyStatus(p, false, msg);
+    throw new Error(msg);
+  }
+}
 const keyPlaceholder = (s) => s.is_set ? `${s.value} (leave blank to keep)` : "not set";
 
 function providerFormHtml(data, errors, typed) {
@@ -672,18 +714,15 @@ async function loadModels(prefix, silent = false) {
   try {
     const headers = { "Content-Type": "application/json" };
     if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
-    const res = await api("/api/models", { method: "POST", headers, body: JSON.stringify(body) });
+    const res = await verifyKey(p, body.key, body.url);
     if (prefix === "ot" && form.elements.ot_provider.value !== p.id) return;   // switched meanwhile
-    modelLists[p.id] = res.models;
     const modelS = settingEntry(data, p.model_env);
     renderModelControl(prefix, p, form.elements[`${prefix}_model`].value, p.model || modelS.default || "");
     if (!res.models.length && !silent) toast("The provider returned no models.");
   } catch (e) {
     if (btn) { btn.disabled = false; btn.textContent = modelLists[p.id] ? "Refresh" : "Load models"; }
     if (silent) return;   // e.g. no key yet: the text box still works
-    let msg = e.message;
-    try { msg = JSON.parse(e.message).message || JSON.parse(e.message).detail || msg; } catch {}
-    toast(`Couldn't load models: ${msg}`);
+    toast(`Couldn't load models: ${e.message}`);
   }
 }
 
@@ -697,15 +736,10 @@ async function testKey(prefix) {
   const body = { provider: p.id, key: form.elements[`${prefix}_key`].value.trim() || null,
                  url: p.id === "local" ? form.elements[`${prefix}_url`].value.trim() || null : null };
   try {
-    const headers = { "Content-Type": "application/json" };
-    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
-    const res = await api("/api/models", { method: "POST", headers, body: JSON.stringify(body) });
-    modelLists[p.id] = res.models;
-    toast(`✓ ${p.label || p.id}: the key works (${res.models.length} models available).`);
+    const res = await verifyKey(p, body.key, body.url);
+    toast(`✓ ${p.label || p.id}: the key works (${res.models.length} models${res.limits ? "; " + limitsText(res.limits) : ""}).`);
   } catch (e) {
-    let msg = e.message;
-    try { msg = JSON.parse(e.message).message || JSON.parse(e.message).detail || msg; } catch {}
-    toast(`✗ ${p.label || p.id}: ${msg}`);
+    toast(`✗ ${p.label || p.id}: ${e.message}`);
   } finally {
     btn.disabled = false; btn.textContent = idle;
   }
@@ -914,6 +948,23 @@ async function saveSettings(form) {
   await putSettings(changes);
 }
 
+// A key that was just saved is tested straight away, so a typo shows up now rather than on the next screenshot.
+const KEY_PROVIDER = { ANTHROPIC_API_KEY: "claude", OPENAI_API_KEY: "openai", GEMINI_API_KEY: "gemini",
+  OPENROUTER_API_KEY: "openrouter", GROQ_API_KEY: "groq", LOCAL_LLM_API_KEY: "local" };
+
+async function verifyChangedKeys(changes) {
+  for (const env of Object.keys(changes)) {
+    const p = KEY_PROVIDER[env] && changes[env] && settingsData.providers.find((x) => x.id === KEY_PROVIDER[env]);
+    if (!p) continue;
+    try {
+      const res = await verifyKey(p);
+      toast(`✓ ${p.label}: the key works${res.limits ? " — " + limitsText(res.limits) : ""}.`);
+    } catch (e) {
+      toast(`✗ ${p.label}: ${e.message}`);
+    }
+  }
+}
+
 let setupCode = null;  // this server's setup code (only needed while it has no access token)
 
 async function putSettings(changes) {
@@ -942,6 +993,7 @@ async function putSettings(changes) {
     return toast(`Couldn't save settings: ${e.message}`);
   }
   for (const notice of settingsData.notices || []) toast(notice);
+  await verifyChangedKeys(changes);
   // A new access token applies to this device too.
   // (several tokens may be listed: this device uses the first)
   const firstToken = (changes.MAGPIE_API_TOKEN || "").split(/[,\s]+/).find(Boolean);
@@ -1017,6 +1069,16 @@ function formatUsd(v) {
   return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 
+function limitsPanel(c) {
+  const rows = Object.entries(c.limits || {}).map(([id, l]) =>
+    `<tr><td>${esc(PROVIDER_NAMES[id] || id)}</td><td>${esc(limitsText(l) || "—")}</td>
+     <td class="meta-line">${l.requests?.reset ? `resets ${esc(l.requests.reset)} · ` : ""}as of ${esc(new Date(l.updated).toLocaleTimeString())}</td></tr>`).join("");
+  const budget = c.monthly_budget_usd ? `<p class="meta-line">Monthly budget: ${esc(formatUsd(Math.max(0, c.monthly_budget_usd - c.month_spent_usd)))} left of ${esc(formatUsd(c.monthly_budget_usd))}.</p>` : "";
+  return `<h4>What's left</h4>${budget}${rows
+    ? `<table class="usage-table"><tbody>${rows}</tbody></table>`
+    : `<p class="meta-line">Providers report their remaining rate limits (and, for OpenRouter, credit) with each answer. Nothing seen yet: it appears after the next analysis or a key test. Billing balances aren't available from any provider's API.</p>`}`;
+}
+
 const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI", gemini: "Gemini", openrouter: "OpenRouter", groq: "Groq" };
 const providerName = (c) => PROVIDER_NAMES[c.provider] || "Claude";
 
@@ -1050,6 +1112,7 @@ async function showUsage() {
           <td>${(a.input_tokens || 0).toLocaleString()} / ${(a.output_tokens || 0).toLocaleString()}</td><td>${a.web_searches || 0}</td>
           <td>${a.avg_duration_ms ? (a.avg_duration_ms / 1000).toFixed(1) + " s" : "—"}</td></tr>`).join("") || `<tr><td colspan="7" class="meta-line">No analyses yet.</td></tr>`}
       </tbody></table>
+      ${limitsPanel(c)}
       ${r.by_day.length ? `<h4>Per day</h4><div class="bars">${r.by_day.map((d) => `
         <div class="bar" title="${esc(d.day)}: ${esc(formatUsd(d.cost_usd))}, ${d.screenshots} screenshot(s)"><span style="height:${Math.max(3, d.cost_usd / max * 100)}%"></span></div>`).join("")}</div>` : ""}
       <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.provider_model || c.claude_model)}${c.provider && c.provider !== "claude" ? "" : ` · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"} · fetch cap ${c.fetch_max_tokens ? c.fetch_max_tokens.toLocaleString() + " tokens" : "off"}`}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}${c.monthly_budget_usd ? ` · budget ${esc(formatUsd(c.month_spent_usd))} of ${esc(formatUsd(c.monthly_budget_usd))} this month` : ""}. Costs use list prices.</p>
