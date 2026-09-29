@@ -1243,6 +1243,7 @@ document.addEventListener("click", async (e) => {
     e.preventDefault();
     const field = document.getElementById(t.dataset.focus)
       || document.getElementById(/URL$/.test(t.dataset.focus) ? "prov-url" : /MODEL$/.test(t.dataset.focus) ? "prov-model" : "prov-key");
+    field?.closest("details")?.setAttribute("open", "");   // e.g. an Advanced setting
     const section = field?.closest(".settings-section");
     if (section) selectSettingsTab(section.dataset.section);
     field?.scrollIntoView({ block: "center" });

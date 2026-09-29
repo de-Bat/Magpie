@@ -73,7 +73,7 @@ SPECS: list[Spec] = [
     Spec("analyzer", "MAGPIE_ANALYZER", "choice", "auto", "Identification", "Analyzer",
          "auto picks hybrid if Claude and a local LLM are both set, else whichever is set, else OCR only.", ANALYZERS),
     Spec("anthropic_api_key", "ANTHROPIC_API_KEY", "secret", None, "Identification", "Anthropic API key",
-         "Needed for the claude and hybrid analyzers. https://console.anthropic.com"),
+         "Needed when Anthropic (Claude) is the provider, or in Hybrid mode. https://console.anthropic.com"),
     Spec("model", "MAGPIE_MODEL", "str", "claude-opus-5", "Identification", "Claude model"),
     Spec("escalate_below", "MAGPIE_ESCALATE_BELOW", "int", 70, "Identification", "Escalate to Claude below (confidence %)",
          "Hybrid mode: ask Claude when the local model is less sure than this.", min=0, max=100),
@@ -344,8 +344,12 @@ class Settings:
 
         mode = self.resolved_analyzer()
         if mode in ("claude", "hybrid") and not self.anthropic_api_key:
-            add("error", f"The {mode} analyzer needs an Anthropic API key. Screenshots can't be identified until it's set.",
-                "ANTHROPIC_API_KEY")
+            if mode == "claude":
+                add("error", "Anthropic (Claude) is selected but its API key is not set, so screenshots can't be identified.",
+                    "ANTHROPIC_API_KEY")
+            else:
+                add("error", "The analyzer is set to Hybrid, which asks Claude when the other model is unsure, and that needs an "
+                    "Anthropic API key. Add a key, or set the analyzer to Local under Advanced.", "MAGPIE_ANALYZER")
         if self.hosted_llm in HOSTED_LLMS and not self.llm_api_key:
             name = HOSTED_LLMS[self.hosted_llm][3]
             add("error", f"{name} is selected but its API key is not set.", HOSTED_LLMS[self.hosted_llm][2].upper())

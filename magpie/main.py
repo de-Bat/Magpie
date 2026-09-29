@@ -175,7 +175,7 @@ def create_app(
         if not rt.db_ok:
             problems.append({"level": "error", "key": None, "message": f"Storage unavailable: {rt.db_error}"})
         settings_problems = settings.problems() if analyzer is None else [
-            p for p in settings.problems() if p["key"] not in ("ANTHROPIC_API_KEY", "LOCAL_LLM_URL")]
+            p for p in settings.problems() if p["key"] not in ("ANTHROPIC_API_KEY", "LOCAL_LLM_URL", "MAGPIE_ANALYZER")]
         problems += settings_problems
         if rt.analyzer_error and not any(p["level"] == "error" for p in settings_problems):
             problems.append({"level": "error", "key": None, "message": f"Analyzer not available: {rt.analyzer_error}"})
