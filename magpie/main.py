@@ -98,7 +98,7 @@ def create_app(
         if analyzer is not None:
             return analyzer
         try:
-            chosen = AnalyzerRouter(settings, client)
+            chosen = AnalyzerRouter(settings, client, spent=db.month_cost)
             rt.analyzer_error = None
             return chosen
         except Exception as e:  # misconfiguration: keep serving, report it in the UI and on each item
@@ -417,7 +417,8 @@ def create_app(
             "provider": settings.hosted_llm if settings.hosted_llm in HOSTED_LLMS else "claude",
             "provider_model": settings.llm_model if settings.hosted_llm in HOSTED_LLMS else settings.model,
             "claude_batch": settings.claude_batch, "fetch_max_tokens": settings.fetch_max_tokens,
-            "escalate_below": settings.escalate_below,
+            "escalate_below": settings.escalate_below, "monthly_budget_usd": settings.monthly_budget_usd,
+            "month_spent_usd": round(db.month_cost(), 4),
         }
         return report
 

@@ -178,7 +178,8 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `MAGPIE_ENRICH` | optional | `off` disables all online metadata lookups |
 | `MAGPIE_ALLOW_PRIVATE_URLS` | optional | `true` lets Magpie fetch links on private/LAN addresses (blocked by default) |
 | `MAGPIE_CLAUDE_BATCH` | optional | `true` (default): new screenshots use the 50%-off Batches API; `false`: real time |
-| `MAGPIE_EFFORT`, `MAGPIE_FETCH_MAX_TOKENS` | optional | Claude cost controls (defaults `medium`, `8000`) |
+| `MAGPIE_EFFORT`, `MAGPIE_FETCH_MAX_TOKENS` | optional | Claude-only options (defaults `medium`, `8000`) |
+| `MAGPIE_MONTHLY_BUDGET_USD`, `MAGPIE_MAX_OUTPUT_TOKENS`, `MAGPIE_MAX_IMAGE_EDGE` | optional | Cost controls for every provider: monthly spend limit (0 = none), reply cap (0 = default), image size (default `2000`) |
 | `MAGPIE_LOCAL_COST_PER_HOUR`, `MAGPIE_PRICING` | optional | For the usage report: your local box's running cost; price overrides |
 | `MAGPIE_API_TOKEN` | recommended | Shared secret for all API and media requests. To give each device or client its own token, list several separated by commas (`tok1,tok2`); any one is accepted, and removing one revokes it. Set it whenever the server can be reached from outside localhost. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `TMDB_API_KEY` | optional | Posters, overview, cast, genres, streaming providers (v3 key or v4 read token) |

@@ -57,7 +57,7 @@ Point `LOCAL_LLM_URL` at any OpenAI-compatible server. Magpie asks for schema-co
 
 What Magpie does specifically for NIM (detected automatically from NVIDIA's API URL or an `nvapi-` key, or set `LOCAL_LLM_PROVIDER=nim`):
 - **Structured output:** asks for JSON-schema output through `response_format`. If the NIM release doesn't support that, it falls back to NIM's own `nvext.guided_json`, so output stays schema-valid on older NIMs too.
-- **Images:** converts WebP and GIF to JPEG, since NIM vision models take JPEG/PNG only. `LOCAL_LLM_MAX_IMAGE_EDGE` sizes images down for speed.
+- **Images:** converts WebP and GIF to JPEG, since NIM vision models take JPEG/PNG only. `MAGPIE_MAX_IMAGE_EDGE` (formerly `LOCAL_LLM_MAX_IMAGE_EDGE`, still read) sizes images down for speed.
 - **Retries:** retries 429 responses (the hosted rate limit) and 503 responses (a self-hosted NIM that is still loading its model), honouring `Retry-After`.
 - **Reporting:** shows up as `nim:<model>` in the Usage & cost report. Hosted NIM is recorded at $0; set `MAGPIE_LOCAL_COST_PER_HOUR` for a self-hosted GPU.
 

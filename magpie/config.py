@@ -75,8 +75,6 @@ SPECS: list[Spec] = [
     Spec("anthropic_api_key", "ANTHROPIC_API_KEY", "secret", None, "Identification", "Anthropic API key",
          "Needed when Anthropic (Claude) is the provider, or in Hybrid mode. https://console.anthropic.com"),
     Spec("model", "MAGPIE_MODEL", "str", "claude-opus-5", "Identification", "Claude model"),
-    Spec("escalate_below", "MAGPIE_ESCALATE_BELOW", "int", 70, "Identification", "Escalate to Claude below (confidence %)",
-         "Hybrid mode: ask Claude when the local model is less sure than this.", min=0, max=100),
     Spec("hosted_llm", "MAGPIE_LLM_PROVIDER", "choice", "none", "Other AI providers", "Hosted provider",
          "Use OpenAI, Gemini, OpenRouter or Groq instead of a local server or Claude. Sets the endpoint and a default "
          "model; the model can be overridden under Local LLM → Model. Works with the local and hybrid analyzers.",
@@ -97,15 +95,25 @@ SPECS: list[Spec] = [
     Spec("local_llm_provider", "LOCAL_LLM_PROVIDER", "choice", "auto", "Local LLM", "Provider", "", ("auto", "openai", "nim")),
     Spec("local_llm_vision", "LOCAL_LLM_VISION", "bool", True, "Local LLM", "Vision model",
          "Turn off for text-only models: they get the OCR text instead of the image."),
-    Spec("local_llm_max_image_edge", "LOCAL_LLM_MAX_IMAGE_EDGE", "int", 2000, "Local LLM", "Max image edge (px)", min=256, max=10000),
     Spec("local_llm_timeout", "LOCAL_LLM_TIMEOUT", "float", 300.0, "Local LLM", "Timeout (s)", min=1),
     Spec("local_cost_per_hour", "MAGPIE_LOCAL_COST_PER_HOUR", "float", 0.0, "Local LLM", "Running cost (USD/hour)", min=0),
-    Spec("effort", "MAGPIE_EFFORT", "choice", "medium", "Claude cost controls", "Effort", "",
+    # Cost controls that apply to every provider.
+    Spec("monthly_budget_usd", "MAGPIE_MONTHLY_BUDGET_USD", "float", 0.0, "Cost controls", "Monthly budget (USD)",
+         "0 = no limit. Once this month's measured spend reaches it, Magpie stops calling paid providers: hybrid keeps "
+         "the first model's answer, other modes report the limit.", min=0),
+    Spec("escalate_below", "MAGPIE_ESCALATE_BELOW", "int", 70, "Cost controls", "Escalate to the fallback below (confidence %)",
+         "Hybrid mode: ask the fallback provider (Claude, OpenAI, Gemini, ...) when your own model is less sure than this.",
+         min=0, max=100),
+    Spec("max_output_tokens", "MAGPIE_MAX_OUTPUT_TOKENS", "int", 0, "Cost controls", "Max output tokens",
+         "0 = provider default. Caps the reply (and, for Claude, its thinking) of every request.", min=0),
+    Spec("max_image_edge", "MAGPIE_MAX_IMAGE_EDGE", "int", 2000, "Cost controls", "Max image edge (px)",
+         "Screenshots are scaled down to this before being sent to any model. Smaller = fewer tokens.", min=256, max=10000),
+    Spec("effort", "MAGPIE_EFFORT", "choice", "medium", "Claude options", "Effort", "",
          ("low", "medium", "high", "xhigh", "max")),
-    Spec("claude_batch", "MAGPIE_CLAUDE_BATCH", "bool", True, "Claude cost controls", "Use Message Batches",
+    Spec("claude_batch", "MAGPIE_CLAUDE_BATCH", "bool", True, "Claude options", "Use Message Batches",
          "50% cheaper; results usually within an hour."),
-    Spec("batch_poll_seconds", "MAGPIE_BATCH_POLL_SECONDS", "int", 60, "Claude cost controls", "Batch poll interval (s)", min=5),
-    Spec("fetch_max_tokens", "MAGPIE_FETCH_MAX_TOKENS", "int", 8000, "Claude cost controls", "Max tokens per fetched page",
+    Spec("batch_poll_seconds", "MAGPIE_BATCH_POLL_SECONDS", "int", 60, "Claude options", "Batch poll interval (s)", min=5),
+    Spec("fetch_max_tokens", "MAGPIE_FETCH_MAX_TOKENS", "int", 8000, "Claude options", "Max tokens per fetched page",
          "0 = no cap.", min=0),
     Spec("ocr_engine", "MAGPIE_OCR", "choice", "rapidocr", "OCR", "OCR engine", "", ("rapidocr", "tesseract", "off")),
     Spec("ocr_langs", "MAGPIE_OCR_LANGS", "str", "eng", "OCR", "Tesseract languages", "e.g. eng+heb"),
@@ -161,6 +169,8 @@ def _env_value(spec: Spec) -> str | None:
     raw = os.environ.get(spec.env)
     if spec.attr == "local_llm_api_key" and not raw:
         raw = os.environ.get("NVIDIA_API_KEY")
+    if spec.attr == "max_image_edge" and not raw:
+        raw = os.environ.get("LOCAL_LLM_MAX_IMAGE_EDGE")  # its name before it applied to every provider
     return raw or None
 
 
@@ -199,16 +209,19 @@ class Settings:
     # openai (Ollama, vLLM, LM Studio, llama.cpp…) | nim (NVIDIA NIM, self-hosted or build.nvidia.com) | auto
     local_llm_provider: str = field(default_factory=_from_env("local_llm_provider"))
     # Longest image edge sent to the local model (smaller = faster, fewer tokens)
-    local_llm_max_image_edge: int = field(default_factory=_from_env("local_llm_max_image_edge"))
+    max_image_edge: int = field(default_factory=_from_env("max_image_edge"))
     # Set to false for text-only models: they then get the OCR text instead of the image.
     local_llm_vision: bool = field(default_factory=_from_env("local_llm_vision"))
     local_llm_timeout: float = field(default_factory=_from_env("local_llm_timeout"))
     # hybrid mode: ask Claude when the local model's confidence is below this
     escalate_below: int = field(default_factory=_from_env("escalate_below"))
+    # Cost controls for every provider (see docs/COSTS.md)
+    monthly_budget_usd: float = field(default_factory=_from_env("monthly_budget_usd"))  # 0 = no limit
+    max_output_tokens: int = field(default_factory=_from_env("max_output_tokens"))      # 0 = provider default
     # OCR pre-pass: rapidocr (bundled, CPU) | tesseract (needs the binary; better for Hebrew/Arabic/...) | off
     ocr_engine: str = field(default_factory=_from_env("ocr_engine"))
     ocr_langs: str = field(default_factory=_from_env("ocr_langs"))  # tesseract only, e.g. eng+heb
-    # Cost controls for Claude (see docs/COSTS.md)
+    # Claude-only options (see docs/COSTS.md)
     effort: str = field(default_factory=_from_env("effort"))         # low|medium|high|xhigh|max
     fetch_max_tokens: int = field(default_factory=_from_env("fetch_max_tokens"))  # 0 = no cap
     # Send new screenshots to Claude through the Message Batches API (50% cheaper; results in minutes, max 24 h)

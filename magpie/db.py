@@ -278,6 +278,11 @@ class Database:
                 [(item_id, now(), purpose, *(value(r, c) for c in cols)) for r in runs],
             )
 
+    def month_cost(self) -> float:
+        """Measured spend since the start of the current (UTC) month."""
+        start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="microseconds")
+        return self.conn.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM analysis_runs WHERE created_at >= ?", (start,)).fetchone()[0]
+
     def usage_report(self, days: int = 30) -> dict:
         since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="microseconds")
         q = lambda sql, *a: [dict(r) for r in self.conn.execute(sql, (since, *a)).fetchall()]  # noqa: E731

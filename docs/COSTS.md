@@ -77,7 +77,18 @@ For other pages, the model gets the reader-view text instead of an image, and no
 
 That's about $0.05 in real time and $0.03 batched. Web search is enabled only when the page can't be read (e.g. a login wall); then the cost is closer to a screenshot's.
 
-## Cost controls (on by default)
+## Cost controls for every provider
+
+These apply to Claude, OpenAI, Gemini, OpenRouter and Groq alike (Settings → Cost controls):
+
+| Setting | Effect |
+|---|---|
+| `MAGPIE_MONTHLY_BUDGET_USD` | Hard stop. When this month's measured spend reaches it, paid providers aren't called: hybrid keeps your own model's answer, other modes report that the budget is used up. `0` (default) = no limit. |
+| `MAGPIE_ESCALATE_BELOW` | Hybrid: only answers below this confidence go to the fallback provider. |
+| `MAGPIE_MAX_OUTPUT_TOKENS` | Caps every reply (for Claude, thinking included). `0` = provider default. |
+| `MAGPIE_MAX_IMAGE_EDGE` | Screenshots are scaled down to this before being sent to any model. |
+
+## Claude-only cost controls (on by default)
 
 | # | Control | Setting | Effect |
 |---|---|---|---|

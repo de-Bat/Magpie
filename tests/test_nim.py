@@ -126,6 +126,6 @@ async def test_image_size_limit_is_configurable(tmp_path):
     http, seen = server([(200, json.dumps(ANSWER), {})])
     big = io.BytesIO()
     Image.new("RGB", (1200, 2600), "white").save(big, format="PNG")
-    await nim(tmp_path, http, local_llm_max_image_edge=1024).analyze(big.getvalue(), "image/png")
+    await nim(tmp_path, http, max_image_edge=1024).analyze(big.getvalue(), "image/png")
     url = seen[0]["messages"][1]["content"][1]["image_url"]["url"]
     assert max(Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1]))).size) == 1024

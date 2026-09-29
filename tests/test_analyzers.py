@@ -339,3 +339,19 @@ def test_fetch_models_uses_provider_endpoint_and_key(tmp_path):
     assert seen[-1][1] is None                                    # saved key never follows a different URL
     with pytest.raises(ValueError, match="API key"):
         run(fetch_models(s, http, "openai"))
+
+
+async def test_budget_stops_paid_fallback_but_keeps_local_answer(tmp_path):
+    s = Settings(data_dir=tmp_path, analyzer="hybrid", escalate_below=70, monthly_budget_usd=1.0, anthropic_api_key="k")
+    fallback = FakeBackend({"title": "Paid", "confidence": 95}, label="claude")
+    r = router(tmp_path, "hybrid", FakeBackend({**GOOD, "confidence": 30}), fallback)
+    r.budget, r.spent = 1.0, lambda: 1.5
+    out = await r.analyze(png(), "image/png")
+    assert out["title"] == GOOD["title"] and not fallback.calls
+    # nothing local to keep: the limit is reported
+    r = router(tmp_path, "hybrid", FakeBackend(error=AnalysisError("down")), fallback)
+    r.budget, r.spent = 1.0, lambda: 1.5
+    with pytest.raises(AnalysisError, match="monthly budget"):
+        await r.analyze(png(), "image/png")
+    r.spent = lambda: 0.5  # under budget: the fallback is used again
+    assert (await r.analyze(png(), "image/png"))["title"] == "Paid"

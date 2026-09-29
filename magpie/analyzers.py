@@ -149,7 +149,7 @@ class LocalLLMAnalyzer:
             self.name, self.provider = "local", settings.resolved_llm_provider(local=True)
         if not url:
             raise ValueError("LOCAL_LLM_URL is not set")
-        self.max_image_edge = settings.local_llm_max_image_edge
+        self.max_image_edge = settings.max_image_edge
         # NIM: JSON schema via response_format on newer releases, else its nvext.guided_json extension.
         self.formats = ("json_schema", "nvext", "json_object", "none") if self.provider == "nim" else self.FORMATS
         # NIM vision models accept JPEG/PNG only.
@@ -158,6 +158,7 @@ class LocalLLMAnalyzer:
         self.url = url.rstrip("/") + "/chat/completions"
         self.model = model
         self.vision = settings.local_llm_vision
+        self.max_output_tokens = settings.max_output_tokens
         self.timeout = settings.local_llm_timeout
         self.headers = {"Authorization": f"Bearer {key}"} if key else {}
         self.cost_per_hour = settings.local_cost_per_hour
@@ -194,6 +195,8 @@ class LocalLLMAnalyzer:
             "temperature": 0.1,
             "stream": False,
         }
+        if self.max_output_tokens:
+            body["max_tokens"] = self.max_output_tokens
         run = Run("nim" if self.provider == "nim" and not self.hosted else self.name, model=self.model,
                   mode="hosted" if self.hosted else "local")
         started = time.monotonic()
@@ -314,8 +317,11 @@ class AnalyzerRouter:
     LOCAL_RETRY_AFTER = 300  # seconds to skip an unreachable local server in hybrid mode
 
     def __init__(self, settings: Settings, http: httpx.AsyncClient, ocr: Ocr | None = None,
-                 claude: Any = None, local: Any = None, fallback: Any = None):
+                 claude: Any = None, local: Any = None, fallback: Any = None, spent: Any = None):
         self.mode = settings.resolved_analyzer()
+        self.budget = settings.monthly_budget_usd
+        self.spent = spent  # () -> USD measured so far this month
+        self.hosted = settings.hosted_llm in HOSTED_LLMS
         self.escalate_below = settings.escalate_below
         self.batch = settings.claude_batch
         self.ocr = ocr if ocr is not None else Ocr(settings.ocr_engine, settings.ocr_langs)
@@ -329,7 +335,9 @@ class AnalyzerRouter:
             if not settings.anthropic_api_key:
                 raise ValueError(f"MAGPIE_ANALYZER={self.mode} needs ANTHROPIC_API_KEY")
             self.claude = ScreenshotAnalyzer(model=settings.model, effort=settings.effort or None,
-                                             fetch_max_tokens=settings.fetch_max_tokens or None)
+                                             fetch_max_tokens=settings.fetch_max_tokens or None,
+                                             max_tokens=settings.max_output_tokens or None,
+                                             max_image_edge=settings.max_image_edge)
         if self.mode in ("local", "hybrid") and self.local is None:
             self.local = LocalLLMAnalyzer(settings, http, source="local" if self.mode == "hybrid" else "auto")
         if hosted_fallback and self.fallback is None:
@@ -337,6 +345,14 @@ class AnalyzerRouter:
                 raise ValueError(f"Hybrid fallback {settings.hosted_llm} needs its API key")
             self.fallback = LocalLLMAnalyzer(settings, http, source="hosted")
         log.info("Analyzer: %s (OCR: %s, Claude batch: %s)", self.mode, settings.ocr_engine, self.batch)
+
+    def over_budget(self) -> bool:
+        """This month's measured spend has reached MAGPIE_MONTHLY_BUDGET_USD (0 = no limit)."""
+        return bool(self.budget and self.spent and self.spent() >= self.budget)
+
+    def budget_error(self) -> AnalysisError:
+        return AnalysisError(f"The monthly budget of ${self.budget:g} is used up, so paid AI providers are paused "
+                             "until next month. Raise it under Settings → Cost controls.")
 
     async def analyze(self, image: bytes | None, media_type: str | None, note: str | None = None,
                       correction: dict | None = None, interactive: bool = False,
@@ -356,6 +372,8 @@ class AnalyzerRouter:
                                        duration_ms=int((time.monotonic() - started) * 1000)).to_dict())
 
         async def claude_step() -> dict:
+            if self.over_budget():
+                raise self.budget_error()
             if self.batch and not interactive:
                 raise Deferred(self.claude.build_params(image, media_type, note, correction, hints, **link), context)
             try:
@@ -370,6 +388,8 @@ class AnalyzerRouter:
             """The stronger second opinion in hybrid mode: Claude (batchable) or the chosen hosted provider."""
             if self.fallback is None:
                 return await claude_step()
+            if self.over_budget():
+                raise self.budget_error()
             try:
                 result = await self.fallback.analyze(image, media_type, note=note, correction=correction, hints=hints, **link)
             except AnalysisError as e:
@@ -384,6 +404,8 @@ class AnalyzerRouter:
         elif self.mode == "claude":
             result = await claude_step()
         elif self.mode == "local":
+            if self.hosted and self.over_budget():
+                raise self.budget_error()
             try:
                 result = await self.local.analyze(image, media_type, note=note, correction=correction, hints=hints, **link)
             except AnalysisError as e:
@@ -402,10 +424,13 @@ class AnalyzerRouter:
                         self._local_down_until = time.monotonic() + self.LOCAL_RETRY_AFTER
                     log.warning("Local model failed, asking Claude: %s", e)
             if result is None or result.get("confidence", 0) < self.escalate_below:
-                if result is not None:
-                    context["runs"] += result.pop("_runs", [])
-                    context["local_result"] = {k: v for k, v in result.items() if not k.startswith("_")}
-                result = await fallback_step()
+                if result is not None and self.over_budget():
+                    log.info("Monthly budget reached: keeping the local answer")  # nothing paid is called
+                else:
+                    if result is not None:
+                        context["runs"] += result.pop("_runs", [])
+                        context["local_result"] = {k: v for k, v in result.items() if not k.startswith("_")}
+                    result = await fallback_step()
         return self.finish(result, context)
 
     async def finish_batch(self, params: dict, message: Any, context: dict) -> dict:
