@@ -21,6 +21,16 @@ PRICES: dict[str, tuple[float, float]] = {
     "claude-sonnet-5": (2.0, 10.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
+    # Hosted OpenAI-compatible providers (list prices; OpenRouter passes the upstream price through)
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.0),
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1": (2.0, 8.0),
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-flash": (0.30, 2.50),
+    "gemini-2.5-pro": (1.25, 10.0),
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.11, 0.34),
+    "meta-llama/llama-4-maverick-17b-128e-instruct": (0.20, 0.60),
 }
 CACHE_WRITE_MULT = 1.25   # 5-minute cache writes
 CACHE_READ_MULT = 0.10
@@ -45,15 +55,18 @@ def price_for(model: str) -> tuple[float, float] | None:
     for known in sorted(prices, key=len, reverse=True):
         if model.startswith(known):
             return prices[known]
+    # tolerate a router prefix, e.g. OpenRouter's "openai/gpt-4o-mini" or "google/gemini-2.5-flash"
+    if "/" in model:
+        return price_for(model.split("/", 1)[1])
     return None
 
 
 @dataclass
 class Run:
     """One analyzer invocation (one model, one mode). Several can belong to one screenshot."""
-    analyzer: str                 # claude | local | ocr
+    analyzer: str                 # claude | openai | gemini | openrouter | groq | local | nim | ocr
     model: str = ""
-    mode: str = "realtime"        # realtime | batch | local
+    mode: str = "realtime"        # realtime | batch | hosted (non-Claude provider) | local
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -83,6 +96,11 @@ class Run:
         d = asdict(self)
         d["cost_usd"] = round(d["cost_usd"], 6)
         return d
+
+
+def token_cost(run: Run) -> float:
+    """Cost of a run of any hosted model (Claude, OpenAI, Gemini, ...) at list prices."""
+    return claude_cost(run)
 
 
 def claude_cost(run: Run) -> float:

@@ -256,6 +256,8 @@ async def test_hybrid_falls_back_to_the_selected_hosted_provider(tmp_path):
     out = await r.analyze(png(), "image/png")
     assert out["_analyzer"] == ["ocr", "local:fake", "openai:gpt-4o-mini"] and out["confidence"] == 95
     assert sent == [("https://api.openai.com/v1/chat/completions", "Bearer o-key")]
+    hosted_run = next(x for x in out["_runs"] if x["analyzer"] == "openai")
+    assert hosted_run["mode"] == "hosted" and hosted_run["model"] == "gpt-4o-mini"
     # the first pass is always the local server, never the hosted preset
     assert LocalLLMAnalyzer(s, httpx.AsyncClient(), source="local").url == "http://ollama:11434/v1/chat/completions"
     assert not [p for p in s.problems() if p["level"] == "error"]

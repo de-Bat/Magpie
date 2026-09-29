@@ -294,7 +294,7 @@ class Database:
         by_day = q("""SELECT substr(created_at, 1, 10) AS day, COUNT(DISTINCT item_id) AS screenshots, SUM(cost_usd) AS cost_usd
                       FROM analysis_runs WHERE created_at >= ? GROUP BY day ORDER BY day""")
         escalated = q("""SELECT COUNT(DISTINCT item_id) AS n FROM analysis_runs
-                         WHERE created_at >= ? AND analyzer = 'claude'""")[0]["n"]
+                         WHERE created_at >= ? AND mode IN ('realtime', 'batch', 'hosted')""")[0]["n"]
         n = totals["screenshots"] or 0
         per = totals["cost_usd"] / n if n else 0.0
         active_days = len(by_day) or 1
@@ -302,7 +302,8 @@ class Database:
             "period_days": days,
             "totals": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in totals.items()},
             "per_screenshot_usd": round(per, 4),
-            "claude_share": round(escalated / n, 3) if n else 0.0,
+            "cloud_share": round(escalated / n, 3) if n else 0.0,  # sent to any paid provider
+            "claude_share": round(escalated / n, 3) if n else 0.0,  # legacy alias (older clients)
             "projected_30d_usd": round(totals["cost_usd"] / min(days, max(active_days, 1)) * 30, 2) if n else 0.0,
             "by_analyzer": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in r.items()} for r in by_analyzer],
             "by_day": [{**r, "cost_usd": round(r["cost_usd"], 4)} for r in by_day],

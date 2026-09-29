@@ -972,6 +972,9 @@ function formatUsd(v) {
   return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 
+const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI", gemini: "Gemini", openrouter: "OpenRouter", groq: "Groq" };
+const providerName = (c) => PROVIDER_NAMES[c.provider] || "Claude";
+
 async function showUsage() {
   const dlg = $("#detail");
   dlg.dataset.id = "";
@@ -993,7 +996,7 @@ async function showUsage() {
         <div class="score"><b>${esc(formatUsd(r.per_screenshot_usd))}</b><small>per screenshot</small></div>
         <div class="score"><b>${t.screenshots}</b><small>screenshots</small></div>
         <div class="score"><b>${esc(formatUsd(r.projected_30d_usd))}</b><small>projected / 30 days</small></div>
-        <div class="score"><b>${Math.round(r.claude_share * 100)}%</b><small>sent to Claude</small></div>
+        <div class="score"><b>${Math.round((r.cloud_share ?? r.claude_share) * 100)}%</b><small>sent to ${esc(providerName(c))}</small></div>
       </div>
       <h4>By analyzer</h4>
       <table class="usage-table"><thead><tr><th>Analyzer</th><th>Runs</th><th>Avg</th><th>Total</th><th>Tokens in / out</th><th>Searches</th><th>Avg time</th></tr></thead><tbody>
@@ -1004,7 +1007,7 @@ async function showUsage() {
       </tbody></table>
       ${r.by_day.length ? `<h4>Per day</h4><div class="bars">${r.by_day.map((d) => `
         <div class="bar" title="${esc(d.day)}: ${esc(formatUsd(d.cost_usd))}, ${d.screenshots} screenshot(s)"><span style="height:${Math.max(3, d.cost_usd / max * 100)}%"></span></div>`).join("")}</div>` : ""}
-      <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.claude_model)} · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"} · fetch cap ${c.fetch_max_tokens ? c.fetch_max_tokens.toLocaleString() + " tokens" : "off"}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}. Costs use list prices.</p>
+      <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.provider_model || c.claude_model)}${c.provider && c.provider !== "claude" ? "" : ` · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"} · fetch cap ${c.fetch_max_tokens ? c.fetch_max_tokens.toLocaleString() + " tokens" : "off"}`}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}. Costs use list prices.</p>
     </div>`;
 }
 
