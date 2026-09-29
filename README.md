@@ -172,6 +172,7 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `MAGPIE_ANALYZER` | optional | `auto` (default), `claude`, `local`, `hybrid`, `ocr`. See [Choosing the AI](#choosing-the-ai-claude-on-prem-llm-or-no-llm) |
 | `ANTHROPIC_API_KEY` | for `claude`/`hybrid` | Identifies screenshots with Claude |
 | `LOCAL_LLM_URL`, `LOCAL_LLM_MODEL` | for `local`/`hybrid` | Your OpenAI-compatible LLM server and model |
+| `MAGPIE_LLM_PROVIDER` + `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `GROQ_API_KEY` | alternative to a local server | Use a hosted provider (`openai`, `gemini`, `openrouter`, `groq`) with the `local`/`hybrid` analyzers. Sets the endpoint and a default model (override with `LOCAL_LLM_MODEL`); the key for the chosen provider is used. Hosted calls are billed per token by the provider; Magpie's cost view only counts tokens for them |
 | `LOCAL_LLM_PROVIDER`, `NVIDIA_API_KEY` | optional | `nim` for NVIDIA NIM (auto-detected from NVIDIA's API URL or an `nvapi-` key); the key for build.nvidia.com |
 | `MAGPIE_OCR`, `MAGPIE_OCR_LANGS` | optional | `rapidocr` (default), `tesseract` (+ languages), `off` |
 | `MAGPIE_ENRICH` | optional | `off` disables all online metadata lookups |
@@ -179,7 +180,7 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `MAGPIE_CLAUDE_BATCH` | optional | `true` (default): new screenshots use the 50%-off Batches API; `false`: real time |
 | `MAGPIE_EFFORT`, `MAGPIE_FETCH_MAX_TOKENS` | optional | Claude cost controls (defaults `medium`, `8000`) |
 | `MAGPIE_LOCAL_COST_PER_HOUR`, `MAGPIE_PRICING` | optional | For the usage report: your local box's running cost; price overrides |
-| `MAGPIE_API_TOKEN` | recommended | Shared secret for all API and media requests. Set it whenever the server can be reached from outside localhost. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `MAGPIE_API_TOKEN` | recommended | Shared secret for all API and media requests. To give each device or client its own token, list several separated by commas (`tok1,tok2`); any one is accepted, and removing one revokes it. Set it whenever the server can be reached from outside localhost. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `TMDB_API_KEY` | optional | Posters, overview, cast, genres, streaming providers (v3 key or v4 read token) |
 | `OMDB_API_KEY` | optional | IMDb rating, Rotten Tomatoes, Metacritic |
 | `GITHUB_TOKEN` | optional | Raises the GitHub API limit from 60 to 5000 requests/hour |

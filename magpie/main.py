@@ -127,7 +127,7 @@ def create_app(
         for problem in settings.problems():
             if problem["level"] != "info":
                 log.warning("Setup: %s", problem["message"])
-        if not settings.api_token:
+        if not settings.api_tokens:
             log_setup_code()
         yield
         if rt.worker_task:
@@ -151,10 +151,11 @@ def create_app(
     async def require_token(request: Request, call_next):
         path = request.url.path
         protected = path.startswith("/api/") or path.startswith("/media/")
-        if settings.api_token and protected and path != "/api/health":
+        if settings.api_tokens and protected and path != "/api/health":
             auth = request.headers.get("authorization", "")
             supplied = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else unquote(request.cookies.get("magpie_token") or request.cookies.get("keeper_token", ""))
-            if not hmac.compare_digest(supplied.encode(), settings.api_token.encode()):
+            # compare against every token (no early exit) so timing doesn't reveal which one matched
+            if not any([hmac.compare_digest(supplied.encode(), t.encode()) for t in settings.api_tokens]):
                 return JSONResponse({"detail": "Missing or invalid API token"}, status_code=401)
         if protected and path not in no_db_paths and not rt.db_ok:
             rt.open_database(retry=True)  # the data directory may have been fixed since
@@ -179,7 +180,7 @@ def create_app(
     def health():
         report = status_report()
         return {
-            "ok": True, "api_version": API_VERSION, "auth_required": bool(settings.api_token),
+            "ok": True, "api_version": API_VERSION, "auth_required": bool(settings.api_tokens),
             "analyzer": settings.resolved_analyzer(), "status": report["status"],
             "errors": sum(p["level"] == "error" for p in report["problems"]),
             "warnings": sum(p["level"] == "warning" for p in report["problems"]),
@@ -211,7 +212,7 @@ def create_app(
         return {
             "groups": [{"name": name, "settings": items} for name, items in groups.items()],
             "data_dir": str(settings.data_dir), "settings_file": str(settings.overrides_path),
-            "setup_code_required": not settings.api_token,
+            "setup_code_required": not settings.api_tokens,
             "status": server_status(),
         }
 
@@ -224,13 +225,13 @@ def create_app(
         # Without an access token anyone who can reach the server gets this far, so changing settings
         # also needs the setup code from the server's log. (Not "localhost is fine": DNS rebinding lets
         # a web page send requests that look local.)
-        if not settings.api_token and not _setup_code_ok(request.headers.get("x-magpie-setup-code"), rt.setup_code):
+        if not settings.api_tokens and not _setup_code_ok(request.headers.get("x-magpie-setup-code"), rt.setup_code):
             raise HTTPException(403, {
                 "code": "setup_code_required",
                 "message": "This server has no access token yet. Enter the setup code printed in the server's log "
                            "(docker compose logs magpie), or set MAGPIE_API_TOKEN.",
             })
-        had_token = bool(settings.api_token)
+        had_token = bool(settings.api_tokens)
         try:
             notices = settings.save_overrides(update.changes)
         except OSError as e:
@@ -239,7 +240,7 @@ def create_app(
             raise HTTPException(422, {"message": "Some values are invalid", "errors": getattr(e, "errors", {"_": str(e)})})
         if "pipeline" in state:
             reconfigure()
-        if had_token and not settings.api_token:
+        if had_token and not settings.api_tokens:
             log_setup_code()  # the token was just removed: settings changes need the code again
         return {**settings_payload(), "notices": notices}
 

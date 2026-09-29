@@ -422,6 +422,16 @@ def test_api_token_required_when_configured(settings):
         assert client.get("/").status_code == 200  # the web UI shell itself is public
 
 
+def test_several_api_tokens_are_each_accepted(settings):
+    settings.api_token = "phone-tok, laptop-tok\nthird"
+    client, _ = make_client(settings, analysis())
+    with client:
+        for tok in ("phone-tok", "laptop-tok", "third"):
+            assert client.get("/api/items", headers={"Authorization": f"Bearer {tok}"}).status_code == 200
+        assert client.get("/api/items", headers={"Authorization": "Bearer phone-tok,laptop-tok"}).status_code == 401
+        assert client.get("/api/items", headers={"Authorization": "Bearer nope"}).status_code == 401
+
+
 # ---- confidence & manual correction ---------------------------------------------
 
 

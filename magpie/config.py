@@ -7,6 +7,7 @@ default and is reported as a problem, which the UI shows next to the setting.
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,14 @@ for _key, _value in list(os.environ.items()):
 OVERRIDES_FILE = "settings.json"
 ANALYZERS = ("auto", "claude", "local", "hybrid", "ocr")
 
+# Hosted OpenAI-compatible providers usable in place of a local LLM: preset -> (base URL, default model, key attr, label)
+HOSTED_LLMS = {
+    "openai": ("https://api.openai.com/v1", "gpt-4o-mini", "openai_api_key", "OpenAI"),
+    "gemini": ("https://generativelanguage.googleapis.com/v1beta/openai", "gemini-2.5-flash", "gemini_api_key", "Google Gemini"),
+    "openrouter": ("https://openrouter.ai/api/v1", "openai/gpt-4o-mini", "openrouter_api_key", "OpenRouter"),
+    "groq": ("https://api.groq.com/openai/v1", "meta-llama/llama-4-scout-17b-16e-instruct", "groq_api_key", "Groq"),
+}
+
 
 @dataclass(frozen=True)
 class Spec:
@@ -68,6 +77,18 @@ SPECS: list[Spec] = [
     Spec("model", "MAGPIE_MODEL", "str", "claude-opus-5", "Identification", "Claude model"),
     Spec("escalate_below", "MAGPIE_ESCALATE_BELOW", "int", 70, "Identification", "Escalate to Claude below (confidence %)",
          "Hybrid mode: ask Claude when the local model is less sure than this.", min=0, max=100),
+    Spec("hosted_llm", "MAGPIE_LLM_PROVIDER", "choice", "none", "Other AI providers", "Hosted provider",
+         "Use OpenAI, Gemini, OpenRouter or Groq instead of a local server or Claude. Sets the endpoint and a default "
+         "model; the model can be overridden under Local LLM → Model. Works with the local and hybrid analyzers.",
+         ("none", *HOSTED_LLMS)),
+    Spec("openai_api_key", "OPENAI_API_KEY", "secret", None, "Other AI providers", "OpenAI API key",
+         "https://platform.openai.com/api-keys"),
+    Spec("gemini_api_key", "GEMINI_API_KEY", "secret", None, "Other AI providers", "Gemini API key",
+         "https://aistudio.google.com/apikey"),
+    Spec("openrouter_api_key", "OPENROUTER_API_KEY", "secret", None, "Other AI providers", "OpenRouter API key",
+         "https://openrouter.ai/keys"),
+    Spec("groq_api_key", "GROQ_API_KEY", "secret", None, "Other AI providers", "Groq API key",
+         "https://console.groq.com/keys"),
     Spec("local_llm_url", "LOCAL_LLM_URL", "str", None, "Local LLM", "Server URL",
          "Any OpenAI-compatible server, e.g. http://ollama:11434/v1"),
     Spec("local_llm_model", "LOCAL_LLM_MODEL", "str", "qwen3-vl:8b", "Local LLM", "Model"),
@@ -96,8 +117,8 @@ SPECS: list[Spec] = [
          "IMDb, Rotten Tomatoes and Metacritic scores. https://www.omdbapi.com/apikey.aspx"),
     Spec("github_token", "GITHUB_TOKEN", "secret", None, "Metadata lookups", "GitHub token",
          "Raises the GitHub rate limit from 60 to 5000 requests/hour."),
-    Spec("api_token", "MAGPIE_API_TOKEN", "secret", None, "Security", "Access token",
-         "Required by every client when set. Recommended whenever the server is reachable beyond localhost."),
+    Spec("api_token", "MAGPIE_API_TOKEN", "secret", None, "Security", "Access tokens",
+         "Required by every client when set. Separate several tokens with commas or spaces (e.g. one per device, so one can be revoked alone). Recommended whenever the server is reachable beyond localhost."),
 ]
 SPEC_BY_ATTR = {s.attr: s for s in SPECS}
 SPEC_BY_ENV = {s.env: s for s in SPECS}
@@ -167,6 +188,11 @@ class Settings:
     analyzer: str = field(default_factory=_from_env("analyzer"))
     anthropic_api_key: str | None = field(default_factory=_from_env("anthropic_api_key"))
     # On-prem LLM: any OpenAI-compatible server (Ollama, vLLM, LM Studio, llama.cpp server)
+    hosted_llm: str = field(default_factory=_from_env("hosted_llm"))
+    openai_api_key: str | None = field(default_factory=_from_env("openai_api_key"))
+    gemini_api_key: str | None = field(default_factory=_from_env("gemini_api_key"))
+    openrouter_api_key: str | None = field(default_factory=_from_env("openrouter_api_key"))
+    groq_api_key: str | None = field(default_factory=_from_env("groq_api_key"))
     local_llm_url: str | None = field(default_factory=_from_env("local_llm_url"))
     local_llm_model: str = field(default_factory=_from_env("local_llm_model"))
     local_llm_api_key: str | None = field(default_factory=_from_env("local_llm_api_key"))
@@ -320,12 +346,15 @@ class Settings:
         if mode in ("claude", "hybrid") and not self.anthropic_api_key:
             add("error", f"The {mode} analyzer needs an Anthropic API key. Screenshots can't be identified until it's set.",
                 "ANTHROPIC_API_KEY")
-        if mode in ("local", "hybrid") and not self.local_llm_url:
-            add("error", f"The {mode} analyzer needs a local LLM server URL.", "LOCAL_LLM_URL")
+        if self.hosted_llm in HOSTED_LLMS and not self.llm_api_key:
+            name = HOSTED_LLMS[self.hosted_llm][3]
+            add("error", f"{name} is selected but its API key is not set.", HOSTED_LLMS[self.hosted_llm][2].upper())
+        elif mode in ("local", "hybrid") and not self.llm_url:
+            add("error", f"The {mode} analyzer needs a local LLM server URL or a hosted provider.", "LOCAL_LLM_URL")
         if mode == "ocr" and self.analyzer == "auto":
             add("warning", "No AI model is configured, so screenshots are identified with OCR + rules only (rough). "
                 "Add an Anthropic API key or a local LLM URL.", "ANTHROPIC_API_KEY")
-        if not self.api_token:
+        if not self.api_tokens:
             add("warning", "No access token is set: anyone who can reach this server can use it.", "MAGPIE_API_TOKEN")
         if self.enrich and not self.tmdb_api_key:
             add("info", "Without a TMDB API key, films and TV shows get fewer details (posters, cast).", "TMDB_API_KEY")
@@ -335,10 +364,35 @@ class Settings:
 
     # ---- derived values ---------------------------------------------------------
 
+    @property
+    def api_tokens(self) -> list[str]:
+        """Every accepted access token (MAGPIE_API_TOKEN may hold several, separated by commas or whitespace)."""
+        return [t for t in re.split(r"[,\s]+", self.api_token or "") if t]
+
+    @property
+    def llm_url(self) -> str | None:
+        """Endpoint of the OpenAI-compatible model: the chosen hosted provider, else LOCAL_LLM_URL."""
+        return HOSTED_LLMS[self.hosted_llm][0] if self.hosted_llm in HOSTED_LLMS else self.local_llm_url
+
+    @property
+    def llm_api_key(self) -> str | None:
+        if self.hosted_llm in HOSTED_LLMS:
+            return getattr(self, HOSTED_LLMS[self.hosted_llm][2])
+        return self.local_llm_api_key
+
+    @property
+    def llm_model(self) -> str:
+        """A hosted provider's default model applies unless LOCAL_LLM_MODEL was set explicitly."""
+        if self.hosted_llm in HOSTED_LLMS and self.source_of(SPEC_BY_ATTR["local_llm_model"]) == "default":
+            return HOSTED_LLMS[self.hosted_llm][1]
+        return self.local_llm_model
+
     def resolved_llm_provider(self) -> str:
+        if self.hosted_llm in HOSTED_LLMS:
+            return "openai"
         if self.local_llm_provider != "auto":
             return self.local_llm_provider
-        url, key = (self.local_llm_url or "").lower(), self.local_llm_api_key or ""
+        url, key = (self.llm_url or "").lower(), self.llm_api_key or ""
         if "api.nvidia.com" in url or key.startswith("nvapi-"):
             return "nim"
         return "openai"
@@ -347,11 +401,11 @@ class Settings:
         """`auto` picks the best configured option: Claude, else the local LLM, else OCR rules."""
         if self.analyzer != "auto":
             return self.analyzer
-        if self.anthropic_api_key and self.local_llm_url:
+        if self.anthropic_api_key and self.llm_url:
             return "hybrid"
         if self.anthropic_api_key:
             return "claude"
-        if self.local_llm_url:
+        if self.llm_url:
             return "local"
         return "ocr"
 
