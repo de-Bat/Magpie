@@ -231,7 +231,7 @@ def create_app(
             "data_dir": str(settings.data_dir), "settings_file": str(settings.overrides_path),
             "setup_code_required": not settings.api_tokens,
             "status": server_status(),
-            "providers": provider_choices(),
+            "providers": provider_choices(), "resolved_analyzer": settings.resolved_analyzer(),
         }
 
     @app.get("/api/settings")

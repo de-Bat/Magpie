@@ -349,7 +349,7 @@ class Settings:
                     "ANTHROPIC_API_KEY")
             else:
                 add("error", "The analyzer is set to Hybrid, which asks Claude when the other model is unsure, and that needs an "
-                    "Anthropic API key. Add a key, or set the analyzer to Local under Advanced.", "MAGPIE_ANALYZER")
+                    "Anthropic API key. Add a key, or change the analyzer to AI model.", "MAGPIE_ANALYZER")
         if self.hosted_llm in HOSTED_LLMS and not self.llm_api_key:
             name = HOSTED_LLMS[self.hosted_llm][3]
             add("error", f"{name} is selected but its API key is not set.", HOSTED_LLMS[self.hosted_llm][2].upper())
