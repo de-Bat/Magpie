@@ -17,6 +17,7 @@ final class ShareViewController: UIViewController {
             let root = ShareView(count: images.count, onSave: { [weak self] note in self?.save(note: note) },
                                  onCancel: { [weak self] in self?.finish() })
             let host = UIHostingController(rootView: root)
+            overrideUserInterfaceStyle = Appearance.current.interfaceStyle   // match the app's Appearance setting
             addChild(host)
             host.view.frame = view.bounds
             host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]

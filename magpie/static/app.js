@@ -29,6 +29,7 @@ const state = {
   sync: "idle",            // idle | syncing | offline | auth | error
   syncError: null,
   lastSync: null,
+  server: null,            // GET /api/status: { status: ok|warning|error, problems: [...] }
 };
 const blobUrls = new Map(); // id -> object URL for screenshots not uploaded yet
 
@@ -336,6 +337,7 @@ async function sync() {
       } catch {
         return setSyncState("offline");
       }
+      await refreshServerStatus();
       await pushOps();
       const delta = await api(`/api/sync${state.lastSync ? `?since=${encodeURIComponent(state.lastSync)}` : ""}`);
       for (const id of delta.deleted) if (!hasPendingOps(id)) await removeItem(id);
@@ -428,6 +430,213 @@ async function importShared() {
     await addScreenshots([new File([blob], "shared", { type: blob.type })], note);
     await cache.delete(req);
   }
+}
+
+// ---- server setup status and settings ----------------------------------------
+
+async function refreshServerStatus() {
+  try {
+    state.server = await api("/api/status", { timeout: 10000 });
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 401) throw e;
+    // Older servers have no /api/status; anything else shows up through sync errors.
+    if (!(e instanceof HttpError && e.status === 404)) console.warn("Server status unavailable:", e);
+  }
+  renderServerStatus();
+}
+
+function renderServerStatus() {
+  const dot = $("#settings-dot");
+  const s = state.server;
+  const level = s && s.status !== "ok" ? s.status : null;
+  dot.hidden = !level;
+  dot.className = `status-dot ${level || ""}`;
+  const counts = s ? s.problems.filter((p) => p.level !== "info").length : 0;
+  $("#settings-btn").title = level ? `Settings — ${counts} problem${counts === 1 ? "" : "s"} with the server setup` : "Settings";
+}
+
+const INPUT_TYPES = { int: "number", float: "number", secret: "password", str: "text" };
+
+function problemIcon(level) { return { error: "⛔", warning: "⚠", info: "ℹ" }[level] || ""; }
+
+function settingInputHtml(s, typed = {}) {
+  const id = `set-${s.env}`;
+  const shown = s.env in typed ? typed[s.env] : "saved" in s ? s.saved : s.value;
+  if (s.kind === "bool") {
+    return `<select id="${id}" name="${esc(s.env)}">
+      <option value="true" ${shown === true || shown === "true" ? "selected" : ""}>On</option>
+      <option value="false" ${shown === false || shown === "false" ? "selected" : ""}>Off</option></select>`;
+  }
+  if (s.kind === "choice") {
+    return `<select id="${id}" name="${esc(s.env)}">${s.choices.map((c) =>
+      `<option value="${esc(c)}" ${c === shown ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  }
+  if (s.kind === "secret") {
+    return `<input id="${id}" name="${esc(s.env)}" type="password" autocomplete="new-password" spellcheck="false"
+      value="${esc(typed[s.env] ?? "")}" placeholder="${s.is_set ? `${esc(s.value)} (leave blank to keep)` : "not set"}">`;
+  }
+  return `<input id="${id}" name="${esc(s.env)}" type="${INPUT_TYPES[s.kind] || "text"}" ${s.kind === "float" ? 'step="any"' : ""}
+    value="${esc(shown ?? "")}" placeholder="${esc(s.default ?? "")}" spellcheck="false" autocapitalize="off">`;
+}
+
+function settingsHtml(data, errors = {}, typed = {}) {
+  const problems = data.status.problems;
+  const sourceLabel = { ui: "saved here", env: "from environment", default: "default" };
+  return `
+    <div class="settings-panel">
+      <button class="btn close" data-action="close" aria-label="Close">✕</button>
+      <h2>Settings</h2>
+      ${appearanceHtml()}
+      ${problems.length ? `<ul class="problems">${problems.map((p) => `
+        <li class="${esc(p.level)}"><span aria-hidden="true">${problemIcon(p.level)}</span> ${esc(p.message)}${
+          p.key ? ` <a href="#set-${esc(p.key)}" data-focus="set-${esc(p.key)}">Fix</a>` : ""}</li>`).join("")}</ul>`
+        : `<p class="ok-line">✓ Everything is set up.</p>`}
+      <form id="settings-form" autocomplete="off">
+        ${data.groups.map((g) => `
+          <fieldset><legend>${esc(g.name)}</legend>
+            ${g.settings.map((s) => {
+              const err = errors[s.env] || (s.problem && s.problem.level === "error" ? s.problem.message : "");
+              const warn = !err && s.problem ? s.problem.message : "";
+              return `
+              <div class="setting ${err ? "has-error" : warn ? "has-warning" : ""}">
+                <label for="set-${esc(s.env)}">${esc(s.label)} ${s.kind === "secret" && s.is_set ? '<span class="pill ok">set</span>' : ""}
+                  <span class="pill">${esc(sourceLabel[s.source] || s.source)}</span></label>
+                <div class="setting-input">
+                  ${settingInputHtml(s, typed)}
+                  ${s.source === "ui" ? `<button class="btn small" type="button" data-reset="${esc(s.env)}" title="Remove the value saved here and use the environment/default">Reset</button>` : ""}
+                </div>
+                <small class="meta-line"><code>${esc(s.env)}</code>${s.help ? ` — ${esc(s.help)}` : ""}</small>
+                ${err ? `<small class="field-error">${esc(err)}</small>` : warn ? `<small class="field-warning">${esc(warn)}</small>` : ""}
+              </div>`;
+            }).join("")}
+          </fieldset>`).join("")}
+        ${data.setup_code_required ? `<p class="meta-line">🔑 This server has no access token yet, so saving asks for the <b>setup code</b> printed in the server's log (<code>docker compose logs magpie</code>). Setting an access token below removes that step.</p>` : ""}
+        <p class="meta-line">Values saved here are stored in <code>${esc(data.settings_file)}</code> and take precedence over environment variables. Changes apply immediately.</p>
+        <div class="actions sticky-actions">
+          <button class="btn primary" type="submit">Save settings</button>
+          <button class="btn" type="button" data-action="close">Cancel</button>
+        </div>
+      </form>
+    </div>`;
+}
+
+// ---- appearance (per device) --------------------------------------------------
+
+const THEME_COLORS = { light: "#f6f5f2", dark: "#151412" };
+
+function getTheme() {
+  try { return localStorage.getItem("magpie.theme") || "system"; } catch { return "system"; }
+}
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "light" || theme === "dark") root.dataset.theme = theme;
+  else delete root.dataset.theme;
+  // Browser/PWA chrome colour: forced themes override both media-specific values.
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    const scheme = (m.media.match(/(light|dark)/) || [])[1] || "light";
+    m.content = THEME_COLORS[theme === "light" || theme === "dark" ? theme : scheme];
+  });
+}
+
+function setTheme(theme) {
+  try {
+    if (theme === "system") localStorage.removeItem("magpie.theme");
+    else localStorage.setItem("magpie.theme", theme);
+  } catch {}
+  applyTheme(theme);
+  document.querySelectorAll(".segmented [data-theme-choice]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.themeChoice === theme)));
+}
+
+function appearanceHtml() {
+  const current = getTheme();
+  return `<div class="appearance"><h4>Appearance</h4><div class="segmented" role="group" aria-label="Appearance">${
+    [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
+      `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${label}</button>`).join("")
+  }</div><span class="meta-line">This device only</span></div>`;
+}
+
+let settingsData = null;
+
+async function showSettings(errors = {}, typed = {}) {
+  const dlg = $("#detail");
+  dlg.dataset.id = "";
+  if (!settingsData || !Object.keys(errors).length) {
+    dlg.innerHTML = `<div class="settings-panel"><button class="btn close" data-action="close" aria-label="Close">✕</button><h2>Settings</h2>${appearanceHtml()}<p class="meta-line server-state">Loading server settings…</p></div>`;
+    if (!dlg.open) dlg.showModal();
+    try {
+      settingsData = await api("/api/settings");
+    } catch (e) {
+      const msg = e instanceof HttpError && e.status === 401
+        ? "This server needs an access token first."
+        : e instanceof HttpError && e.status === 404
+          ? "This server is too old to change settings from here. Update it, or edit its .env file."
+          : `Can't reach the server (${e.message}). Settings can only be changed while connected.`;
+      dlg.querySelector(".server-state").textContent = msg;
+      return;
+    }
+  }
+  dlg.innerHTML = settingsHtml(settingsData, errors, typed);
+  if (!dlg.open) dlg.showModal();
+  const firstBad = Object.keys(errors).map((env) => document.getElementById(`set-${env}`)).find(Boolean);
+  if (firstBad) { firstBad.scrollIntoView({ block: "center" }); firstBad.focus(); }
+}
+
+async function saveSettings(form) {
+  const changes = {};
+  for (const group of settingsData.groups) {
+    for (const s of group.settings) {
+      const el = form.elements[s.env];
+      if (!el) continue;
+      const value = el.value.trim();
+      if (s.kind === "secret") {
+        if (value) changes[s.env] = value;   // blank = keep the current secret
+        continue;
+      }
+      const current = String("saved" in s ? s.saved : s.value ?? "");
+      if (value !== current) changes[s.env] = value === "" ? null : value;
+    }
+  }
+  if (!Object.keys(changes).length) { toast("Nothing changed."); return; }
+  await putSettings(changes);
+}
+
+let setupCode = null;  // this server's setup code (only needed while it has no access token)
+
+async function putSettings(changes) {
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    settingsData = await api("/api/settings", { method: "PUT", headers, body: JSON.stringify({ changes }) });
+  } catch (e) {
+    if (e instanceof HttpError && e.status === 403) {
+      let detail = {};
+      try { detail = JSON.parse(e.message); } catch {}
+      if (detail.code === "setup_code_required") {
+        const again = setupCode ? "That setup code didn't match. " : "";
+        const code = prompt(`${again}${detail.message}\n\nSetup code:`);
+        if (!code) return toast("Settings not saved.");
+        setupCode = code.trim();
+        return putSettings(changes);
+      }
+    }
+    if (e instanceof HttpError && e.status === 422) {
+      let errors = {};
+      try { errors = JSON.parse(e.message).errors || {}; } catch {}
+      toast("Some values are invalid — see the highlighted fields.");
+      return showSettings(Object.keys(errors).length ? errors : { _: e.message }, changes);
+    }
+    return toast(`Couldn't save settings: ${e.message}`);
+  }
+  for (const notice of settingsData.notices || []) toast(notice);
+  // A new access token applies to this device too.
+  if (changes.MAGPIE_API_TOKEN) await setToken(changes.MAGPIE_API_TOKEN);
+  state.server = settingsData.status;
+  renderServerStatus();
+  renderSyncStatus();
+  if (!(settingsData.notices || []).length) toast("Settings saved.");
+  showSettings();
 }
 
 function setSyncState(s, error = null) {
@@ -612,9 +821,15 @@ function renderSyncStatus() {
   el.innerHTML = `<span aria-hidden="true">${icon}</span><span class="sync-text">${esc(text)}</span>`;
 
   const banner = $("#banner");
+  const serverErrors = state.sync !== "offline" && state.server ? state.server.problems.filter((p) => p.level === "error") : [];
   let html = "";
+  banner.classList.toggle("error", serverErrors.length > 0 && state.sync !== "auth");
   if (state.sync === "auth") {
     html = `This Magpie server needs an access token. <button class="btn" data-action="token">Enter token</button>`;
+  } else if (serverErrors.length) {
+    html = `<span class="banner-msg"><span aria-hidden="true">⛔</span> ${esc(serverErrors[0].message)}${
+      serverErrors.length > 1 ? ` <span class="meta-line">(+${serverErrors.length - 1} more)</span>` : ""
+    }</span> <button class="btn" data-action="settings">Open settings</button>`;
   } else if (state.sync === "offline" && pending) {
     html = `You're offline. ${pending} change${pending > 1 ? "s" : ""} will sync automatically when the server is reachable.`;
   } else if (state.sync === "error") {
@@ -824,8 +1039,18 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt]");
+  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice]");
   if (!t) return;
+  if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
+  if (t.dataset.reset !== undefined) {
+    return putSettings({ [t.dataset.reset]: null });
+  }
+  if (t.dataset.focus !== undefined) {
+    e.preventDefault();
+    const field = document.getElementById(t.dataset.focus);
+    field?.scrollIntoView({ block: "center" });
+    return field?.focus();
+  }
   if (t.dataset.review !== undefined) {
     state.review = !state.review;
   } else if (t.dataset.category !== undefined) {
@@ -861,6 +1086,7 @@ document.addEventListener("click", async (e) => {
         return deleteItem(id);
       case "token": return askToken();
       case "usage": return showUsage();
+      case "settings": return showSettings();
       case "sync": return requestSync();
       case "dismiss-install":
         try { localStorage.setItem("magpie.installHintDismissed", "1"); } catch {}
@@ -892,6 +1118,10 @@ $("#detail").addEventListener("click", (e) => { if (e.target === e.currentTarget
 $("#detail").addEventListener("close", () => { fixing = null; });
 
 $("#detail").addEventListener("submit", (e) => {
+  if (e.target.id === "settings-form") {
+    e.preventDefault();
+    return saveSettings(e.target);
+  }
   if (e.target.id !== "correct-form") return;
   e.preventDefault();
   const id = e.target.closest(".detail").dataset.id;
@@ -917,6 +1147,7 @@ setInterval(() => { if (document.visibilityState === "visible" && (state.ops.len
 // ---- boot ------------------------------------------------------------------
 
 async function boot() {
+  applyTheme(getTheme());
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("Service worker not registered:", e));
   }

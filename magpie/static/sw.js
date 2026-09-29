@@ -1,7 +1,7 @@
 // Magpie service worker: makes the app open and render offline.
 // Library data and queued changes live in IndexedDB (see app.js); this worker only
 // caches the app shell and images, and hands shared screenshots to the page.
-const VERSION = "v4";
+const VERSION = "v8";
 const SHELL = `magpie-shell-${VERSION}`;
 const IMAGES = "magpie-images";
 const SHELL_FILES = [
@@ -14,6 +14,9 @@ const SHELL_FILES = [
   "/static/icons/favicon.png",
   "/static/icons/favicon-32.png",
   "/static/icons/logo-96.png",
+  "/static/icons/logo-96-dark.png",
+  "/static/icons/favicon-dark.png",
+  "/static/icons/favicon-32-dark.png",
 ];
 const MAX_IMAGES = 600;
 

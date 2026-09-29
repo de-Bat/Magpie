@@ -6,6 +6,7 @@ struct MagpieApp: App {
     @StateObject private var store: LibraryStore
     @StateObject private var sync: SyncEngine
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage(Appearance.storageKey, store: Appearance.store) private var appearance = Appearance.system
 
     static let backgroundTaskID = (Bundle.main.bundleIdentifier ?? "magpie") + ".sync"
 
@@ -20,6 +21,7 @@ struct MagpieApp: App {
             LibraryView()
                 .environmentObject(store)
                 .environmentObject(sync)
+                .preferredColorScheme(appearance.colorScheme)
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {

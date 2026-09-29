@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/magpie-logo.png" alt="Magpie logo: a magpie whose wing feathers carry icons for images, code, TV, food and shopping" width="200"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="assets/magpie-logo-dark.png"><img src="assets/magpie-logo.png" alt="Magpie logo: a magpie whose wing feathers carry icons for images, code, TV, food and shopping" width="200"></picture></p>
 
 <h1 align="center">Magpie</h1>
 
@@ -25,7 +25,7 @@ Every identification comes with a **confidence score** and, when the model isn't
 
 **Coming next:** text selections and notes as items, and sharing links/text straight from other apps. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
-**Clients:** an installable **PWA** (Add to Home Screen on iPhone) and a native **iOS app** with a Share Extension. Both work **offline** and sync when they can reach your self-hosted server.
+**Clients:** an installable **PWA** (Add to Home Screen on iPhone) and a native **iOS app** with a Share Extension. Both work **offline** and sync when they can reach your self-hosted server, and both have **light and dark themes**: they follow the device by default, or pick one under Settings → Appearance.
 
 ## How it works
 
@@ -135,9 +135,9 @@ These cost controls are on by default:
 ### Docker (recommended)
 
 ```bash
-cp .env.example .env              # add ANTHROPIC_API_KEY and/or LOCAL_LLM_URL, and ideally MAGPIE_API_TOKEN
+cp .env.example .env              # optional: add ANTHROPIC_API_KEY and/or LOCAL_LLM_URL, and ideally MAGPIE_API_TOKEN
 docker compose up -d --build
-# → http://<your-server>:8000
+# → http://<your-server>:8000      (or skip .env and enter the keys under ⚙ Settings)
 ```
 
 Data (the SQLite database and uploaded screenshots) lives in `./data`, mounted at `/data`. Back up that folder.
@@ -150,6 +150,18 @@ pip install -r requirements.txt
 cp .env.example .env              # add ANTHROPIC_API_KEY and/or LOCAL_LLM_URL
 uvicorn magpie.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
+
+### Settings in the web UI, and the status indicator
+
+Every setting below except `MAGPIE_DATA_DIR`, `MAGPIE_REGION`, `MAGPIE_PRICING` and `MAGPIE_ALLOW_PRIVATE_URLS` can also be changed from **⚙ Settings** in the web app. Changes apply immediately, without a restart. While the server has **no access token**, saving asks for a **setup code** that the server prints in its log at every start (`docker compose logs magpie`), so nobody else on the network can reconfigure it; once `MAGPIE_API_TOKEN` is set, the token is what's required. A saved local LLM API key is removed if `LOCAL_LLM_URL` is changed to a different server in the same save, so the key can't be redirected. They are saved to `settings.json` in the data directory (readable only by the server's user) and take precedence over the environment; **Reset** on a field goes back to the environment/default value. API keys are never sent back to the browser, only their last four characters.
+
+The server always starts, even when something is misconfigured: an invalid value (say `MAGPIE_ESCALATE_BELOW=high`) falls back to its default, and an unusable data directory makes the library unavailable (`503`) but leaves the status and settings pages working. What's wrong shows up in the app:
+
+- a red dot on ⚙ and a red banner for **errors**: an invalid value, a missing key the chosen analyzer needs, storage unavailable;
+- a yellow dot for **warnings**: no AI model configured (OCR only), no access token;
+- **info** notes inside Settings for optional extras (TMDB, OMDb).
+
+The same list is logged at startup and served by `GET /api/status`. Items that were being analyzed when the server stopped are marked failed at the next start, so you can re-analyze them.
 
 ### Configuration (`.env`)
 
@@ -224,7 +236,9 @@ Before running on a device:
 
 | Method | Path | |
 |---|---|---|
-| `GET` | `/api/health` | Reachability check (no auth) |
+| `GET` | `/api/health` | Reachability check (no auth); also `status` (`ok`/`warning`/`error`) and counts of `errors` and `warnings` |
+| `GET` | `/api/status` | Setup problems, most serious first: `{status, problems: [{level, key, message}]}` |
+| `GET` / `PUT` | `/api/settings` | Settings with their source (`ui`, `env`, `default`) and problems; secrets masked. PUT `{"changes": {"ENV_NAME": value}}` (`null` resets); invalid values → `422` with per-field `errors` |
 | `POST` | `/api/items` | Multipart form with **either** `file` (PNG/JPEG/WebP/GIF screenshot) **or** `url` (a link), plus optional `note`, `tags` (comma-separated), `id` (client-generated, idempotent), `created_at`. Returns `202`; identification runs in the background. A link that is already saved returns the existing item with `"duplicate": true` |
 | `GET` | `/api/items` | `?q=` full-text, `?category=`, `?tag=` (repeatable), `?needs_review=true` |
 | `GET` / `PATCH` / `DELETE` | `/api/items/{id}` | PATCH accepts `title`, `subtitle`, `summary`, `category`, `note`, `canonical_url`, `tags` |
