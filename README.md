@@ -179,7 +179,7 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `MAGPIE_CLAUDE_BATCH` | optional | `true` (default): new screenshots use the 50%-off Batches API; `false`: real time |
 | `MAGPIE_EFFORT`, `MAGPIE_FETCH_MAX_TOKENS` | optional | Claude cost controls (defaults `medium`, `8000`) |
 | `MAGPIE_LOCAL_COST_PER_HOUR`, `MAGPIE_PRICING` | optional | For the usage report: your local box's running cost; price overrides |
-| `MAGPIE_API_TOKEN` | recommended | Shared secret for all API and media requests. Set it whenever the server can be reached from outside localhost. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `MAGPIE_API_TOKEN` | recommended | Shared secret for all API and media requests. To give each device or client its own token, list several separated by commas (`tok1,tok2`); any one is accepted, and removing one revokes it. Set it whenever the server can be reached from outside localhost. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `TMDB_API_KEY` | optional | Posters, overview, cast, genres, streaming providers (v3 key or v4 read token) |
 | `OMDB_API_KEY` | optional | IMDb rating, Rotten Tomatoes, Metacritic |
 | `GITHUB_TOKEN` | optional | Raises the GitHub API limit from 60 to 5000 requests/hour |

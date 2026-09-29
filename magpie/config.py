@@ -7,6 +7,7 @@ default and is reported as a problem, which the UI shows next to the setting.
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
@@ -96,8 +97,8 @@ SPECS: list[Spec] = [
          "IMDb, Rotten Tomatoes and Metacritic scores. https://www.omdbapi.com/apikey.aspx"),
     Spec("github_token", "GITHUB_TOKEN", "secret", None, "Metadata lookups", "GitHub token",
          "Raises the GitHub rate limit from 60 to 5000 requests/hour."),
-    Spec("api_token", "MAGPIE_API_TOKEN", "secret", None, "Security", "Access token",
-         "Required by every client when set. Recommended whenever the server is reachable beyond localhost."),
+    Spec("api_token", "MAGPIE_API_TOKEN", "secret", None, "Security", "Access tokens",
+         "Required by every client when set. Separate several tokens with commas or spaces (e.g. one per device, so one can be revoked alone). Recommended whenever the server is reachable beyond localhost."),
 ]
 SPEC_BY_ATTR = {s.attr: s for s in SPECS}
 SPEC_BY_ENV = {s.env: s for s in SPECS}
@@ -325,7 +326,7 @@ class Settings:
         if mode == "ocr" and self.analyzer == "auto":
             add("warning", "No AI model is configured, so screenshots are identified with OCR + rules only (rough). "
                 "Add an Anthropic API key or a local LLM URL.", "ANTHROPIC_API_KEY")
-        if not self.api_token:
+        if not self.api_tokens:
             add("warning", "No access token is set: anyone who can reach this server can use it.", "MAGPIE_API_TOKEN")
         if self.enrich and not self.tmdb_api_key:
             add("info", "Without a TMDB API key, films and TV shows get fewer details (posters, cast).", "TMDB_API_KEY")
@@ -334,6 +335,11 @@ class Settings:
         return out
 
     # ---- derived values ---------------------------------------------------------
+
+    @property
+    def api_tokens(self) -> list[str]:
+        """Every accepted access token (MAGPIE_API_TOKEN may hold several, separated by commas or whitespace)."""
+        return [t for t in re.split(r"[,\s]+", self.api_token or "") if t]
 
     def resolved_llm_provider(self) -> str:
         if self.local_llm_provider != "auto":

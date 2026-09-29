@@ -668,7 +668,9 @@ async function putSettings(changes) {
   }
   for (const notice of settingsData.notices || []) toast(notice);
   // A new access token applies to this device too.
-  if (changes.MAGPIE_API_TOKEN) await setToken(changes.MAGPIE_API_TOKEN);
+  // (several tokens may be listed: this device uses the first)
+  const firstToken = (changes.MAGPIE_API_TOKEN || "").split(/[,\s]+/).find(Boolean);
+  if (firstToken) await setToken(firstToken);
   state.server = settingsData.status;
   renderServerStatus();
   renderSyncStatus();
