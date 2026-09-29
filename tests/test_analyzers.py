@@ -274,3 +274,19 @@ def test_misconfigured_analyzer_reports_on_items(tmp_path):
         item_id = client.post("/api/items", files={"file": ("s.png", png(), "image/png")}).json()["id"]
         item = client.get(f"/api/items/{item_id}").json()
     assert item["status"] == "error" and "ANTHROPIC_API_KEY" in item["error"]
+
+
+def test_hosted_provider_presets_pick_endpoint_key_and_model(tmp_path):
+    s = Settings(data_dir=tmp_path, analyzer="auto", anthropic_api_key=None, api_token=None,
+                 hosted_llm="gemini", gemini_api_key="g-key", openai_api_key="o-key", local_llm_url=None)
+    assert s.llm_url == "https://generativelanguage.googleapis.com/v1beta/openai"
+    assert s.llm_api_key == "g-key" and s.llm_model == "gemini-2.5-flash"
+    assert s.resolved_analyzer() == "local" and not [p for p in s.problems() if p["level"] == "error"]
+    a = LocalLLMAnalyzer(s, httpx.AsyncClient())
+    assert a.url.endswith("/openai/chat/completions") and a.headers == {"Authorization": "Bearer g-key"}
+    assert a.label == "gemini:gemini-2.5-flash"
+    s.hosted_llm, s.gemini_api_key = "openai", None
+    s.openai_api_key = "o-key"
+    assert not [p for p in s.problems() if p["level"] == "error"]
+    s.openai_api_key = None
+    assert any(p["key"] == "OPENAI_API_KEY" and p["level"] == "error" for p in s.problems())

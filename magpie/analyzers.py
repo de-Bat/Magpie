@@ -134,8 +134,9 @@ class LocalLLMAnalyzer:
     MAX_RETRIES = 3
 
     def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None):
-        if not settings.local_llm_url:
+        if not settings.llm_url:
             raise ValueError("LOCAL_LLM_URL is not set")
+        self.name = settings.hosted_llm if settings.hosted_llm != "none" else "local"
         self.provider = settings.resolved_llm_provider()
         self.max_image_edge = settings.local_llm_max_image_edge
         # NIM: JSON schema via response_format on newer releases, else its nvext.guided_json extension.
@@ -143,18 +144,18 @@ class LocalLLMAnalyzer:
         # NIM vision models accept JPEG/PNG only.
         self.image_types = ("image/png", "image/jpeg") if self.provider == "nim" else ("image/png", "image/jpeg", "image/webp", "image/gif")
         self._sleep = asyncio.sleep
-        self.url = settings.local_llm_url.rstrip("/") + "/chat/completions"
-        self.model = settings.local_llm_model
+        self.url = settings.llm_url.rstrip("/") + "/chat/completions"
+        self.model = settings.llm_model
         self.vision = settings.local_llm_vision
         self.timeout = settings.local_llm_timeout
-        self.headers = {"Authorization": f"Bearer {settings.local_llm_api_key}"} if settings.local_llm_api_key else {}
+        self.headers = {"Authorization": f"Bearer {settings.llm_api_key}"} if settings.llm_api_key else {}
         self.cost_per_hour = settings.local_cost_per_hour
         self.http = http or httpx.AsyncClient()
         self._format_mode = "json_schema"  # downgraded automatically if the server doesn't support it
 
     @property
     def label(self) -> str:
-        return f"{'nim' if self.provider == 'nim' else 'local'}:{self.model}"
+        return f"{'nim' if self.provider == 'nim' else self.name}:{self.model}"
 
     async def analyze(self, image: bytes | None, media_type: str | None, note: str | None = None,
                       correction: dict | None = None, hints: str = "", link_url: str | None = None, web: bool = True) -> dict:
@@ -182,7 +183,7 @@ class LocalLLMAnalyzer:
             "temperature": 0.1,
             "stream": False,
         }
-        run = Run("nim" if self.provider == "nim" else "local", model=self.model, mode="local")
+        run = Run("nim" if self.provider == "nim" else self.name, model=self.model, mode="local")
         started = time.monotonic()
         try:
             text, usage = await self._complete(body)
