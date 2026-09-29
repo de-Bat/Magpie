@@ -203,11 +203,15 @@ class ScreenshotAnalyzer:
         model: str = "claude-opus-5",
         effort: str | None = "medium",
         fetch_max_tokens: int | None = 8000,
+        max_tokens: int | None = None,
+        max_image_edge: int = MAX_IMAGE_EDGE,
     ):
         self.client = client or anthropic.AsyncAnthropic()
         self.model = model
         self.effort = effort
         self.fetch_max_tokens = fetch_max_tokens
+        self.max_tokens = max_tokens or 16000
+        self.max_image_edge = max_image_edge
 
     # ---- request construction -------------------------------------------------
 
@@ -218,7 +222,7 @@ class ScreenshotAnalyzer:
         """Messages API parameters for one screenshot, or for a shared link when `image` is None
         (JSON-serializable, so they can be stored for a batch)."""
         if image is not None:
-            image, media_type = prepare_image(image, media_type)
+            image, media_type = prepare_image(image, media_type, self.max_image_edge)
             prompt = "Identify what this screenshot is recommending and catalogue it."
         else:
             prompt = (f"The user shared a link, not a screenshot: {link_url}\n"
@@ -237,7 +241,7 @@ class ScreenshotAnalyzer:
             fetch["max_content_tokens"] = self.fetch_max_tokens  # a whole IMDb/recipe page can be 20k+ tokens
         params: dict[str, Any] = dict(
             model=self.model,
-            max_tokens=16000,
+            max_tokens=self.max_tokens,
             system=SYSTEM_PROMPT,
             thinking={"type": "adaptive"},
             # With readable page text there is nothing to look up: no web tools, far cheaper.

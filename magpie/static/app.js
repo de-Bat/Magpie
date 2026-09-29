@@ -1007,7 +1007,7 @@ async function showUsage() {
       </tbody></table>
       ${r.by_day.length ? `<h4>Per day</h4><div class="bars">${r.by_day.map((d) => `
         <div class="bar" title="${esc(d.day)}: ${esc(formatUsd(d.cost_usd))}, ${d.screenshots} screenshot(s)"><span style="height:${Math.max(3, d.cost_usd / max * 100)}%"></span></div>`).join("")}</div>` : ""}
-      <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.provider_model || c.claude_model)}${c.provider && c.provider !== "claude" ? "" : ` · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"} · fetch cap ${c.fetch_max_tokens ? c.fetch_max_tokens.toLocaleString() + " tokens" : "off"}`}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}. Costs use list prices.</p>
+      <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.provider_model || c.claude_model)}${c.provider && c.provider !== "claude" ? "" : ` · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"} · fetch cap ${c.fetch_max_tokens ? c.fetch_max_tokens.toLocaleString() + " tokens" : "off"}`}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}${c.monthly_budget_usd ? ` · budget ${esc(formatUsd(c.month_spent_usd))} of ${esc(formatUsd(c.monthly_budget_usd))} this month` : ""}. Costs use list prices.</p>
     </div>`;
 }
 
