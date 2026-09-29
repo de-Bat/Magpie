@@ -387,6 +387,16 @@ class Settings:
             return HOSTED_LLMS[self.hosted_llm][1]
         return self.local_llm_model
 
+    def provider_choice(self) -> str:
+        """Which provider the settings screen shows as selected: claude | a hosted preset | local."""
+        if self.analyzer == "claude":
+            return "claude"
+        if self.hosted_llm in HOSTED_LLMS:
+            return self.hosted_llm
+        if self.local_llm_url or self.analyzer in ("local", "hybrid"):
+            return "local"
+        return "claude"
+
     def resolved_llm_provider(self) -> str:
         if self.hosted_llm in HOSTED_LLMS:
             return "openai"
