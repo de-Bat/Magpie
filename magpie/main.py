@@ -24,7 +24,7 @@ from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
-from .config import HOSTED_LLMS, SPECS, Settings, mask
+from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
 from .models import fetch_models
 from .db import Database
 from .pipeline import Pipeline
@@ -175,7 +175,7 @@ def create_app(
         if not rt.db_ok:
             problems.append({"level": "error", "key": None, "message": f"Storage unavailable: {rt.db_error}"})
         settings_problems = settings.problems() if analyzer is None else [
-            p for p in settings.problems() if p["key"] not in ("ANTHROPIC_API_KEY", "LOCAL_LLM_URL")]
+            p for p in settings.problems() if p["key"] not in ("ANTHROPIC_API_KEY", "LOCAL_LLM_URL", "MAGPIE_ANALYZER")]
         problems += settings_problems
         if rt.analyzer_error and not any(p["level"] == "error" for p in settings_problems):
             problems.append({"level": "error", "key": None, "message": f"Analyzer not available: {rt.analyzer_error}"})
@@ -203,7 +203,7 @@ def create_app(
 
     def provider_choices() -> list[dict]:
         """What the "AI provider" picker offers: each provider's endpoint and the settings its fields edit."""
-        out = [{"id": "claude", "label": "Anthropic (Claude)", "url": None, "model": None,
+        out = [{"id": "claude", "label": "Anthropic (Claude)", "url": None, "model": SPEC_BY_ATTR["model"].default,
                 "key_env": "ANTHROPIC_API_KEY", "model_env": "MAGPIE_MODEL"}]
         out += [{"id": pid, "label": label, "url": url, "model": model, "key_env": key_attr.upper(),
                  "model_env": "LOCAL_LLM_MODEL"} for pid, (url, model, key_attr, label) in HOSTED_LLMS.items()]
@@ -231,7 +231,7 @@ def create_app(
             "data_dir": str(settings.data_dir), "settings_file": str(settings.overrides_path),
             "setup_code_required": not settings.api_tokens,
             "status": server_status(),
-            "providers": provider_choices(), "provider": settings.provider_choice(),
+            "providers": provider_choices(), "resolved_analyzer": settings.resolved_analyzer(),
         }
 
     @app.get("/api/settings")
