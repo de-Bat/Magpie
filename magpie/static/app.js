@@ -479,7 +479,154 @@ function settingInputHtml(s, typed = {}) {
     value="${esc(shown ?? "")}" placeholder="${esc(s.default ?? "")}" spellcheck="false" autocapitalize="off">`;
 }
 
-let settingsTab = "Appearance";  // section shown in the settings dialog
+let pendingProvider = null;  // provider chosen in a save that the server rejected
+let settingsTab = "AI provider";  // section shown in the settings dialog
+
+// Settings edited by the "AI provider" form rather than as separate rows.
+const PROVIDER_ENVS = new Set(["ANTHROPIC_API_KEY", "MAGPIE_MODEL", "MAGPIE_LLM_PROVIDER", "OPENAI_API_KEY", "GEMINI_API_KEY",
+  "OPENROUTER_API_KEY", "GROQ_API_KEY", "LOCAL_LLM_URL", "LOCAL_LLM_API_KEY", "LOCAL_LLM_MODEL"]);
+const ADVANCED_GROUPS = ["Identification", "Local LLM"];  // shown under "Advanced" in the AI provider section
+const HIDDEN_GROUPS = ["Other AI providers"];
+
+function settingEntry(data, env) {
+  for (const g of data.groups) for (const s of g.settings) if (s.env === env) return s;
+  return null;
+}
+
+function providerFormHtml(data, errors, typed) {
+  const cur = (Object.keys(errors).length && pendingProvider) || data.provider;
+  const p = data.providers.find((x) => x.id === cur) || data.providers[0];
+  const keyS = settingEntry(data, p.key_env), modelS = settingEntry(data, p.model_env), urlS = settingEntry(data, "LOCAL_LLM_URL");
+  const err = (env) => errors[env] || (settingEntry(data, env)?.problem?.level === "error" ? settingEntry(data, env).problem.message : "");
+  const row = (label, help, control, error, extra = "") => `
+    <div class="setting wide ${error ? "has-error" : ""}" ${extra}>
+      <div class="setting-text"><label>${label}</label>${help ? `<p class="setting-help">${help}</p>` : ""}${error ? `<p class="field-error">${esc(error)}</p>` : ""}</div>
+      <div class="setting-control">${control}</div>
+    </div>`;
+  const hosted = p.url != null;
+  const urlValue = hosted ? p.url : (typed.LOCAL_LLM_URL ?? ("saved" in urlS ? urlS.saved : urlS.value) ?? "");
+  const modelValue = typed[p.model_env] ?? ("saved" in modelS ? modelS.saved : modelS.source === "default" && p.model ? "" : modelS.value) ?? "";
+  const modelDefault = p.model || modelS.default || "";
+  return `
+    <div id="provider-form" data-initial="${esc(data.provider)}">
+      ${row("Provider", "Which service identifies your screenshots.",
+        `<select id="prov-provider" name="__provider">${data.providers.map((x) =>
+          `<option value="${esc(x.id)}" ${x.id === cur ? "selected" : ""}>${esc(x.label)}</option>`).join("")}</select>`, "")}
+      <div id="prov-url-row">${p.id === "claude" ? "" : row("Endpoint",
+        hosted ? "Set by the provider you picked." : "Any OpenAI-compatible server, e.g. http://ollama:11434/v1.",
+        `<input id="prov-url" name="__url" type="text" value="${esc(urlValue)}" ${hosted ? "readonly" : ""} spellcheck="false" autocapitalize="off" placeholder="http://host:11434/v1">`,
+        err("LOCAL_LLM_URL") && !hosted ? err("LOCAL_LLM_URL") : "")}</div>
+      ${row(`${esc(p.label)} API key${keyS.is_set ? ' <span class="pill ok">Set</span>' : ""}`,
+        p.id === "local" ? "Only if the server needs one." : "Stored on the server; never shown again after saving.",
+        `<input id="prov-key" name="__key" type="password" autocomplete="new-password" spellcheck="false"
+          value="${esc(typed[p.key_env] ?? "")}" placeholder="${keyS.is_set ? `${esc(keyS.value)} (leave blank to keep)` : "not set"}">`,
+        err(p.key_env))}
+      ${row("Model", "The default is used unless you pick another.",
+        modelControlHtml(p, modelValue, modelDefault), err(p.model_env))}
+    </div>`;
+}
+
+
+// ---- model picker: the provider's own model list, fetched by the server ----------
+const modelLists = {};   // provider id -> [{id, label}]
+
+function modelControlHtml(p, value, defaultModel) {
+  const list = modelLists[p.id];
+  const refresh = `<button class="link-btn" type="button" data-load-models title="Fetch the models this provider offers">${list ? "Refresh" : "Load models"}</button>`;
+  if (!list) {
+    return `<input id="prov-model" name="__model" type="text" value="${esc(value)}" placeholder="${esc(defaultModel)}" spellcheck="false" autocapitalize="off">${refresh}`;
+  }
+  const ids = list.map((m) => m.id);
+  const options = [`<option value="" ${value === "" ? "selected" : ""}>Default${defaultModel ? ` (${esc(defaultModel)})` : ""}</option>`]
+    .concat(value && !ids.includes(value) ? [`<option value="${esc(value)}" selected>${esc(value)}</option>`] : [])
+    .concat(list.map((m) => `<option value="${esc(m.id)}" ${m.id === value ? "selected" : ""}>${esc(m.label === m.id ? m.id : `${m.label} (${m.id})`)}</option>`));
+  return `<select id="prov-model" name="__model">${options.join("")}</select>${refresh}`;
+}
+
+function renderModelControl(p, value, defaultModel) {
+  const control = $("#prov-model")?.closest(".setting-control");
+  if (control) control.innerHTML = modelControlHtml(p, value, defaultModel);
+}
+
+async function loadModels(silent = false) {
+  const form = $("#settings-form");
+  const sel = form?.elements.__provider;
+  if (!sel) return;
+  const data = settingsData, p = data.providers.find((x) => x.id === sel.value);
+  const btn = form.querySelector("[data-load-models]");
+  if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
+  const body = { provider: p.id, key: form.elements.__key.value.trim() || null, url: p.id === "local" ? form.elements.__url?.value.trim() || null : null };
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    const res = await api("/api/models", { method: "POST", headers, body: JSON.stringify(body) });
+    if (sel.value !== p.id) return;   // the user switched provider meanwhile
+    modelLists[p.id] = res.models;
+    const modelS = settingEntry(data, p.model_env);
+    const current = form.elements.__model.value;
+    renderModelControl(p, current, p.model || modelS.default || "");
+    if (!res.models.length && !silent) toast("The provider returned no models.");
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = modelLists[p.id] ? "Refresh" : "Load models"; }
+    if (silent) return;   // e.g. no key yet: the text box still works
+    let msg = e.message;
+    try { msg = JSON.parse(e.message).message || JSON.parse(e.message).detail || msg; } catch {}
+    toast(`Couldn't load models: ${msg}`);
+  }
+}
+
+function providerSwitch(sel) {
+  const data = settingsData, p = data.providers.find((x) => x.id === sel.value);
+  const form = sel.closest("form");
+  const keyS = settingEntry(data, p.key_env), modelS = settingEntry(data, p.model_env), urlS = settingEntry(data, "LOCAL_LLM_URL");
+  const hosted = p.url != null;
+  const urlRow = $("#prov-url-row");
+  urlRow.hidden = p.id === "claude";
+  if (p.id !== "claude" && !$("#prov-url")) {  // first switch away from Claude: build the row
+    urlRow.innerHTML = `<div class="setting wide"><div class="setting-text"><label>Endpoint</label><p class="setting-help"></p></div>
+      <div class="setting-control"><input id="prov-url" name="__url" type="text" spellcheck="false" autocapitalize="off" placeholder="http://host:11434/v1"></div></div>`;
+  }
+  const url = $("#prov-url");
+  if (url) {
+    url.readOnly = hosted;
+    url.value = hosted ? p.url : ("saved" in urlS ? urlS.saved : urlS.value) ?? "";
+    url.closest(".setting").querySelector(".setting-help").textContent =
+      hosted ? "Set by the provider you picked." : "Any OpenAI-compatible server, e.g. http://ollama:11434/v1.";
+  }
+  const key = $("#prov-key");
+  key.value = "";
+  key.placeholder = keyS.is_set ? `${keyS.value} (leave blank to keep)` : "not set";
+  const keyRow = key.closest(".setting");
+  keyRow.querySelector("label").innerHTML = `${esc(p.label)} API key${keyS.is_set ? ' <span class="pill ok">Set</span>' : ""}`;
+  keyRow.querySelector(".setting-help").textContent = p.id === "local" ? "Only if the server needs one." : "Stored on the server; never shown again after saving.";
+  renderModelControl(p, "saved" in modelS ? modelS.saved : (modelS.source === "default" && p.model ? "" : modelS.value) ?? "", p.model || modelS.default || "");
+  if (keyS.is_set || p.id === "local") loadModels(true);
+  form.querySelectorAll(".setting.has-error").forEach((r) => r.classList.remove("has-error"));
+}
+
+// What the AI provider form changes, as settings changes.
+function providerChanges(form, data) {
+  const changes = {};
+  const box = form.querySelector("#provider-form");
+  if (!box) return changes;
+  const p = data.providers.find((x) => x.id === form.elements.__provider.value);
+  if (p.id !== box.dataset.initial) {
+    changes.MAGPIE_ANALYZER = p.id === "claude" ? "claude" : "local";
+    changes.MAGPIE_LLM_PROVIDER = p.url != null ? p.id : "none";
+  }
+  const key = form.elements.__key.value.trim();
+  if (key) changes[p.key_env] = key;
+  const modelS = settingEntry(data, p.model_env);
+  const model = form.elements.__model.value.trim();
+  const current = String("saved" in modelS ? modelS.saved : modelS.source === "default" && p.model ? "" : modelS.value ?? "");
+  if (model !== current) changes[p.model_env] = model === "" ? null : model;
+  if (p.id === "local") {
+    const urlS = settingEntry(data, "LOCAL_LLM_URL");
+    const url = form.elements.__url.value.trim();
+    if (url !== String("saved" in urlS ? urlS.saved : urlS.value ?? "")) changes.LOCAL_LLM_URL = url === "" ? null : url;
+  }
+  return changes;
+}
 
 function settingRowHtml(s, errors, typed) {
   const err = errors[s.env] || (s.problem && s.problem.level === "error" ? s.problem.message : "");
@@ -502,16 +649,21 @@ function settingRowHtml(s, errors, typed) {
 
 function settingsHtml(data, errors = {}, typed = {}) {
   const problems = data.status.problems;
-  const names = ["Appearance", ...data.groups.map((g) => g.name)];
+  const advanced = data.groups.filter((g) => ADVANCED_GROUPS.includes(g.name))
+    .flatMap((g) => g.settings).filter((s) => !PROVIDER_ENVS.has(s.env));
+  const others = data.groups.filter((g) => !ADVANCED_GROUPS.includes(g.name) && !HIDDEN_GROUPS.includes(g.name));
+  const names = ["AI provider", ...others.map((g) => g.name), "Appearance"];
   if (!names.includes(settingsTab)) settingsTab = names[0];
+  const hasLevel = (list) => list.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
+    : list.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
+  const aiSettings = data.groups.filter((g) => ADVANCED_GROUPS.includes(g.name) || HIDDEN_GROUPS.includes(g.name)).flatMap((g) => g.settings);
   const badge = (name) => {
-    const g = data.groups.find((x) => x.name === name);
-    if (!g) return "";
-    const level = g.settings.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
-      : g.settings.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
+    const g = others.find((x) => x.name === name);
+    const level = name === "AI provider" ? hasLevel(aiSettings) : g ? hasLevel(g.settings) : "";
     return level ? `<span class="nav-dot ${level}" aria-label="${level}"></span>` : "";
   };
   const alerts = problems.filter((p) => p.level !== "info");
+  const section = (name, body) => `<section class="settings-section" data-section="${esc(name)}" ${settingsTab === name ? "" : "hidden"}><h3>${esc(name)}</h3>${body}</section>`;
   return `
     <div class="settings-panel">
       <header class="settings-head">
@@ -528,16 +680,12 @@ function settingsHtml(data, errors = {}, typed = {}) {
               <summary>${alerts.length} thing${alerts.length === 1 ? "" : "s"} need${alerts.length === 1 ? "s" : ""} attention</summary>
               <ul>${alerts.map((p) => `<li>${esc(p.message)}${p.key ? ` <a href="#set-${esc(p.key)}" data-focus="set-${esc(p.key)}">Go to setting</a>` : ""}</li>`).join("")}</ul>
             </details>` : `<p class="ok-line">✓ Everything is set up.</p>`}
-            <section class="settings-section" data-section="Appearance" ${settingsTab === "Appearance" ? "" : "hidden"}>
-              <h3>Appearance</h3>
-              ${appearanceHtml()}
-            </section>
-            ${data.groups.map((g) => `
-              <section class="settings-section" data-section="${esc(g.name)}" ${settingsTab === g.name ? "" : "hidden"}>
-                <h3>${esc(g.name)}</h3>
-                ${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
-                ${g.name === "Security" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}
-              </section>`).join("")}
+            ${section("AI provider", `${providerFormHtml(data, errors, typed)}
+              <details class="advanced" ${hasLevel(advanced) ? "open" : ""}><summary>Advanced</summary>
+                ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
+            ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
+              ${g.name === "Security" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
+            ${section("Appearance", appearanceHtml())}
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>
         </div>
@@ -551,7 +699,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
 
 function selectSettingsTab(name) {
   settingsTab = name;
-  document.querySelectorAll("[data-settings-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.settingsTab === name)));
+  document.querySelectorAll("[data-settings-tab],[data-load-models]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.settingsTab === name)));
   document.querySelectorAll(".settings-section").forEach((s) => { s.hidden = s.dataset.section !== name; });
   $(".settings-content")?.scrollTo({ top: 0 });
 }
@@ -616,14 +764,19 @@ async function showSettings(errors = {}, typed = {}) {
   }
   dlg.innerHTML = settingsHtml(settingsData, errors, typed);
   if (!dlg.open) dlg.showModal();
-  const firstBad = Object.keys(errors).map((env) => document.getElementById(`set-${env}`)).find(Boolean);
+  const cur = settingsData.providers.find((x) => x.id === $("#prov-provider")?.value);
+  if (cur && (settingEntry(settingsData, cur.key_env)?.is_set || cur.id === "local")) loadModels(true);
+  const firstBad = Object.keys(errors).map((env) => document.getElementById(`set-${env}`)
+    || document.getElementById(/URL$/.test(env) ? "prov-url" : /MODEL$/.test(env) ? "prov-model" : PROVIDER_ENVS.has(env) ? "prov-key" : "")).find(Boolean);
   if (firstBad) { selectSettingsTab(firstBad.closest(".settings-section").dataset.section); firstBad.scrollIntoView({ block: "center" }); firstBad.focus(); }
 }
 
 async function saveSettings(form) {
-  const changes = {};
+  pendingProvider = form.elements.__provider?.value || null;
+  const changes = providerChanges(form, settingsData);
   for (const group of settingsData.groups) {
     for (const s of group.settings) {
+      if (PROVIDER_ENVS.has(s.env) || s.env in changes) continue;
       const el = form.elements[s.env];
       if (!el) continue;
       const value = el.value.trim();
@@ -1081,13 +1234,15 @@ document.addEventListener("click", async (e) => {
   const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
+  if (t.dataset.loadModels !== undefined) return loadModels();
   if (t.dataset.settingsTab !== undefined) return selectSettingsTab(t.dataset.settingsTab);
   if (t.dataset.reset !== undefined) {
     return putSettings({ [t.dataset.reset]: null });
   }
   if (t.dataset.focus !== undefined) {
     e.preventDefault();
-    const field = document.getElementById(t.dataset.focus);
+    const field = document.getElementById(t.dataset.focus)
+      || document.getElementById(/URL$/.test(t.dataset.focus) ? "prov-url" : /MODEL$/.test(t.dataset.focus) ? "prov-model" : "prov-key");
     const section = field?.closest(".settings-section");
     if (section) selectSettingsTab(section.dataset.section);
     field?.scrollIntoView({ block: "center" });
@@ -1157,6 +1312,7 @@ $("#detail").addEventListener("change", (e) => {
 });
 
 $("#detail").addEventListener("click", (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+$("#detail").addEventListener("change", (e) => { if (e.target.id === "prov-provider") providerSwitch(e.target); });
 $("#detail").addEventListener("close", () => { fixing = null; });
 
 $("#detail").addEventListener("submit", (e) => {

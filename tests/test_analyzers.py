@@ -290,3 +290,30 @@ def test_hosted_provider_presets_pick_endpoint_key_and_model(tmp_path):
     assert not [p for p in s.problems() if p["level"] == "error"]
     s.openai_api_key = None
     assert any(p["key"] == "OPENAI_API_KEY" and p["level"] == "error" for p in s.problems())
+
+
+def test_fetch_models_uses_provider_endpoint_and_key(tmp_path):
+    from magpie.models import fetch_models
+    seen = []
+
+    def handler(request):
+        seen.append((str(request.url), request.headers.get("authorization"), request.headers.get("x-api-key")))
+        if "anthropic" in request.url.host:
+            return httpx.Response(200, json={"data": [{"id": "claude-sonnet-5-5", "display_name": "Claude Sonnet 5.5"}]})
+        return httpx.Response(200, json={"data": [{"id": "models/gemini-2.5-flash"}, {"id": "text-embedding-3"}]})
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    s = Settings(data_dir=tmp_path, api_token=None, gemini_api_key="g-key", anthropic_api_key=None,
+                 local_llm_url="http://ollama:11434/v1", local_llm_api_key="local-key")
+    import asyncio
+    run = asyncio.run
+    assert run(fetch_models(s, http, "gemini")) == [{"id": "gemini-2.5-flash", "label": "gemini-2.5-flash"}]
+    assert seen[-1][:2] == ("https://generativelanguage.googleapis.com/v1beta/openai/models", "Bearer g-key")
+    assert run(fetch_models(s, http, "claude", key="typed"))[0]["label"] == "Claude Sonnet 5.5"
+    assert seen[-1][2] == "typed"
+    run(fetch_models(s, http, "local"))
+    assert seen[-1][1] == "Bearer local-key"                      # saved key, same server
+    run(fetch_models(s, http, "local", url="http://other:1/v1"))
+    assert seen[-1][1] is None                                    # saved key never follows a different URL
+    with pytest.raises(ValueError, match="API key"):
+        run(fetch_models(s, http, "openai"))

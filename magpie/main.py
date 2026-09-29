@@ -24,7 +24,8 @@ from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
-from .config import SPECS, Settings, mask
+from .config import HOSTED_LLMS, SPECS, Settings, mask
+from .models import fetch_models
 from .db import Database
 from .pipeline import Pipeline
 
@@ -57,6 +58,12 @@ class ItemPatch(BaseModel):
     note: str | None = None
     canonical_url: str | None = None
     tags: list[str] | None = None
+
+
+class ModelsRequest(BaseModel):
+    provider: str
+    url: str | None = None   # local / self-hosted only
+    key: str | None = None   # a key typed but not saved yet
 
 
 class SettingsUpdate(BaseModel):
@@ -194,6 +201,16 @@ def create_app(
         report["problems"].sort(key=lambda p: order.get(p["level"], 3))
         return report
 
+    def provider_choices() -> list[dict]:
+        """What the "AI provider" picker offers: each provider's endpoint and the settings its fields edit."""
+        out = [{"id": "claude", "label": "Anthropic (Claude)", "url": None, "model": None,
+                "key_env": "ANTHROPIC_API_KEY", "model_env": "MAGPIE_MODEL"}]
+        out += [{"id": pid, "label": label, "url": url, "model": model, "key_env": key_attr.upper(),
+                 "model_env": "LOCAL_LLM_MODEL"} for pid, (url, model, key_attr, label) in HOSTED_LLMS.items()]
+        out.append({"id": "local", "label": "Local / self-hosted", "url": None, "model": None,
+                    "key_env": "LOCAL_LLM_API_KEY", "model_env": "LOCAL_LLM_MODEL"})
+        return out
+
     def settings_payload() -> dict:
         problems = {p["key"]: p for p in settings.problems() if p["key"]}
         groups: dict[str, list] = {}
@@ -214,14 +231,14 @@ def create_app(
             "data_dir": str(settings.data_dir), "settings_file": str(settings.overrides_path),
             "setup_code_required": not settings.api_tokens,
             "status": server_status(),
+            "providers": provider_choices(), "provider": settings.provider_choice(),
         }
 
     @app.get("/api/settings")
     def get_settings():
         return settings_payload()
 
-    @app.put("/api/settings")
-    async def put_settings(update: SettingsUpdate, request: Request):
+    def require_settings_access(request: Request) -> None:
         # Without an access token anyone who can reach the server gets this far, so changing settings
         # also needs the setup code from the server's log. (Not "localhost is fine": DNS rebinding lets
         # a web page send requests that look local.)
@@ -231,6 +248,23 @@ def create_app(
                 "message": "This server has no access token yet. Enter the setup code printed in the server's log "
                            "(docker compose logs magpie), or set MAGPIE_API_TOKEN.",
             })
+
+    @app.post("/api/models")
+    async def list_models(req: ModelsRequest, request: Request):
+        """The models a provider offers, for the settings screen's model picker. Same access rules as changing
+        settings, because it makes the server call out with a stored key."""
+        require_settings_access(request)
+        client = state["pipeline"].http if "pipeline" in state else httpx.AsyncClient(timeout=20)
+        try:
+            return {"models": await fetch_models(settings, client, req.provider, req.url, req.key)}
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Couldn't reach the provider: {e!r}")
+
+    @app.put("/api/settings")
+    async def put_settings(update: SettingsUpdate, request: Request):
+        require_settings_access(request)
         had_token = bool(settings.api_tokens)
         try:
             notices = settings.save_overrides(update.changes)
