@@ -13,10 +13,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY magpie ./magpie
-RUN useradd --system --uid 1000 magpie && mkdir -p /data && chown magpie /data
-USER magpie
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN useradd --system --uid 1000 magpie && mkdir -p /data && chown magpie /data \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
+# Starts as root only so the entrypoint can chown the /data mount, then runs as magpie.
 VOLUME ["/data"]
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["uvicorn", "magpie.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
