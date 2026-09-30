@@ -781,3 +781,96 @@ async def test_hugging_face_model_gets_facts_and_a_card_picture(settings):
     assert classify("https://huggingface.co/datasets/acme/words", None)["canonical_url"] == "https://huggingface.co/datasets/acme/words"
     assert classify("https://huggingface.co/spaces/acme/demo", None)["category"] == "app"
     assert classify("https://huggingface.co/docs/hub", None) is None
+
+
+def _img(size=(800, 500)):
+    return httpx.Response(200, content=_png(size), headers={"content-type": "image/png"})
+
+
+def test_readme_blob_links_become_raw_and_badges_are_skipped():
+    from magpie.images import readme_images
+    md = ("[![npm](https://badgen.net/npm/v/x)](x) ![Build](https://circleci.com/gh/a/b.png)\n"
+          "![logo](https://github.com/acme/tool/blob/main/media/logo.png?raw=true)")
+    assert readme_images(md, "acme/tool") == ["https://raw.githubusercontent.com/acme/tool/main/media/logo.png"]
+
+
+async def test_article_photo_beats_the_sites_default_share_image(settings):
+    # the page's og:image is the site-wide default; the article's own photo (named "pixel-9-review") is the better cover
+    html = ('<html><head><meta property="og:image" content="https://news.example/static/og-default.png"></head><body>'
+            '<img src="https://news.example/img/pixel-9-review.jpg" width="1200" height="800"></body></html>')
+    routes = {"https://news.example/pixel-9": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://news.example/static/og-default.png": _img(), "https://news.example/img/pixel-9-review.jpg": _img()}
+    a = analysis(category="article", canonical_url="https://news.example/pixel-9", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://news.example/img/pixel-9-review.jpg"
+
+
+async def test_article_that_refuses_servers_uses_the_internet_archive_copy(settings):
+    archived = '<html><head><meta property="og:image" content="https://cdn.blog.example/hero.jpg"></head></html>'
+    routes = {"https://blog.example/post": httpx.Response(403),
+              "https://archive.org/wayback/available": httpx.Response(200, json={"archived_snapshots": {"closest": {"available": True, "timestamp": "20260101000000"}}}),
+              "https://web.archive.org/web/20260101000000id_/https://blog.example/post": httpx.Response(200, text=archived, headers={"content-type": "text/html"}),
+              "https://cdn.blog.example/hero.jpg": _img()}
+    a = analysis(category="article", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://cdn.blog.example/hero.jpg"
+    # a page that is merely missing (404) is not looked up elsewhere
+    seen = []
+    def handler(request):
+        seen.append(request.url.host)
+        return httpx.Response(404)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await run_enrichers(analysis(category="article", canonical_url="https://gone.example/x", details=blank_details()), settings, http)
+    assert "archive.org" not in seen
+
+
+async def test_npm_package_without_pictures_uses_the_maintainers_logo(settings):
+    registry = {"dist-tags": {"latest": "7.0.0"}, "versions": {"7.0.0": {}}, "readme": "no pictures here",
+                "repository": {"url": "git+https://github.com/babel/babel.git", "directory": "packages/babel-core"}}
+    routes = {"https://registry.npmjs.org/@babel%2Fcore": httpx.Response(200, json=registry),
+              "https://api.github.com/repos/babel/babel/readme": httpx.Response(200, text="![](https://img.shields.io/x.png)"),
+              "https://avatars.githubusercontent.com/babel": _img((460, 460))}
+    a = analysis(category="app", canonical_url="https://www.npmjs.com/package/@babel/core", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "npm").image_url == "https://avatars.githubusercontent.com/babel?s=460"
+
+
+async def test_hugging_face_falls_back_to_the_owners_logo(settings):
+    routes = {"https://huggingface.co/api/models/acme/bare": httpx.Response(200, json={"tags": []}),
+              "https://huggingface.co/api/organizations/acme/avatar": httpx.Response(200, json={"avatarUrl": "https://cdn-avatars.huggingface.co/acme.png"}),
+              "https://cdn-avatars.huggingface.co/acme.png": _img((300, 300))}
+    a = analysis(category="app", canonical_url="https://huggingface.co/acme/bare", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "huggingface").image_url == "https://cdn-avatars.huggingface.co/acme.png"
+
+
+async def test_book_cover_beats_the_shared_pages_picture_and_itunes_finds_album_art(settings):
+    page = '<html><head><meta property="og:image" content="https://shop.example/banner.jpg"></head></html>'
+    routes = {"https://shop.example/book": httpx.Response(200, text=page, headers={"content-type": "text/html"}),
+              "https://shop.example/banner.jpg": _img((1200, 630)),
+              "https://openlibrary.org/search.json": httpx.Response(200, json={"docs": [{"key": "/works/1", "title": "The Overstory", "cover_i": 42}]}),
+              "https://covers.openlibrary.org/b/id/42-L.jpg": _img((400, 600))}
+    a = analysis(category="book", title="The Overstory", canonical_url="https://shop.example/book", details=blank_details())
+    async with mock_http(routes) as http:
+        fields = merge(a, await run_enrichers(a, settings, http))
+    assert fields["image_url"] == "https://covers.openlibrary.org/b/id/42-L.jpg"
+    art = "https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/100x100bb.jpg"
+    routes = {"https://itunes.apple.com/search": httpx.Response(200, json={"results": [{"collectionName": "Selected Ambient Works 85-92", "artistName": "Aphex Twin", "artworkUrl100": art, "trackCount": 13}]}),
+              "https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/600x600bb.jpg": _img((600, 600))}
+    a = analysis(category="music", title="Selected Ambient Works 85-92", canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url.endswith("600x600bb.jpg") and e.metadata["tracks"] == 13
+
+
+def test_a_dead_image_link_from_the_model_is_dropped(settings):
+    client, _ = make_client(settings, analysis(category="other", canonical_url=None, details=blank_details(),
+                                                image_url="https://made-up.example/poster.jpg"),
+                            {"https://made-up.example/poster.jpg": httpx.Response(404)})
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{item_id}").json()["image_url"] is None

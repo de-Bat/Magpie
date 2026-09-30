@@ -15,6 +15,7 @@ from .analyzer import AnalysisError
 from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import links, readability
+from .images import best_image
 from .enrich import fetch_page
 from .config import Settings
 from .db import Database, normalize_tag
@@ -308,6 +309,9 @@ class Pipeline:
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
         enrichments = await run_enrichers(analysis, self.settings, self.http)
         fields = merge(analysis, enrichments)
+        if fields["image_url"] and not any(e.image_url for e in enrichments):
+            # Only the model suggested it, and models sometimes make up image links: keep it only if it isn't dead.
+            fields["image_url"] = await best_image(self.http, [fields["image_url"]])
 
         # Replace the tags generated for the previous identification, keep the user's own.
         item = self.db.get_item(item_id) or {}

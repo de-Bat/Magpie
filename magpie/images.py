@@ -28,9 +28,19 @@ BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
 _CACHE: dict[str, tuple[float, bool | None]] = {}
 _CACHE_SECONDS = 3600
 
-_NOT_A_PICTURE = re.compile(r"shields\.io|badge|travis-ci|codecov|coveralls|star-history|contrib\.rocks|visitor|"
-                            r"buymeacoffee|ko-fi|opencollective|/workflows/|\.svg(\?|$)|gh-dark-mode-only|emoji|"
-                            r"github\.com/sponsors|img\.youtube\.com|/donate|pixel|spacer|blank\.|1x1|tracking|/ads?/|sprite", re.I)
+# Never a picture of the thing, wherever it appears. Kept narrow: an article about a Pixel phone or a
+# badge collection still gets its photo.
+_NOT_A_PICTURE = re.compile(r"\.svg(\?|#|$)|/spacer\.|/blank\.(gif|png)|\b1x1\.|/pixel\.(gif|png)|tracking[-_]?pixel|"
+                            r"/ads?/|doubleclick\.net|/sprites?[./]|gravatar\.com/avatar/[0-9a-f]{32}\?.*d=blank", re.I)
+# README-only noise: status badges, sponsor buttons, contributor walls, video thumbnails.
+_README_NOISE = re.compile(r"shields\.io|badge|travis-ci|codecov|coveralls|star-history|contrib\.rocks|visitor|"
+                           r"buymeacoffee|ko-fi|opencollective|/workflows/|gh-dark-mode-only|emoji|api\.star-history|"
+                           r"github\.com/sponsors|img\.youtube\.com|/donate|repobeats|contributors-img|sonarcloud|snyk\.io|"
+                           r"fossa\.com|codeclimate|deepsource|app\.netlify\.com/.*/deploy|badgen\.net|npm\.im|nodei\.co|"
+                           r"packagephobia|bundlephobia\.com/api|img\.badgesize|codefactor|circleci\.com|ci\.appveyor", re.I)
+# Site-wide share images: used for every page on the site, so a real picture of the article should beat them.
+_GENERIC_SHARE = re.compile(r"(default|placeholder|fallback|generic|site[-_]?(image|share|og)|share[-_]?default|"
+                            r"og[-_]?default|social[-_]?default|no[-_]?image|logo)[^/]*\.(png|jpe?g|webp|gif)(\?|$)", re.I)
 _IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
 
 
@@ -40,8 +50,14 @@ def _attr(tag: str, name: str) -> str | None:
 
 
 def looks_usable(url: str) -> bool:
-    """Cheap check on the URL alone: not a badge, SVG or tracker."""
+    """Cheap check on the URL alone: not an SVG, tracker or ad."""
     return bool(url) and url.startswith(("http://", "https://")) and not _NOT_A_PICTURE.search(url)
+
+
+def github_raw(url: str) -> str:
+    """github.com/o/r/blob/<ref>/path is an HTML page showing the file; its raw address is the picture itself."""
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+)/(?:blob|raw)/(.+?)(\?raw=(true|1))?$", url)
+    return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}" if m else url
 
 
 async def verify_image(http: httpx.AsyncClient, url: str) -> bool | None:
@@ -184,7 +200,7 @@ def content_images(html: str, limit: int = 3) -> list[str]:
                or _attr(tag, "data-lazy-src") or _attr(tag, "data-original") or _attr(tag, "src"))
         if not src or src.startswith("data:") or not looks_usable(urljoin("https://x/", src)):
             continue
-        if re.search(r"logo|icon|avatar|profile|author|thumb-?small", src, re.I):
+        if re.search(r"logo|icon|avatar|profile|author|thumb-?small|emoji|badge", src, re.I):
             continue
         try:
             if any(int(_attr(tag, d) or 999) < 150 for d in ("width", "height")):
@@ -207,6 +223,9 @@ def page_image_candidates(page: Any, extra: Iterable[str | None] = ()) -> list[s
     out += [l["href"] for l in getattr(page, "links", []) if {"image_src", "image"} & set(l["rel"].split())]
     out += list(extra)
     out += content_images(page.html)
+    # A site-wide default share image (default-og.png, the site logo, ...) goes behind the article's own pictures.
+    specific = [u for u in out if u and not _GENERIC_SHARE.search(u)]
+    out = specific + [u for u in out if u and _GENERIC_SHARE.search(u)]
     def side(l: dict) -> int:
         m = re.match(r"\d+", l.get("sizes") or "")
         return int(m.group(0)) if m else 0
@@ -237,7 +256,8 @@ def readme_images(markdown: str, full_name: str, limit: int = 3, base: str | Non
                 src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.removeprefix('./').lstrip('/')}"
             else:
                 continue  # a relative path we can't resolve
-        if looks_usable(src) and src not in found:
+        src = github_raw(src)
+        if looks_usable(src) and not _README_NOISE.search(src) and src not in found:
             found.append(src)
         if len(found) >= limit:
             break

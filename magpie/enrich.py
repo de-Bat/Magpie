@@ -190,6 +190,9 @@ async def enrich_npm(analysis: dict, settings: Settings, http: httpx.AsyncClient
         page = await fetch_page(homepage, http)
         if page:
             candidates += page_image_candidates(page)
+    if full_name:
+        # the GitHub owner's avatar is usually the project's or company's logo (@babel/*, @vercel/*, ...)
+        candidates.append(f"https://avatars.githubusercontent.com/{full_name.split('/')[0]}?s=460")
     image = await best_image(http, candidates, last_resort=generic_card)
     links = [{"label": "npm", "url": f"https://www.npmjs.com/package/{name}"}]
     if full_name:
@@ -224,6 +227,19 @@ def hf_repo(analysis: dict) -> tuple[str, str] | None:
         if len(seg) >= 2 and seg[0].lower() not in HF_RESERVED:
             return "models", "/".join(seg[:2])
     return None
+
+
+async def hf_owner_logo(owner: str, http: httpx.AsyncClient) -> list[str]:
+    """The logo of the organization (or user) that published it, from Hugging Face's avatar API."""
+    for kind in ("organizations", "users"):
+        try:
+            r = await http.get(f"https://huggingface.co/api/{kind}/{owner}/avatar")
+            url = r.json().get("avatarUrl") if r.status_code == 200 else None
+        except (httpx.HTTPError, ValueError, AttributeError):
+            continue
+        if isinstance(url, str) and url:
+            return [urljoin("https://huggingface.co/", url)]
+    return []
 
 
 async def enrich_huggingface(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
@@ -262,10 +278,8 @@ async def enrich_huggingface(analysis: dict, settings: Settings, http: httpx.Asy
     page = await fetch_page(page_url, http)
     if page:
         candidates += page_image_candidates(page)   # includes Hugging Face's generated social card
-    owner = rid.split("/")[0]
-    candidates += [f"https://huggingface.co/api/organizations/{owner}/avatar?redirect=true",
-                   f"https://huggingface.co/api/users/{owner}/avatar?redirect=true"]   # the owner's logo, as a last resort
-    image = await best_image(http, candidates)
+    image = await best_image(http, candidates, verified_only=True) or await best_image(
+        http, await hf_owner_logo(rid.split("/")[0], http)) or await best_image(http, candidates)
     skip = ("region:", "license:", "endpoints_compatible", "autotrain_compatible", "text-generation-inference")
     return Enrichment(
         metadata=meta, canonical_url=page_url, image_url=image, subtitle=" · ".join(x for x in (d.get("pipeline_tag"), d.get("library_name")) if x) or None,
@@ -346,22 +360,27 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
-async def _wikipedia_poster(title: str, year: Any, is_tv: bool, http: httpx.AsyncClient) -> str | None:
-    """The poster from the film's / show's Wikipedia infobox (no API key needed), when TMDB and OMDb gave none."""
-    kind = "TV series" if is_tv else "film"
-    query = f"{title} {year or ''} {kind}".replace("  ", " ")
+async def wikipedia_image(title: str, hint: str, http: httpx.AsyncClient) -> str | None:
+    """The lead picture of the Wikipedia article about `title` (no API key needed), only when the top search
+    hit is really about it. `hint` narrows the search, e.g. "film", "album", "Barcelona"."""
+    query = f"{title} {hint}".strip()
     try:
         r = await http.get("https://en.wikipedia.org/w/api.php", params={
             "action": "query", "format": "json", "generator": "search", "gsrsearch": query, "gsrlimit": 1,
-            "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 500})
+            "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 600})
         if r.status_code != 200:
             return None
         pages = list(((r.json().get("query") or {}).get("pages") or {}).values())
     except (httpx.HTTPError, ValueError):
         return None
-    if not pages or _norm(title) not in _norm(pages[0].get("title", "")):
+    if not pages or not _norm(title) or _norm(title) not in _norm(pages[0].get("title", "")):
         return None  # the top hit isn't about this title
     return (pages[0].get("thumbnail") or {}).get("source")
+
+
+async def _wikipedia_poster(title: str, year: Any, is_tv: bool, http: httpx.AsyncClient) -> str | None:
+    """The poster from the film's / show's Wikipedia infobox, when TMDB and OMDb gave none."""
+    return await wikipedia_image(title, f"{year or ''} {'TV series' if is_tv else 'film'}".strip(), http)
 
 
 def _apply_tmdb(out: Enrichment, d: dict, kind: str, region: str) -> None:
@@ -440,9 +459,11 @@ async def enrich_book(analysis: dict, settings: Settings, http: httpx.AsyncClien
     if author:
         params["author"] = author
     r = await http.get("https://openlibrary.org/search.json", params=params)
-    if r.status_code != 200 or not r.json().get("docs"):
-        return None
-    doc = r.json()["docs"][0]
+    docs = r.json().get("docs") if r.status_code == 200 else None
+    if not docs:
+        cover = await book_cover(analysis["title"], author, [], http)
+        return Enrichment(image_url=cover, source="googlebooks") if cover else None
+    doc = docs[0]
     meta = {
         "author": ", ".join(doc.get("author_name") or []) or None,
         "first_published": doc.get("first_publish_year"),
@@ -450,14 +471,91 @@ async def enrich_book(analysis: dict, settings: Settings, http: httpx.AsyncClien
         "isbn": (doc.get("isbn") or [None])[0],
         "openlibrary_rating": f"{doc['ratings_average']:.1f}/5" if doc.get("ratings_average") else None,
     }
+    first = [f"https://covers.openlibrary.org/b/id/{doc['cover_i']}-L.jpg"] if doc.get("cover_i") else []
     return Enrichment(
         metadata=meta,
-        image_url=f"https://covers.openlibrary.org/b/id/{doc['cover_i']}-L.jpg" if doc.get("cover_i") else None,
+        image_url=await best_image(http, first) if first else await book_cover(doc.get("title") or analysis["title"], author,
+                                                                               (doc.get("isbn") or [])[:3], http),
         links=[{"label": "Open Library", "url": f"https://openlibrary.org{doc['key']}"}],
         tags=[s.lower() for s in (doc.get("subject") or [])[:4]],
         source="openlibrary",
         matched_title=doc.get("title"),
     )
+
+
+async def book_cover(title: str, author: str | None, isbns: list[str], http: httpx.AsyncClient) -> str | None:
+    """A cover when Open Library's search has none: Open Library by ISBN, then Google Books (no key needed)."""
+    candidates = [f"https://covers.openlibrary.org/b/isbn/{i}-L.jpg?default=false" for i in isbns]
+    try:
+        q = f'intitle:"{title}"' + (f' inauthor:"{author}"' if author else "")
+        r = await http.get("https://www.googleapis.com/books/v1/volumes", params={"q": q, "maxResults": 3, "printType": "books"})
+        for v in (r.json().get("items") or []) if r.status_code == 200 else []:
+            info = v.get("volumeInfo") or {}
+            links = info.get("imageLinks") or {}
+            if _norm(title) and _norm(title) in _norm(info.get("title", "")) and links.get("thumbnail"):
+                # zoom=0 asks for the largest version; https because the app may be served over https
+                candidates.append(links["thumbnail"].replace("http://", "https://").replace("&edge=curl", "").replace("zoom=1", "zoom=0"))
+                candidates.append(links["thumbnail"].replace("http://", "https://").replace("&edge=curl", ""))
+    except (httpx.HTTPError, ValueError, AttributeError):
+        pass
+    return await best_image(http, candidates, verified_only=True)
+
+
+# ---------------------------------------------------------------------------
+# Music, podcasts and apps: the iTunes Search API (no key needed)
+
+ITUNES_ENTITY = {"music": ("album", "music"), "podcast": ("podcast", "podcast"), "app": ("software", "software")}
+
+
+async def enrich_itunes(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
+    """Album, podcast or app artwork (600 px) and a few facts, matched by title (and artist, when known)."""
+    title, category = analysis.get("title"), analysis.get("category")
+    if not title or category not in ITUNES_ENTITY or npm_package(analysis) or hf_repo(analysis):
+        return None
+    entity, media = ITUNES_ENTITY[category]
+    details = analysis.get("details") or {}
+    artist = details.get("artist") or details.get("author") or details.get("creator")
+    term = f"{title} {artist}" if artist and category != "app" else title
+    try:
+        r = await http.get("https://itunes.apple.com/search", params={"term": term, "entity": entity, "media": media, "limit": 5})
+        results = r.json().get("results") or [] if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError):
+        return None
+    name_key = {"album": "collectionName", "podcast": "collectionName", "software": "trackName"}[entity]
+    hit = next((x for x in results if _norm(title) and (_norm(title) in _norm(x.get(name_key, "")) or _norm(x.get(name_key, "")) in _norm(title))), None)
+    if not hit:
+        return None
+    art = hit.get("artworkUrl512") or hit.get("artworkUrl100") or hit.get("artworkUrl600")
+    image = await best_image(http, [re.sub(r"/\d+x\d+(bb)?\.(jpg|png)$", r"/600x600bb.\2", art or ""), art])
+    meta = {"artist": hit.get("artistName") or hit.get("sellerName"), "genre": hit.get("primaryGenreName"),
+            "released": (hit.get("releaseDate") or "")[:10] or None}
+    if entity == "album":
+        meta["tracks"] = hit.get("trackCount")
+    elif entity == "podcast":
+        meta["episodes"] = hit.get("trackCount")
+    else:
+        meta.update(price=hit.get("formattedPrice"), app_rating=f"{hit['averageUserRating']:.1f}/5" if hit.get("averageUserRating") else None,
+                    version=hit.get("version"))
+    url = hit.get("collectionViewUrl") or hit.get("trackViewUrl")
+    return Enrichment(metadata=meta, image_url=image, links=[{"label": "Apple", "url": url}] if url else [],
+                      source="itunes", matched_title=hit.get(name_key))
+
+
+# ---------------------------------------------------------------------------
+# Last resort for things with a Wikipedia article (places, events, products, ...)
+
+WIKI_HINTS = {"place": "", "event": "", "product": "", "course": "", "music": "album", "podcast": "podcast",
+              "app": "software", "book": "novel"}
+
+
+async def enrich_wikipedia(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
+    title = analysis.get("title")
+    if (not title or analysis.get("category") not in WIKI_HINTS or len(_norm(title)) < 4
+            or re.search(r"https?://|\w\.\w+/|^[\w.-]+\.[a-z]{2,}$", title) or npm_package(analysis) or hf_repo(analysis)):
+        return None   # nothing to look up, or a URL / package name rather than the name of a thing
+    image = await wikipedia_image(title, WIKI_HINTS[analysis["category"]], http)
+    image = image and await best_image(http, [image], verified_only=True)
+    return Enrichment(image_url=image, source="wikipedia") if image else None
 
 
 # ---------------------------------------------------------------------------
@@ -528,12 +626,27 @@ async def fetch_page(url: str, http: httpx.AsyncClient) -> Page | None:
     return page
 
 
+# Pages that answered but turned us away (bot walls, rate limits): only these may be looked up elsewhere.
+# Private or blocked addresses never are, so no internal hostname leaves the server.
+_REFUSED: dict[str, float] = {}
+REFUSING_STATUSES = {401, 403, 406, 429, 451, 500, 502, 503, 520, 521, 522, 523, 524, 525, 526}
+
+
+def page_refused(url: str) -> bool:
+    return time.monotonic() - _REFUSED.get(url, -1e9) < PAGE_CACHE_SECONDS
+
+
 async def _fetch_page(url: str, http: httpx.AsyncClient) -> Page | None:
     try:
-        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml"})
+        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml",
+                                               "Accept-Language": "en-US,en;q=0.9"})
     except (httpx.HTTPError, BlockedURL) as e:
         log.info("Fetching %s failed: %s", url, e)
         return None
+    if r.status_code in REFUSING_STATUSES:
+        if len(_REFUSED) > 500:
+            _REFUSED.clear()
+        _REFUSED[url] = time.monotonic()
     if r.status_code != 200 or "html" not in r.headers.get("content-type", "html"):
         return None
     html = r.text[:MAX_BYTES]
@@ -682,9 +795,10 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
         return None
     page = await fetch_page(url, http)
     if not page:
-        # Blocked or behind a consent wall: a YouTube video still has a thumbnail we can address directly.
-        thumb = await best_image(http, youtube_thumbnails(url))
-        return Enrichment(image_url=thumb, source="youtube") if thumb else None
+        # Blocked or behind a consent wall: a YouTube video still has a thumbnail we can address directly,
+        # and many articles have a copy in the Internet Archive with the same share image.
+        thumb = await best_image(http, youtube_thumbnails(url)) or (await archived_picture(url, http) if page_refused(url) else None)
+        return Enrichment(image_url=thumb, source="archive") if thumb else None
     if analysis.get("category") == "recipe":
         found = recipe_from_page(page)
         if found:
@@ -693,6 +807,25 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
     e = with_readability(opengraph_from_page(page), page)
     e.image_url = await page_picture(http, page, e.image_url)
     return e
+
+
+async def archived_picture(url: str, http: httpx.AsyncClient) -> str | None:
+    """The share image of the Internet Archive's latest copy of a page that won't answer us. The original image
+    address comes first (the page may block servers while its image CDN doesn't), then the archived file."""
+    try:
+        r = await http.get("https://archive.org/wayback/available", params={"url": url}, timeout=10)
+        snap = ((r.json().get("archived_snapshots") or {}).get("closest") or {}) if r.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    ts = snap.get("timestamp")
+    if not snap.get("available") or not ts:
+        return None
+    page = await fetch_page(f"https://web.archive.org/web/{ts}id_/{url}", http)   # id_: the page as it was, unrewritten
+    if not page:
+        return None
+    originals = [urljoin(url, u) for u in page_image_candidates(page)[:4]]
+    originals = [re.sub(r"^https?://web\.archive\.org/web/\d+(?:id_|im_)?/", "", u) for u in originals]
+    return await best_image(http, [*originals, *(f"https://web.archive.org/web/{ts}im_/{u}" for u in originals)], verified_only=True)
 
 
 async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = None) -> str | None:
@@ -735,12 +868,17 @@ def with_readability(e: Enrichment, page: Page) -> Enrichment:
 # ---------------------------------------------------------------------------
 
 
+# The picture of the LAST enricher that found one wins, so the most specific source runs last
+# (a book's cover beats the picture on the page you shared).
 ENRICHERS = {
     "github_repo": [enrich_github],
     "movie": [enrich_screen],
     "tv_show": [enrich_screen],
-    "book": [enrich_book, enrich_web],
+    "book": [enrich_web, enrich_book],
     "recipe": [enrich_web],
+    "music": [enrich_web, enrich_itunes],
+    "podcast": [enrich_web, enrich_itunes],
+    "app": [enrich_web, enrich_itunes],
 }
 DEFAULT_ENRICHERS = [enrich_web]
 # Sources recognized from the item's links, whatever its category: (does it name this source?, enricher)
@@ -763,4 +901,10 @@ async def run_enrichers(analysis: dict, settings: Settings, http: httpx.AsyncCli
             continue
         if e:
             results.append(e)
+    if not any(e.image_url for e in results):   # nothing had a picture: try the Wikipedia article about it
+        try:
+            if e := await enrich_wikipedia(analysis, settings, http):
+                results.append(e)
+        except Exception:
+            log.exception("Enricher enrich_wikipedia failed")
     return results

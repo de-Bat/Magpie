@@ -14,7 +14,9 @@ def public_dns(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def fresh_page_cache():
-    from magpie import enrich
-    enrich._PAGE_CACHE.clear()
+    from magpie import enrich, images
+    for cache in (enrich._PAGE_CACHE, enrich._REFUSED, images._CACHE):
+        cache.clear()
     yield
-    enrich._PAGE_CACHE.clear()
+    for cache in (enrich._PAGE_CACHE, enrich._REFUSED, images._CACHE):
+        cache.clear()
