@@ -1079,3 +1079,4 @@ async def test_only_one_bulk_job_runs_at_a_time():
     runner.cancel()
     await runner._task
     assert runner.snapshot()["running"] is False and runner.snapshot()["done"] == 1
+

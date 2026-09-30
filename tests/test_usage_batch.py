@@ -160,6 +160,7 @@ async def test_unsure_local_answer_is_escalated_through_a_batch(tmp_path):
         # (20k x $5/M + 1k x $25/M) / 2 + 2 searches x $0.01
         assert item["usage"]["cost_usd"] == pytest.approx(0.0825, abs=1e-4)
         assert sorted(item["usage"]["via"]) == ["claude:batch", "local:local", "ocr:local"]
+        assert item["usage"]["model"].startswith("claude")   # the last model to answer, not the OCR step
 
         report = client.get("/api/usage").json()
         assert report["totals"]["screenshots"] == 1 and report["totals"]["web_searches"] == 2

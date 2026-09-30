@@ -506,3 +506,5 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
   padding: 5px 12px; border-radius: 999px;
 }
 .segmented button[aria-pressed="true"] { background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
+
+.card .by-model { font-size: 10.5px; color: var(--muted, #8a8a8a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; opacity: .85; }
