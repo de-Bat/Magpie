@@ -131,6 +131,10 @@ def classify(url: str, page: Page | None) -> dict | None:
     elif host in ("apps.apple.com", "play.google.com") and ("app" in segments or "apps" in segments):
         out.update(category="app", confidence=90)
         reason = "app store link"
+    elif host.endswith("npmjs.com") and len(segments) >= 2 and segments[0] == "package":
+        name = "/".join(segments[1:3]) if segments[1].startswith("@") and len(segments) > 2 else segments[1]
+        out.update(category="app", title=name, canonical_url=f"https://www.npmjs.com/package/{name}", confidence=95)
+        reason = f"npm package link ({name})"
     elif host == "youtube.com" and (parts.path == "/watch" or segments[:1] == ["shorts"]):
         out.update(category="video", confidence=85)
         reason = "YouTube video link"

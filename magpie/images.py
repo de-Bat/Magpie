@@ -1,0 +1,182 @@
+"""Finding a good picture for an item: poster, cover, header or logo.
+
+Pages and repositories offer several candidate images (OpenGraph, structured data, the README's
+header, the site's icon). Some are dead links, tracking pixels, badges or tiny icons. We check
+the candidates in order of preference and use the first one that is a real picture.
+"""
+
+import io
+import logging
+import re
+import time
+from typing import Any, Iterable
+from urllib.parse import urljoin
+
+import httpx
+
+from .fetch import BlockedURL, safe_get
+
+log = logging.getLogger(__name__)
+
+MIN_SIDE = 120          # px: anything smaller is an icon or a tracking pixel
+MAX_ASPECT = 5.0        # wider or taller than this is a divider, not a picture
+CHECK_BYTES = 98_304    # enough to read the size of a PNG, JPEG, WebP or GIF
+MAX_CHECKS = 5          # candidates we're willing to fetch per item
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+_CACHE: dict[str, tuple[float, bool | None]] = {}
+_CACHE_SECONDS = 3600
+
+_NOT_A_PICTURE = re.compile(r"shields\.io|badge|travis-ci|codecov|coveralls|star-history|contrib\.rocks|visitor|"
+                            r"buymeacoffee|ko-fi|opencollective|/workflows/|\.svg(\?|$)|gh-dark-mode-only|emoji|"
+                            r"github\.com/sponsors|img\.youtube\.com|/donate|pixel|spacer|blank\.|1x1|tracking|/ads?/|sprite", re.I)
+_IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
+
+
+def _attr(tag: str, name: str) -> str | None:
+    m = re.search(rf'\b{name}\s*=\s*["\']([^"\']*)["\']', tag, re.I)
+    return m.group(1) if m else None
+
+
+def looks_usable(url: str) -> bool:
+    """Cheap check on the URL alone: not a badge, SVG or tracker."""
+    return bool(url) and url.startswith(("http://", "https://")) and not _NOT_A_PICTURE.search(url)
+
+
+async def verify_image(http: httpx.AsyncClient, url: str) -> bool | None:
+    """True: a real picture of a usable size. False: dead, not an image, or too small.
+    None: couldn't tell (the host refuses server requests or timed out); browsers may still load it."""
+    hit = _CACHE.get(url)
+    if hit and time.monotonic() - hit[0] < _CACHE_SECONDS:
+        return hit[1]
+    result = await _verify(http, url)
+    if len(_CACHE) > 500:
+        _CACHE.clear()
+    _CACHE[url] = (time.monotonic(), result)
+    return result
+
+
+async def _verify(http: httpx.AsyncClient, url: str) -> bool | None:
+    try:
+        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/*,*/*;q=0.5",
+                                                "Range": f"bytes=0-{CHECK_BYTES - 1}"}, timeout=8)
+    except (httpx.HTTPError, BlockedURL) as e:
+        log.info("Couldn't check image %s: %s", url, e)
+        return None
+    if r.status_code in (401, 403, 429) or r.status_code >= 500:
+        return None
+    if r.status_code not in (200, 206):
+        return False
+    data = r.content[:CHECK_BYTES]
+    ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
+    if ctype == "image/svg+xml" or data.lstrip()[:5] in (b"<?xml", b"<svg ") or b"<svg" in data[:300]:
+        return False
+    if not ctype.startswith("image/") and data[:4] not in (b"\x89PNG", b"\xff\xd8\xff\xe0", b"\xff\xd8\xff\xe1", b"RIFF", b"GIF8"):
+        return False
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as im:
+            w, h = im.size
+    except Exception:  # Pillow missing, or a truncated progressive file: the content type will have to do
+        return True
+    return min(w, h) >= MIN_SIDE and max(w, h) / max(1, min(w, h)) <= MAX_ASPECT
+
+
+async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], base: str | None = None,
+                     last_resort: str | None = None) -> str | None:
+    """The first candidate that is a real picture. When none could be checked, the first that
+    couldn't be ruled out; `last_resort` (e.g. a generated card) is used without a check."""
+    seen: list[str] = []
+    for c in candidates:
+        if not c or not isinstance(c, str):
+            continue
+        url = urljoin(base, c.strip()) if base else c.strip()
+        if looks_usable(url) and url not in seen:
+            seen.append(url)
+    unknown = None
+    for url in seen[:MAX_CHECKS]:
+        verdict = await verify_image(http, url)
+        if verdict:
+            return url
+        if verdict is None and unknown is None:
+            unknown = url
+    return unknown or last_resort
+
+
+def _ld_images(node: dict) -> list[str]:
+    out: list[str] = []
+
+    def add(v: Any) -> None:
+        if isinstance(v, str):
+            out.append(v)
+        elif isinstance(v, list):
+            for x in v:
+                add(x)
+        elif isinstance(v, dict):
+            add(v.get("url") or v.get("contentUrl"))
+
+    for key in ("image", "thumbnailUrl", "primaryImageOfPage", "thumbnail", "logo"):
+        add(node.get(key))
+    return out
+
+
+def content_images(html: str, limit: int = 3) -> list[str]:
+    """The first few pictures in the page body that look like content, not chrome."""
+    found: list[str] = []
+    for tag in _IMG_TAG.findall(html or ""):
+        src = _attr(tag, "data-src") or _attr(tag, "src")
+        if not src or src.startswith("data:") or not looks_usable(urljoin("https://x/", src)):
+            continue
+        if re.search(r"logo|icon|avatar|profile|author|thumb-?small", src, re.I):
+            continue
+        try:
+            if any(int(_attr(tag, d) or 999) < 150 for d in ("width", "height")):
+                continue
+        except ValueError:
+            pass
+        found.append(src)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def page_image_candidates(page: Any, extra: Iterable[str | None] = ()) -> list[str]:
+    """Every picture a web page offers for itself, best first: its own share image, structured data,
+    the lead picture, the first content pictures, and last the site's icon."""
+    m = page.meta
+    out: list[str | None] = [m.get(k) for k in ("og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src")]
+    for node in page.ld:
+        out += _ld_images(node)
+    out += [l["href"] for l in getattr(page, "links", []) if "image_src" in l["rel"].split()]
+    out += list(extra)
+    out += content_images(page.html)
+    def side(l: dict) -> int:
+        m = re.match(r"\d+", l.get("sizes") or "")
+        return int(m.group(0)) if m else 0
+
+    icons = sorted((l for l in getattr(page, "links", []) if "apple-touch-icon" in l["rel"]), key=side, reverse=True)
+    out += [l["href"] for l in icons]
+    return [urljoin(page.url, u) for u in out if u]
+
+
+_README_IMG = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)|<img\b[^>]*?\bsrc=(?:["\']([^"\']+)["\']|([^\s>"\']+))', re.I)
+
+
+def readme_images(markdown: str, full_name: str, limit: int = 3) -> list[str]:
+    """The first real pictures near the top of a README (its header or logo), skipping badges and SVGs
+    (which the mobile app can't draw). Relative paths are resolved against the repository."""
+    found: list[str] = []
+    for m in _README_IMG.finditer((markdown or "")[:8000]):
+        src = (m.group(1) or m.group(2) or m.group(3) or "").strip()
+        if not src or src.startswith("data:"):
+            continue
+        if src.startswith("//"):
+            src = "https:" + src
+        elif not src.startswith("http"):
+            src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.removeprefix('./').lstrip('/')}"
+        if looks_usable(src) and src not in found:
+            found.append(src)
+        if len(found) >= limit:
+            break
+    return found

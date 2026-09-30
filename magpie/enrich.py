@@ -19,6 +19,7 @@ import httpx
 from . import readability
 from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
+from .images import best_image, page_image_candidates, readme_images
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         log.info("GitHub lookup for %s failed: %s", full_name, r.status_code)
         return None
     repo = r.json()
-    hero = await _readme_image(full_name, headers, http)
+    hero = await github_image(full_name, headers, http)
     meta = {
         "github_full_name": repo["full_name"],
         "stars": repo.get("stargazers_count"),
@@ -97,8 +98,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
     return Enrichment(
         metadata=meta,
         canonical_url=repo["html_url"],
-        # The README's header/logo image, else GitHub's social card (the repo's custom social preview when it has one).
-        image_url=hero or f"https://opengraph.githubassets.com/1/{repo['full_name']}",
+        image_url=hero,
         subtitle=repo.get("description"),
         links=links,
         tags=tags,
@@ -107,34 +107,94 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
     )
 
 
-_README_IMG = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)|<img\b[^>]*?\bsrc=["\']([^"\']+)["\']', re.I)
-_NOT_A_HEADER = re.compile(r"shields\.io|badge|travis-ci|codecov|coveralls|star-history|contrib\.rocks|visitor|"
-                           r"buymeacoffee|ko-fi|opencollective|/workflows/|\.svg(\?|$)|gh-dark-mode-only|emoji|"
-                           r"github\.com/sponsors|img\.youtube\.com|/donate", re.I)
+async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient, readme: str | None = None) -> str:
+    """The best picture for a repository: the maintainers' own social preview if they uploaded one, else the
+    header or logo from the README, else GitHub's generated card (always available)."""
+    candidates: list[str] = []
+    page = await fetch_page(f"https://github.com/{full_name}", http)
+    og = (page.meta.get("og:image") or "") if page else ""
+    if "repository-images.githubusercontent.com" in og:  # uploaded by the maintainers; the generated cards are opengraph.githubassets.com
+        candidates.append(og)
+    if readme is None:
+        try:
+            r = await http.get(f"https://api.github.com/repos/{full_name}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"})
+            readme = r.text if r.status_code == 200 else ""
+        except httpx.HTTPError:
+            readme = ""
+    candidates += readme_images(readme, full_name)
+    return await best_image(http, candidates, last_resort=f"https://opengraph.githubassets.com/1/{full_name}")
 
 
-def readme_image(markdown: str, full_name: str) -> str | None:
-    """The first real picture near the top of a README (its header or logo), skipping badges and SVGs
-    (which the mobile app can't draw). Relative paths are resolved against the repo."""
-    for m in _README_IMG.finditer(markdown[:6000]):
-        src = (m.group(1) or m.group(2) or "").strip()
-        if not src or src.startswith("data:") or _NOT_A_HEADER.search(src):
-            continue
-        if src.startswith("//"):
-            src = "https:" + src
-        elif not src.startswith("http"):
-            src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.lstrip('./')}"
-        return src
+# ---------------------------------------------------------------------------
+# npm packages
+
+
+NPM_RE = re.compile(r"npmjs\.com/package/((?:@[\w.~-]+/)?[\w.~-]+)", re.I)
+
+
+def npm_package(analysis: dict) -> str | None:
+    for c in [analysis.get("canonical_url"), *[l.get("url") for l in analysis.get("links") or []]]:
+        m = NPM_RE.search(c or "")
+        if m:
+            return m.group(1)
     return None
 
 
-async def _readme_image(full_name: str, headers: dict, http: httpx.AsyncClient) -> str | None:
-    try:
-        r = await http.get(f"https://api.github.com/repos/{full_name}/readme",
-                           headers={**headers, "Accept": "application/vnd.github.raw+json"})
-        return readme_image(r.text, full_name) if r.status_code == 200 else None
-    except httpx.HTTPError:
+async def enrich_npm(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
+    """An npm package: facts from the registry and a picture from its repository, README or homepage."""
+    name = npm_package(analysis)
+    if not name:
         return None
+    r = await http.get(f"https://registry.npmjs.org/{name.replace('/', '%2F')}")
+    if r.status_code != 200:
+        return None
+    d = r.json()
+    latest = (d.get("dist-tags") or {}).get("latest")
+    v = (d.get("versions") or {}).get(latest) or {}
+    repo = d.get("repository") or v.get("repository") or {}
+    repo_url = repo.get("url") if isinstance(repo, dict) else repo
+    gh = GITHUB_RE.search(repo_url or "")
+    full_name = f"{gh.group(1)}/{gh.group(2).removesuffix('.git')}" if gh else None
+    homepage = d.get("homepage") or v.get("homepage")
+    downloads = None
+    try:
+        dl = await http.get(f"https://api.npmjs.org/downloads/point/last-week/{name}")
+        downloads = dl.json().get("downloads") if dl.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        pass
+    meta = {
+        "package_name": name, "version": latest, "license": v.get("license") or d.get("license"),
+        "weekly_downloads": downloads, "last_publish": (d.get("time") or {}).get(latest),
+        "maintainers": [m.get("name") for m in d.get("maintainers") or [] if m.get("name")][:4],
+        "github_full_name": full_name, "homepage": homepage if isinstance(homepage, str) else None,
+    }
+    # Picture: the repo's own preview or header, else the README on npm, else the homepage's share image.
+    candidates: list[str] = []
+    generic_card = None
+    if full_name:
+        image = await github_image(full_name, {"Accept": "application/vnd.github+json"}, http)
+        if "opengraph.githubassets.com" in image:
+            generic_card = image
+        else:
+            candidates.append(image)
+    if isinstance(d.get("readme"), str):
+        # relative image paths only resolve when we know the repository
+        candidates += [u for u in readme_images(d["readme"], full_name or "") if full_name or not u.startswith("https://raw.githubusercontent.com//")]
+    if isinstance(homepage, str) and homepage.startswith("http") and "github.com" not in homepage:
+        page = await fetch_page(homepage, http)
+        if page:
+            candidates += page_image_candidates(page)
+    image = await best_image(http, candidates, last_resort=generic_card)
+    links = [{"label": "npm", "url": f"https://www.npmjs.com/package/{name}"}]
+    if full_name:
+        links.append({"label": "Repository", "url": f"https://github.com/{full_name}"})
+    if isinstance(homepage, str) and homepage.startswith("http") and (not full_name or full_name.lower() not in homepage.lower()):
+        links.append({"label": "Homepage", "url": homepage})
+    return Enrichment(
+        metadata=meta, canonical_url=f"https://www.npmjs.com/package/{name}", image_url=image,
+        subtitle=d.get("description"), links=links, tags=[str(k).lower() for k in (d.get("keywords") or [])[:5]],
+        source="npm", matched_title=name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +390,7 @@ class _PageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.meta: dict[str, str] = {}
+        self.links: list[dict] = []
         self.ld_json: list[str] = []
         self.title = ""
         self._in_ld = False
@@ -342,6 +403,8 @@ class _PageParser(HTMLParser):
             key = a.get("property") or a.get("name")
             if key and a.get("content") and key.lower() not in self.meta:
                 self.meta[key.lower()] = a["content"]
+        elif tag == "link" and a.get("href") and a.get("rel"):
+            self.links.append({"rel": a["rel"].lower(), "href": a["href"], "sizes": a.get("sizes", "")})
         elif tag == "script" and a.get("type", "").lower() == "application/ld+json":
             self._in_ld, self._buf = True, []
         elif tag == "title":
@@ -368,6 +431,7 @@ class Page:
     ld: list[dict]
     title: str
     html: str = ""
+    links: list = field(default_factory=list)   # <link rel=... href=...> tags (image_src, icons)
 
 
 _PAGE_CACHE: dict[str, tuple[float, Page | None]] = {}
@@ -402,7 +466,7 @@ async def _fetch_page(url: str, http: httpx.AsyncClient) -> Page | None:
             ld.extend(_walk_ld(json.loads(raw)))
         except json.JSONDecodeError:
             continue
-    return Page(url=str(r.url), meta=p.meta, ld=ld, title=p.title.strip(), html=html)
+    return Page(url=str(r.url), meta=p.meta, ld=ld, title=p.title.strip(), html=html, links=p.links)
 
 
 def _walk_ld(node: Any) -> list[dict]:
@@ -543,8 +607,12 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
     if analysis.get("category") == "recipe":
         found = recipe_from_page(page)
         if found:
+            found.image_url = await best_image(http, page_image_candidates(page, [found.image_url]), page.url) or found.image_url
             return found
-    return with_readability(opengraph_from_page(page), page)
+    e = with_readability(opengraph_from_page(page), page)
+    # Check the page's candidate pictures (share image, structured data, lead picture, ...) and keep the first real one.
+    e.image_url = await best_image(http, page_image_candidates(page, [e.image_url]), page.url) or e.image_url
+    return e
 
 
 def with_readability(e: Enrichment, page: Page) -> Enrichment:
@@ -587,7 +655,10 @@ async def run_enrichers(analysis: dict, settings: Settings, http: httpx.AsyncCli
     results = []
     if not settings.enrich:
         return results
-    for fn in ENRICHERS.get(analysis.get("category"), DEFAULT_ENRICHERS):
+    fns = list(ENRICHERS.get(analysis.get("category"), DEFAULT_ENRICHERS))
+    if npm_package(analysis) and enrich_npm not in fns:
+        fns.append(enrich_npm)  # after the page enricher, so the package's own picture wins
+    for fn in fns:
         try:
             e = await fn(analysis, settings, http)
         except Exception:  # enrichment is best-effort
