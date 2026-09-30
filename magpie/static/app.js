@@ -1299,7 +1299,7 @@ function renderFilters() {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 80).map(([t, n]) => `
     <button class="chip ${state.tags.includes(t) ? "active" : ""}" type="button" data-tag="${esc(t)}" aria-pressed="${state.tags.includes(t)}">#${esc(t)} <span class="count">${n}</span></button>`).join("")
     || `<span class="hint">No tags yet. Add them from an item's details.</span>`;
-  $("#tag-btn").textContent = state.tags.length ? `# Tags · ${state.tags.length}` : "# Tags";
+  $("#tag-btn").innerHTML = `#<span class="lbl"> Tags</span>${state.tags.length ? `<span class="count tagn">${state.tags.length}</span>` : ""}`;
 }
 
 // The title set on a generated cover, like a book jacket: repos show the owner small above the name.

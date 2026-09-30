@@ -296,6 +296,16 @@ details pre { white-space: pre-wrap; font-size: 12px; background: var(--surface-
   .pill-btn { padding: 5px 10px; font-size: 12px; }
   #cost-btn .meter { display: none; }
   .tabs, .subbar, .content { padding-left: 16px; padding-right: 16px; }
+  /* Show, Tags, columns and layout stay on one row: smaller buttons, tighter gaps */
+  .subbar { gap: 6px; padding-top: 10px; padding-bottom: 10px; }
+  .subbar .seg { padding: 2px; }
+  .subbar .seg button { padding: 4px 9px; font-size: 12.5px; }
+  .subbar #tag-btn { padding: 4px 10px; }
+  .subbar .count { margin-left: 2px; }
+  .cols-pick { padding: 2px 0 2px 8px; gap: 0; }
+  .cols-pick select { padding: 3px 18px 3px 3px; }
+  #active-filters:empty { display: none; }
+  #active-filters { order: 9; flex-basis: 100%; }   /* chosen tags wrap to their own line under the controls */
   .grid { grid-template-columns: repeat(2, 1fr); gap: 14px 12px; }
   #detail { width: 100vw; height: 92dvh; margin: auto 0 0 0; border-radius: 16px 16px 0 0; border-width: 1px 0 0 0; }
   .hero { grid-template-columns: 96px 1fr; }
@@ -355,6 +365,24 @@ body { padding-bottom: env(safe-area-inset-bottom); -webkit-tap-highlight-color:
 
 .detail:focus { outline: none; }
 
+
+#tag-btn .tagn::before { content: "· "; }
+/* Small phones: shorter labels keep the four controls on one row */
+@media (max-width: 400px) {
+  .subbar .lbl, .subbar .to, .cols-icon { display: none; }
+  #tag-btn .tagn::before { content: ""; }
+  .subbar #tag-btn { padding: 4px 11px; font-weight: 600; }
+  .subbar .seg button { padding: 4px 8px; }
+}
+@media (max-width: 340px) {
+  .tabs, .subbar, .content { padding-left: 12px; padding-right: 12px; }
+  .subbar { gap: 4px; }
+  .subbar .seg button { padding: 4px 6px; font-size: 11.5px; }
+  .subbar #tag-btn { padding: 4px 9px; }
+  .subbar #tag-btn .count { display: none; }   /* the chosen tags are listed under the controls anyway */
+  .cols-pick { padding-left: 6px; }
+  .cols-pick select { padding-right: 15px; background-position: calc(100% - 8px) 55%, calc(100% - 4px) 55%; }
+}
 
 /* ---- links ---- */
 .link-form { display: flex; gap: 8px; width: min(520px, 100%); margin-top: 6px; }
