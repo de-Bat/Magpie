@@ -445,6 +445,10 @@ class Database:
             "cost_usd": round(cost["cost"], 4), "runs": cost["runs"], "web_searches": cost["searches"],
             "via": sorted((cost["how"] or "").split(",")) if cost["how"] else [],
         }
+        last = self.conn.execute(
+            "SELECT analyzer, model FROM analysis_runs WHERE item_id = ? AND ok = 1 AND analyzer != 'ocr' "
+            "ORDER BY id DESC LIMIT 1", (item["id"],)).fetchone()
+        item["usage"]["model"] = (last["model"] or last["analyzer"]) if last else None
         item["batch_pending"] = self.conn.execute(
             "SELECT 1 FROM batch_jobs WHERE item_id = ? LIMIT 1", (item["id"],)).fetchone() is not None
         return item

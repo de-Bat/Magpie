@@ -1627,7 +1627,7 @@ function renderGrid() {
   $("#grid").innerHTML = items.map((item) => `
     <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
-      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div></div>
+      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div>${item.status === "ready" && item.usage?.model ? `<div class="by-model" title="Resolved by ${esc(item.usage.model)}">${esc(item.usage.model)}</div>` : ""}</div>
       ${isUnverified(item) ? `<button class="verify-btn" type="button" data-verify="${esc(item.id)}" title="Mark this identification as correct">✓ Verify</button>` : ""}
     </article>`).join("");
 
@@ -1717,6 +1717,7 @@ function confidenceHtml(item, { fixButton = true } = {}) {
         ${fixButton ? `<button class="btn small" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
       </div>
       ${item.confidence_reason && !item.corrected ? `<div class="meta-line">${esc(item.confidence_reason)}</div>` : ""}
+      ${item.usage?.model ? `<div class="meta-line resolved-by">Resolved by ${esc(item.usage.model)}</div>` : ""}
       ${alts.length && !item.corrected ? `<div class="alternatives"><span class="meta-line">Did you mean:</span>
         ${alts.map((a, i) => `<button class="chip" data-alt="${i}" title="${esc(a.why || "")}">${esc(a.title)}${a.year ? ` (${esc(a.year)})` : ""} · ${esc((CATEGORY_LABELS[a.category] || a.category || "").replace(/^\S+ /, ""))}</button>`).join("")}
       </div>` : ""}
