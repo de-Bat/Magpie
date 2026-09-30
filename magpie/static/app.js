@@ -1304,13 +1304,13 @@ function coverTitleHtml(item) {
   const text = item.title || hostOf(item.source_url) || cardTitle(item);
   const repo = item.category === "github_repo" && /^[^/\s]+\/[^/\s]+$/.test(text) ? text.split("/") : null;
   const main = repo ? repo[1] : text;
-  const len = main.length;
-  // Shorter titles are set bigger, but never so big that the longest word has to break (bold ≈ 0.72em a letter,
-  // 86% of the cover's width available).
-  const byLength = len <= 12 ? 17 : len <= 28 ? 12.5 : len <= 60 ? 9.5 : 7.5;
+  // Two lines at most. Short titles are set big; longer ones smaller so that they fit two lines (a very long one is
+  // cut with an ellipsis, and the full title is right under the card). The longest word must fit a line unbroken
+  // (bold ≈ 0.72em a letter, 86% of the cover's width available).
   const longest = Math.max(...main.split(/[\s/_-]+/).map((w) => w.length), 1);
-  const size = Math.min(byLength, 86 / (0.72 * longest)).toFixed(1);
-  const lines = len <= 12 ? 3 : len <= 28 ? 4 : len <= 60 ? 5 : 6;
+  const fitTwoLines = (2 * 86) / (0.68 * (main.length + 3));
+  const size = Math.max(6, Math.min(17, fitTwoLines, 86 / (0.72 * longest))).toFixed(1);
+  const lines = 2;
   return `<span class="cover-title" style="--fs:${size}cqw;--lines:${lines}" aria-hidden="true">${repo ? `<small>${esc(repo[0])}/</small>${esc(repo[1])}` : esc(text)}</span>`;
 }
 

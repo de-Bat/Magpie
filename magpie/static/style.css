@@ -126,7 +126,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .cover.busy::after { z-index: 2; }
 .cover.has-img::before, .cover.wide-img::before { display: none; }
 .cover-title { position: absolute; left: 7%; right: 7%; bottom: 7%; font-weight: 800; line-height: 1.02; letter-spacing: -.02em;
-  text-wrap: balance; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--lines, 5);
+  text-wrap: balance; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--lines, 2);
   font-size: clamp(11px, var(--fs, 10cqw), 64px);
   overflow: hidden; text-shadow: 0 1px 12px rgb(0 0 0 / .25); }
 .cover-title small { display: block; font-size: .5em; font-weight: 600; letter-spacing: 0; opacity: .75; margin-bottom: .15em; }
@@ -187,7 +187,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 @container (max-width: 110px) {
   .cover-title { display: none; }
   .glyph { width: 70%; right: 15%; bottom: 18%; opacity: .35; }
-  .card .title { font-size: 12px; -webkit-line-clamp: 3; min-height: 3.75em; }
+  .card .title { font-size: 12px; }
   .card .meta { display: none; }
   .flag { width: 18px; height: 18px; font-size: 10px; right: 6px; top: 6px; }
   .typechip { left: 6px; top: 6px; }
