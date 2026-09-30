@@ -699,3 +699,82 @@ def test_verified_threshold_is_configurable_and_items_can_be_confirmed(settings)
         # a fresh analysis is a new identification: not confirmed any more
         client.post(f"/api/items/{item_id}/reanalyze")
         assert get()["confirmed"] is False and get()["verified"] is False
+
+
+async def test_page_picture_falls_back_to_oembed_and_the_site_icon(settings):
+    import httpx
+    html = ('<html><head><meta property="og:image" content="/dead.png">'
+            '<link rel="alternate" type="application/json+oembed" href="https://blog.example/oembed?u=1"></head></html>')
+    routes = {"https://blog.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://blog.example/oembed": httpx.Response(200, json={"thumbnail_url": "https://blog.example/thumb.png"}),
+              "https://blog.example/thumb.png": httpx.Response(200, content=_png((640, 360)), headers={"content-type": "image/png"})}
+    a = analysis(category="other", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://blog.example/thumb.png"
+    # a blocked page still yields the site's touch icon... and a YouTube video its thumbnail
+    routes = {"https://www.youtube.com/watch?v=abcdefghijk": httpx.Response(403),
+              "https://i.ytimg.com/vi/abcdefghijk/maxresdefault.jpg": httpx.Response(404),
+              "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg": httpx.Response(200, content=_png((480, 360)), headers={"content-type": "image/png"})}
+    a = analysis(category="video", canonical_url="https://www.youtube.com/watch?v=abcdefghijk", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"
+
+
+def test_content_images_use_the_largest_srcset_and_lazy_sources():
+    from magpie.images import content_images
+    html = ('<img src="data:image/gif;base64,R0lG" data-src="/lazy.jpg"><img src="/small.jpg" srcset="/a-480.jpg 480w, /a-1200.jpg 1200w">'
+            '<img src="/logo.png"><img src="/px.png" width="1" height="1">')
+    assert content_images(html) == ["/lazy.jpg", "/a-1200.jpg"]
+
+
+async def test_npm_monorepo_readme_and_shipped_logo(settings):
+    import httpx
+    registry = {"dist-tags": {"latest": "2.0.0"}, "readme": "![logo](./assets/logo.png)", "versions": {"2.0.0": {}},
+                "repository": {"url": "git+https://github.com/acme/mono.git", "directory": "packages/pkg"}}
+    routes = {
+        "https://registry.npmjs.org/pkg": httpx.Response(200, json=registry),
+        "https://raw.githubusercontent.com/acme/mono/HEAD/packages/pkg/assets/logo.png": httpx.Response(200, content=_png((300, 300)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", canonical_url="https://www.npmjs.com/package/pkg", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "npm").image_url == "https://raw.githubusercontent.com/acme/mono/HEAD/packages/pkg/assets/logo.png"
+    # a package without a repository: relative README images resolve against its files on the CDN, and shipped logos are found
+    registry = {"dist-tags": {"latest": "1.0.0"}, "readme": "<img src='docs/hero.png'>", "versions": {"1.0.0": {}}}
+    routes = {
+        "https://registry.npmjs.org/solo": httpx.Response(200, json=registry),
+        "https://data.jsdelivr.com/v1/package/npm/solo@1.0.0/flat": httpx.Response(200, json={"files": [{"name": "/dist/x.js"}, {"name": "/assets/logo.png"}]}),
+        "https://cdn.jsdelivr.net/npm/solo@1.0.0/docs/hero.png": httpx.Response(404),
+        "https://cdn.jsdelivr.net/npm/solo@1.0.0/assets/logo.png": httpx.Response(200, content=_png((256, 256)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", canonical_url="https://www.npmjs.com/package/solo", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "npm").image_url == "https://cdn.jsdelivr.net/npm/solo@1.0.0/assets/logo.png"
+
+
+async def test_hugging_face_model_gets_facts_and_a_card_picture(settings):
+    import httpx
+    from magpie.links import classify
+    model = {"pipeline_tag": "text-generation", "library_name": "transformers", "downloads": 1234, "likes": 56,
+             "tags": ["transformers", "safetensors", "license:apache-2.0", "region:us", "llama"], "lastModified": "2026-01-01T00:00:00Z",
+             "cardData": {"license": "apache-2.0"}, "safetensors": {"total": 7_200_000_000}}
+    routes = {
+        "https://huggingface.co/api/models/acme/tiny-7b": httpx.Response(200, json=model),
+        "https://huggingface.co/acme/tiny-7b/raw/main/README.md": httpx.Response(200, text="---\nlicense: apache-2.0\n---\n![banner](banner.png)"),
+        "https://huggingface.co/acme/tiny-7b/resolve/main/banner.png": httpx.Response(200, content=_png((1200, 400)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", canonical_url="https://huggingface.co/acme/tiny-7b", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    hf = next(e for e in results if e.source == "huggingface")
+    assert hf.image_url == "https://huggingface.co/acme/tiny-7b/resolve/main/banner.png"
+    assert hf.metadata["task"] == "text-generation" and hf.metadata["license"] == "apache-2.0" and hf.metadata["parameters"] == "7.2B"
+    assert "transformers" in hf.tags and not any(":" in t for t in hf.tags)
+    # links to models, datasets and spaces are recognized without a model call
+    assert classify("https://huggingface.co/acme/tiny-7b/tree/main", None)["title"] == "acme/tiny-7b"
+    assert classify("https://huggingface.co/datasets/acme/words", None)["canonical_url"] == "https://huggingface.co/datasets/acme/words"
+    assert classify("https://huggingface.co/spaces/acme/demo", None)["category"] == "app"
+    assert classify("https://huggingface.co/docs/hub", None) is None

@@ -107,7 +107,7 @@ MIGRATIONS = {
 REVIEW_THRESHOLD = 60
 # Metadata sources that confirm what an item is (as opposed to the model's say-so or a generic page card).
 VERIFIED_CONFIDENCE = 90   # default: a confident model answer counts as verified (settings: MAGPIE_VERIFIED_CONFIDENCE)
-VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"}
+VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm", "huggingface"}
 
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",

@@ -12,7 +12,7 @@ import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from .enrich import Page, _ld_image, _ld_name, _ld_types
+from .enrich import Page, _ld_image, _ld_name, _ld_types, hf_repo
 from .readability import Article
 
 TRACKING_PARAMS = re.compile(r"^(utm_\w+|fbclid|gclid|dclid|msclkid|igshid|igsh|mc_cid|mc_eid|ref_src|ref_url|_hsenc|_hsmi)$", re.I)
@@ -135,6 +135,10 @@ def classify(url: str, page: Page | None) -> dict | None:
         name = "/".join(segments[1:3]) if segments[1].startswith("@") and len(segments) > 2 else segments[1]
         out.update(category="app", title=name, canonical_url=f"https://www.npmjs.com/package/{name}", confidence=95)
         reason = f"npm package link ({name})"
+    elif host.endswith("huggingface.co") and (ref := hf_repo({"canonical_url": url})):
+        out.update(category="app", title=ref[1], confidence=95,
+                   canonical_url=f"https://huggingface.co/{'' if ref[0] == 'models' else ref[0] + '/'}{ref[1]}")
+        reason = f"Hugging Face {ref[0].removesuffix('s')} link ({ref[1]})"
     elif host == "youtube.com" and (parts.path == "/watch" or segments[:1] == ["shorts"]):
         out.update(category="video", confidence=85)
         reason = "YouTube video link"

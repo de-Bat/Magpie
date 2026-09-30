@@ -12,14 +12,15 @@ import time
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
 from . import readability
 from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
-from .images import best_image, page_image_candidates, readme_images
+from .images import (best_image, oembed_thumbnail, origin_icons, package_logos, page_image_candidates, readme_images,
+                     youtube_thumbnails)
 
 log = logging.getLogger(__name__)
 
@@ -178,8 +179,13 @@ async def enrich_npm(analysis: dict, settings: Settings, http: httpx.AsyncClient
         else:
             candidates.append(image)
     if isinstance(d.get("readme"), str):
-        # relative image paths only resolve when we know the repository
-        candidates += [u for u in readme_images(d["readme"], full_name or "") if full_name or not u.startswith("https://raw.githubusercontent.com//")]
+        # The package's README refers to files relative to the package: in a monorepo that is its folder in the
+        # repository, otherwise the package's own files (served by jsDelivr).
+        directory = repo.get("directory") if isinstance(repo, dict) else None
+        base = (f"https://raw.githubusercontent.com/{full_name}/HEAD/{directory.strip('/')}/" if full_name and directory
+                else f"https://cdn.jsdelivr.net/npm/{name}@{latest}/" if latest else None)
+        candidates += readme_images(d["readme"], full_name or "", base=base)
+    candidates += await package_logos(http, name, latest)   # logo.png, banner.png, ... shipped in the package
     if isinstance(homepage, str) and homepage.startswith("http") and "github.com" not in homepage:
         page = await fetch_page(homepage, http)
         if page:
@@ -194,6 +200,78 @@ async def enrich_npm(analysis: dict, settings: Settings, http: httpx.AsyncClient
         metadata=meta, canonical_url=f"https://www.npmjs.com/package/{name}", image_url=image,
         subtitle=d.get("description"), links=links, tags=[str(k).lower() for k in (d.get("keywords") or [])[:5]],
         source="npm", matched_title=name,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hugging Face models, datasets and spaces
+
+
+HF_RESERVED = {"docs", "blog", "papers", "collections", "models", "tasks", "pricing", "join", "login", "settings",
+               "organizations", "api", "chat", "learn", "enterprise", "posts", "new", "welcome", "huggingface"}
+HF_KINDS = {"models": "model", "datasets": "dataset", "spaces": "space"}
+
+
+def hf_repo(analysis: dict) -> tuple[str, str] | None:
+    """(kind, id) of a Hugging Face model, dataset or space named by the item's links."""
+    for c in [analysis.get("canonical_url"), *[l.get("url") for l in analysis.get("links") or []]]:
+        parts = urlsplit(c or "")
+        if not (parts.hostname or "").lower().endswith("huggingface.co"):
+            continue
+        seg = [s for s in parts.path.split("/") if s]
+        if len(seg) >= 2 and seg[0] in ("datasets", "spaces"):
+            return seg[0], "/".join(seg[1:3]) if len(seg) >= 3 else seg[1]
+        if len(seg) >= 2 and seg[0].lower() not in HF_RESERVED:
+            return "models", "/".join(seg[:2])
+    return None
+
+
+async def enrich_huggingface(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
+    """A Hugging Face model, dataset or space: facts from its API and a picture from its card."""
+    ref = hf_repo(analysis)
+    if not ref:
+        return None
+    kind, rid = ref
+    r = await http.get(f"https://huggingface.co/api/{kind}/{rid}")
+    if r.status_code != 200:
+        return None
+    d = r.json()
+    card = d.get("cardData") if isinstance(d.get("cardData"), dict) else {}
+    tags = [t for t in d.get("tags") or [] if isinstance(t, str)]
+    license_ = card.get("license") or next((t.split(":", 1)[1] for t in tags if t.startswith("license:")), None)
+    params = (d.get("safetensors") or {}).get("total") if isinstance(d.get("safetensors"), dict) else None
+    meta = {
+        "huggingface_id": rid, "huggingface_kind": HF_KINDS[kind], "task": d.get("pipeline_tag"), "library": d.get("library_name"),
+        "license": license_ if isinstance(license_, str) else None, "downloads": d.get("downloads"), "likes": d.get("likes"),
+        "last_modified": d.get("lastModified"), "sdk": d.get("sdk"), "gated": True if d.get("gated") else None,
+        "base_model": card.get("base_model") if isinstance(card.get("base_model"), str) else None,
+        "parameters": f"{params / 1e9:.1f}B" if isinstance(params, (int, float)) and params >= 1e8 else None,
+    }
+    page_url = f"https://huggingface.co/{'' if kind == 'models' else kind + '/'}{rid}"
+    resolve = f"{page_url}/resolve/main/"
+    candidates: list[str] = []
+    thumb = card.get("thumbnail")   # spaces set one in their card: a URL or a path in the repo
+    if isinstance(thumb, str) and thumb:
+        candidates.append(thumb if thumb.startswith("http") else resolve + thumb.lstrip("/"))
+    try:
+        rr = await http.get(f"{page_url}/raw/main/README.md")
+        readme = re.sub(r"\A---\n.*?\n---\n", "", rr.text, flags=re.S) if rr.status_code == 200 else ""
+    except httpx.HTTPError:
+        readme = ""
+    candidates += readme_images(readme, "", base=resolve)
+    page = await fetch_page(page_url, http)
+    if page:
+        candidates += page_image_candidates(page)   # includes Hugging Face's generated social card
+    owner = rid.split("/")[0]
+    candidates += [f"https://huggingface.co/api/organizations/{owner}/avatar?redirect=true",
+                   f"https://huggingface.co/api/users/{owner}/avatar?redirect=true"]   # the owner's logo, as a last resort
+    image = await best_image(http, candidates)
+    skip = ("region:", "license:", "endpoints_compatible", "autotrain_compatible", "text-generation-inference")
+    return Enrichment(
+        metadata=meta, canonical_url=page_url, image_url=image, subtitle=" · ".join(x for x in (d.get("pipeline_tag"), d.get("library_name")) if x) or None,
+        links=[{"label": "Hugging Face", "url": page_url}],
+        tags=[t for t in ([d.get("pipeline_tag")] + tags) if t and ":" not in t and not t.startswith(skip)][:5],
+        source="huggingface", matched_title=rid,
     )
 
 
@@ -400,11 +478,12 @@ class _PageParser(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = {k.lower(): (v or "") for k, v in attrs}
         if tag == "meta":
-            key = a.get("property") or a.get("name")
+            key = a.get("property") or a.get("name") or a.get("itemprop")
             if key and a.get("content") and key.lower() not in self.meta:
                 self.meta[key.lower()] = a["content"]
-        elif tag == "link" and a.get("href") and a.get("rel"):
-            self.links.append({"rel": a["rel"].lower(), "href": a["href"], "sizes": a.get("sizes", "")})
+        elif tag == "link" and a.get("href") and (a.get("rel") or a.get("itemprop")):
+            self.links.append({"rel": (a.get("rel") or a.get("itemprop", "")).lower(), "href": a["href"],
+                               "sizes": a.get("sizes", ""), "type": a.get("type", "")})
         elif tag == "script" and a.get("type", "").lower() == "application/ld+json":
             self._in_ld, self._buf = True, []
         elif tag == "title":
@@ -603,16 +682,31 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
         return None
     page = await fetch_page(url, http)
     if not page:
-        return None
+        # Blocked or behind a consent wall: a YouTube video still has a thumbnail we can address directly.
+        thumb = await best_image(http, youtube_thumbnails(url))
+        return Enrichment(image_url=thumb, source="youtube") if thumb else None
     if analysis.get("category") == "recipe":
         found = recipe_from_page(page)
         if found:
             found.image_url = await best_image(http, page_image_candidates(page, [found.image_url]), page.url) or found.image_url
             return found
     e = with_readability(opengraph_from_page(page), page)
-    # Check the page's candidate pictures (share image, structured data, lead picture, ...) and keep the first real one.
-    e.image_url = await best_image(http, page_image_candidates(page, [e.image_url]), page.url) or e.image_url
+    e.image_url = await page_picture(http, page, e.image_url)
     return e
+
+
+async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = None) -> str | None:
+    """The best picture a web page offers, trying progressively less direct sources:
+    1. its own candidates (share image, structured data, lead and content pictures, touch icon), checked;
+    2. the oEmbed thumbnail, the video's own thumbnail, the site's icon at its usual address;
+    3. failing all checks, the first candidate that merely couldn't be ruled out (a host may refuse servers but serve browsers)."""
+    candidates = page_image_candidates(page, [lead])
+    found = await best_image(http, candidates, page.url, verified_only=True)
+    if found:
+        return found
+    extra = [await oembed_thumbnail(http, page), *youtube_thumbnails(page.url), *origin_icons(page.url)]
+    found = await best_image(http, extra, page.url, verified_only=True)
+    return found or await best_image(http, candidates, page.url) or lead
 
 
 def with_readability(e: Enrichment, page: Page) -> Enrichment:
@@ -649,6 +743,8 @@ ENRICHERS = {
     "recipe": [enrich_web],
 }
 DEFAULT_ENRICHERS = [enrich_web]
+# Sources recognized from the item's links, whatever its category: (does it name this source?, enricher)
+URL_ENRICHERS = [(npm_package, enrich_npm), (hf_repo, enrich_huggingface)]
 
 
 async def run_enrichers(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> list[Enrichment]:
@@ -656,8 +752,9 @@ async def run_enrichers(analysis: dict, settings: Settings, http: httpx.AsyncCli
     if not settings.enrich:
         return results
     fns = list(ENRICHERS.get(analysis.get("category"), DEFAULT_ENRICHERS))
-    if npm_package(analysis) and enrich_npm not in fns:
-        fns.append(enrich_npm)  # after the page enricher, so the package's own picture wins
+    for detect, fn in URL_ENRICHERS:
+        if detect(analysis) and fn not in fns:
+            fns.append(fn)  # after the page enricher, so the source's own picture wins
     for fn in fns:
         try:
             e = await fn(analysis, settings, http)

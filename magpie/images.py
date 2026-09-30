@@ -10,7 +10,7 @@ import logging
 import re
 import time
 from typing import Any, Iterable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -84,9 +84,9 @@ async def _verify(http: httpx.AsyncClient, url: str) -> bool | None:
 
 
 async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], base: str | None = None,
-                     last_resort: str | None = None) -> str | None:
+                     last_resort: str | None = None, verified_only: bool = False) -> str | None:
     """The first candidate that is a real picture. When none could be checked, the first that
-    couldn't be ruled out; `last_resort` (e.g. a generated card) is used without a check."""
+    couldn't be ruled out (unless `verified_only`); `last_resort` (e.g. a generated card) is used without a check."""
     seen: list[str] = []
     for c in candidates:
         if not c or not isinstance(c, str):
@@ -101,7 +101,62 @@ async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], 
             return url
         if verdict is None and unknown is None:
             unknown = url
-    return unknown or last_resort
+    return (None if verified_only else unknown) or last_resort
+
+
+def _best_srcset(value: str | None) -> str | None:
+    """The largest picture in a srcset ("a.jpg 480w, b.jpg 1200w")."""
+    best, best_w = None, -1
+    for part in (value or "").split(","):
+        bits = part.strip().split()
+        if not bits:
+            continue
+        m = re.match(r"(\d+(?:\.\d+)?)[wx]", bits[1]) if len(bits) > 1 else None
+        w = float(m.group(1)) if m else 0
+        if w > best_w:
+            best, best_w = bits[0], w
+    return best
+
+
+def youtube_thumbnails(url: str | None) -> list[str]:
+    """The video's own thumbnail, without loading the page (YouTube often answers servers with a consent wall)."""
+    m = re.search(r"(?:youtube\.com/(?:watch\?(?:[^#]*&)?v=|shorts/|embed/|live/)|youtu\.be/)([\w-]{11})", url or "")
+    return [f"https://i.ytimg.com/vi/{m.group(1)}/maxresdefault.jpg", f"https://i.ytimg.com/vi/{m.group(1)}/hqdefault.jpg"] if m else []
+
+
+async def oembed_thumbnail(http: httpx.AsyncClient, page: Any) -> str | None:
+    """The thumbnail an oEmbed endpoint advertises on the page (video, audio and social sites publish one)."""
+    for l in getattr(page, "links", []):
+        if "oembed" in (l.get("type") or "").lower() and "json" in (l.get("type") or "").lower():
+            try:
+                r = await safe_get(http, urljoin(page.url, l["href"]), headers={"User-Agent": BROWSER_UA}, timeout=8)
+                thumb = r.json().get("thumbnail_url") if r.status_code == 200 else None
+            except (httpx.HTTPError, BlockedURL, ValueError, AttributeError):
+                return None
+            return thumb if isinstance(thumb, str) else None
+    return None
+
+
+_LOGO_FILE = re.compile(r"(^|/)(logo|icon|banner|hero|header|social[-_]?preview|og[-_]?image)[^/]*\.(png|jpe?g|webp|gif)$", re.I)
+
+
+async def package_logos(http: httpx.AsyncClient, name: str, version: str | None) -> list[str]:
+    """Logo-like files shipped inside an npm package (jsDelivr lists a package's files), shallowest first."""
+    if not version:
+        return []
+    try:
+        r = await http.get(f"https://data.jsdelivr.com/v1/package/npm/{name}@{version}/flat", timeout=8)
+        files = [f.get("name", "") for f in r.json().get("files", [])] if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return []
+    hits = sorted((f for f in files if _LOGO_FILE.search(f) and "node_modules" not in f and "/test" not in f), key=lambda f: (f.count("/"), len(f)))
+    return [f"https://cdn.jsdelivr.net/npm/{name}@{version}{f}" for f in hits[:3]]
+
+
+def origin_icons(url: str) -> list[str]:
+    """The site's touch icon at its conventional address, for pages that block us or don't declare one."""
+    parts = urlsplit(url)
+    return [f"{parts.scheme}://{parts.netloc}/apple-touch-icon.png"] if parts.netloc else []
 
 
 def _ld_images(node: dict) -> list[str]:
@@ -125,7 +180,8 @@ def content_images(html: str, limit: int = 3) -> list[str]:
     """The first few pictures in the page body that look like content, not chrome."""
     found: list[str] = []
     for tag in _IMG_TAG.findall(html or ""):
-        src = _attr(tag, "data-src") or _attr(tag, "src")
+        src = (_best_srcset(_attr(tag, "data-srcset") or _attr(tag, "srcset")) or _attr(tag, "data-src")
+               or _attr(tag, "data-lazy-src") or _attr(tag, "data-original") or _attr(tag, "src"))
         if not src or src.startswith("data:") or not looks_usable(urljoin("https://x/", src)):
             continue
         if re.search(r"logo|icon|avatar|profile|author|thumb-?small", src, re.I):
@@ -145,10 +201,10 @@ def page_image_candidates(page: Any, extra: Iterable[str | None] = ()) -> list[s
     """Every picture a web page offers for itself, best first: its own share image, structured data,
     the lead picture, the first content pictures, and last the site's icon."""
     m = page.meta
-    out: list[str | None] = [m.get(k) for k in ("og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src")]
+    out: list[str | None] = [m.get(k) for k in ("og:image:secure_url", "og:image", "og:image:url", "twitter:image", "twitter:image:src", "image", "thumbnail")]
     for node in page.ld:
         out += _ld_images(node)
-    out += [l["href"] for l in getattr(page, "links", []) if "image_src" in l["rel"].split()]
+    out += [l["href"] for l in getattr(page, "links", []) if {"image_src", "image"} & set(l["rel"].split())]
     out += list(extra)
     out += content_images(page.html)
     def side(l: dict) -> int:
@@ -163,9 +219,10 @@ def page_image_candidates(page: Any, extra: Iterable[str | None] = ()) -> list[s
 _README_IMG = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)|<img\b[^>]*?\bsrc=(?:["\']([^"\']+)["\']|([^\s>"\']+))', re.I)
 
 
-def readme_images(markdown: str, full_name: str, limit: int = 3) -> list[str]:
+def readme_images(markdown: str, full_name: str, limit: int = 3, base: str | None = None) -> list[str]:
     """The first real pictures near the top of a README (its header or logo), skipping badges and SVGs
-    (which the mobile app can't draw). Relative paths are resolved against the repository."""
+    (which the mobile app can't draw). Relative paths are resolved against `base` (e.g. a package's files on a
+    CDN) or, by default, the GitHub repository."""
     found: list[str] = []
     for m in _README_IMG.finditer((markdown or "")[:8000]):
         src = (m.group(1) or m.group(2) or m.group(3) or "").strip()
@@ -174,7 +231,12 @@ def readme_images(markdown: str, full_name: str, limit: int = 3) -> list[str]:
         if src.startswith("//"):
             src = "https:" + src
         elif not src.startswith("http"):
-            src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.removeprefix('./').lstrip('/')}"
+            if base:
+                src = urljoin(base if base.endswith("/") else base + "/", src.removeprefix("./"))
+            elif full_name:
+                src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.removeprefix('./').lstrip('/')}"
+            else:
+                continue  # a relative path we can't resolve
         if looks_usable(src) and src not in found:
             found.append(src)
         if len(found) >= limit:
