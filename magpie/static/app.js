@@ -1349,14 +1349,6 @@ function cardMeta(item) {
 
 // How many columns fit: up to 4 on a phone (a card needs room to be read), 8 on a wide screen.
 const maxColumns = () => (window.innerWidth < 760 ? 4 : 8);
-function currentColumns() {
-  return getComputedStyle($("#grid")).gridTemplateColumns.split(" ").filter(Boolean).length || 2;
-}
-function stepColumns(delta) {
-  const from = Math.min(state.cols || currentColumns(), maxColumns());
-  state.cols = Math.max(1, Math.min(maxColumns(), from + delta));
-  try { localStorage.setItem("magpie.columns", String(state.cols)); } catch {}
-}
 window.addEventListener("resize", () => { if (state.cols) renderGrid(); });
 
 function renderGrid() {
@@ -1368,7 +1360,11 @@ function renderGrid() {
   $("#grid").className = `grid ${state.layout === "list" ? "list" : cols ? `cols${cols >= 6 ? " dense" : ""}` : ""}`;
   $("#grid").style.setProperty("--cols", cols || "");
   $("#cols-ctl").hidden = state.layout === "list";
-  $("#cols-label").textContent = cols ? `${cols} col${cols > 1 ? "s" : ""}` : "Auto";
+  const pick = $("#cols-select");   // Auto, then 1 up to what fits this screen
+  const max = maxColumns();
+  const wanted = ["0", ...Array.from({ length: max }, (_, i) => String(i + 1))];
+  if (pick.options.length !== wanted.length) pick.innerHTML = wanted.map((v) => `<option value="${v}">${v === "0" ? "Auto" : v}</option>`).join("");
+  pick.value = String(cols);
   $("#grid").innerHTML = items.map((item) => `
     <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
@@ -1628,6 +1624,11 @@ $("#search").addEventListener("input", (e) => {
   searchTimer = setTimeout(() => { state.q = e.target.value.trim(); renderGrid(); }, 120);
 });
 $("#tag-filter").addEventListener("input", renderFilters);
+$("#cols-select").addEventListener("change", (e) => {
+  state.cols = Number(e.target.value);
+  try { localStorage.setItem("magpie.columns", String(state.cols)); } catch {}
+  renderGrid();
+});
 
 // Keyboard: / searches, N adds, Esc closes the tag list, arrows move between cards.
 document.addEventListener("keydown", (e) => {
@@ -1664,7 +1665,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-verify],[data-cols],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1683,9 +1684,7 @@ document.addEventListener("click", async (e) => {
     return field?.focus();
   }
   if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
-  if (t.dataset.cols !== undefined) {
-    stepColumns(Number(t.dataset.cols));
-  } else if (t.dataset.tab !== undefined) {
+  if (t.dataset.tab !== undefined) {
     state.tab = t.dataset.tab;
   } else if (t.dataset.show !== undefined) {
     state.show = t.dataset.show;
