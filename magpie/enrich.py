@@ -629,7 +629,12 @@ async def fetch_page(url: str, http: httpx.AsyncClient) -> Page | None:
 # Pages that answered but turned us away (bot walls, rate limits): only these may be looked up elsewhere.
 # Private or blocked addresses never are, so no internal hostname leaves the server.
 _REFUSED: dict[str, float] = {}
+_GONE: dict[str, float] = {}   # answered 404/410, or the name doesn't exist: the link is dead, not just unreachable right now
 REFUSING_STATUSES = {401, 403, 406, 429, 451, 500, 502, 503, 520, 521, 522, 523, 524, 525, 526}
+
+
+def link_is_gone(url: str) -> bool:
+    return time.monotonic() - _GONE.get(url, -1e9) < PAGE_CACHE_SECONDS
 
 
 def page_refused(url: str) -> bool:
@@ -642,7 +647,13 @@ async def _fetch_page(url: str, http: httpx.AsyncClient) -> Page | None:
                                                "Accept-Language": "en-US,en;q=0.9"})
     except (httpx.HTTPError, BlockedURL) as e:
         log.info("Fetching %s failed: %s", url, e)
+        if isinstance(e, BlockedURL) and "Can't resolve" in str(e):
+            _GONE[url] = time.monotonic()   # no such host
         return None
+    if r.status_code in (404, 410):
+        if len(_GONE) > 500:
+            _GONE.clear()
+        _GONE[url] = time.monotonic()
     if r.status_code in REFUSING_STATUSES:
         if len(_REFUSED) > 500:
             _REFUSED.clear()

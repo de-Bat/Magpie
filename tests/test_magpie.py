@@ -874,3 +874,53 @@ def test_a_dead_image_link_from_the_model_is_dropped(settings):
     with client:
         item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
         assert client.get(f"/api/items/{item_id}").json()["image_url"] is None
+
+
+TITLE = "Two old GPUs I salvaged are doing more AI work than a brand new $2000 card, and I won't be upgrading anytime soon"
+
+
+def _ddg(*urls):
+    from urllib.parse import quote
+    body = "".join(f'<a class="result__a" href="//duckduckgo.com/l/?uddg={quote(u, safe="")}&amp;rut=x">r</a>' for u in urls)
+    return httpx.Response(200, text=f"<html><body>{body}</body></html>", headers={"content-type": "text/html"})
+
+
+def _article_page(title):
+    return httpx.Response(200, text=f'<html><head><title>{title} | XDA</title><meta property="og:title" content="{title}"></head></html>',
+                          headers={"content-type": "text/html"})
+
+
+async def test_invented_article_link_is_replaced_by_the_real_one(settings):
+    from magpie.findlink import repair_link
+    routes = {"https://www.xda-developers.com/two-old-gpus": httpx.Response(404),
+              "https://html.duckduckgo.com/html/": _ddg("https://other.example/unrelated", "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"),
+              "https://other.example/unrelated": _article_page("A completely different story"),
+              "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": _article_page(TITLE)}
+    a = analysis(category="article", title=TITLE, canonical_url="https://www.xda-developers.com/two-old-gpus", details=blank_details())
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+
+
+async def test_no_link_is_better_than_a_dead_one(settings):
+    from magpie.findlink import repair_link
+    routes = {"https://www.xda-developers.com/gone": httpx.Response(404), "https://html.duckduckgo.com/html/": _ddg()}
+    a = analysis(category="article", title=TITLE, canonical_url="https://www.xda-developers.com/gone", details=blank_details())
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] is None and "doesn't work" in fixed["confidence_reason"]
+
+
+async def test_working_blocked_and_shared_links_are_left_alone(settings):
+    from magpie.findlink import repair_link
+    asked = []
+    def handler(request):
+        asked.append(str(request.url))
+        if request.url.host == "good.example":
+            return _article_page(TITLE)
+        return httpx.Response(403)   # a bot wall: we can't tell whether the link is right
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        for url, extra in [("https://good.example/a", {}), ("https://walled.example/a", {}), ("https://shared.example/a", {"_analyzer": ["link"]})]:
+            a = analysis(category="article", title=TITLE, canonical_url=url, details=blank_details(), **extra)
+            assert (await repair_link(a, http))["canonical_url"] == url
+    assert not any("duckduckgo" in u for u in asked)   # never searched

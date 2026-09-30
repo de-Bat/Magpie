@@ -15,6 +15,7 @@ from .analyzer import AnalysisError
 from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import links, readability
+from .findlink import repair_link
 from .images import best_image
 from .enrich import fetch_page
 from .config import Settings
@@ -268,6 +269,9 @@ class Pipeline:
                     "canonical_url": item.get("canonical_url"), "image_url": None, "links": [], "tags": [],
                     "details": {**(stored.get("details") or {}), **{k: v for k, v in (item.get("metadata") or {}).items()
                                                                      if k in ("imdb_id", "github_full_name", "author", "isbn")}}}
+        repaired = await repair_link({**analysis, "_analyzer": ["link"] if item.get("kind") == "url" else []}, self.http) \
+            if self.settings.enrich else analysis
+        analysis = {**analysis, "canonical_url": repaired.get("canonical_url")}
         fresh = merge(analysis, await run_enrichers(analysis, self.settings, self.http))
         links, seen = list(item.get("links") or []), {l.get("url") for l in item.get("links") or []}
         links += [l for l in fresh["links"] if l["url"] not in seen]
@@ -277,7 +281,7 @@ class Pipeline:
             "links": links,
             "subtitle": item.get("subtitle") or fresh["subtitle"],
             "summary": item.get("summary") or fresh["summary"],
-            "canonical_url": item.get("canonical_url") or fresh["canonical_url"],
+            "canonical_url": analysis["canonical_url"] or fresh["canonical_url"],   # a dead link is replaced, or dropped
         }
         return self.db.update_item(item_id, **changes)
 
@@ -307,6 +311,8 @@ class Pipeline:
         return run.to_dict()
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
+        if self.settings.enrich:
+            analysis = await repair_link(analysis, self.http)   # a made-up address becomes the real article's, or none
         enrichments = await run_enrichers(analysis, self.settings, self.http)
         fields = merge(analysis, enrichments)
         if fields["image_url"] and not any(e.image_url for e in enrichments):
