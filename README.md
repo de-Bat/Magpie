@@ -117,12 +117,12 @@ These cost controls are on by default:
 - **`MAGPIE_FETCH_MAX_TOKENS=8000`:** caps how much of each fetched web page Claude reads.
 - **Hybrid mode:** only screenshots the local model is unsure about go to Claude.
 
-**Real costs are measured.** Magpie records the tokens, web searches, time and cost of every analysis. See them under **$ Usage & cost** in the web app, in Settings in the iOS app, per item in its details, or via `GET /api/usage`. The full breakdown, assumptions and tuning advice are in **[docs/COSTS.md](docs/COSTS.md)**.
+**Real costs are measured.** Magpie records the tokens, web searches, time and cost of every analysis. See them by clicking the budget pill in the top bar (**Usage & cost**) in the web app, in Settings in the iOS app, per item in its details, or via `GET /api/usage`. The full breakdown, assumptions and tuning advice are in **[docs/COSTS.md](docs/COSTS.md)**.
 
 ## Confidence & corrections
 
 - **Confidence (0–100).** Claude scores its identification based on the evidence: a legible title confirmed by a matching source scores 90+, while a guess from a blurry poster or an ambiguous title (remakes, a book and its film) scores lower. The score comes with a one-line reason.
-- **Needs review.** Anything under 60% gets a "Not sure?" badge and shows up in the **Needs review** filter.
+- **To check.** Anything under 60% gets a "!" marker, and anything no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
 - **Did you mean…** Claude lists up to 3 alternatives. Tap one to switch to it.
 - **Fix it.** Open an item → **Wrong? Fix it**:
   - Change the **title, type, year or link**. Magpie keeps the facts about the post itself (who shared it, where, the screenshot text), throws away the wrong item's poster, scores and details, and looks up the right ones. The model isn't called again.

@@ -12,7 +12,32 @@ const CATEGORY_LABELS = {
   book: "📚 Book", music: "🎵 Music", podcast: "🎙️ Podcast", video: "▶️ Video", article: "📰 Article",
   product: "🛍️ Product", place: "📍 Place", event: "📅 Event", app: "📱 App", course: "🎓 Course", other: "📌 Other",
 };
+// Types whose pictures are landscape (repo social cards, page headers): shown whole over the type's cover, not cropped.
 const WIDE_CATEGORIES = new Set(["github_repo", "article", "video", "product", "app", "other", "place", "event", "course"]);
+const typeName = (c) => (CATEGORY_LABELS[c] || c || "Other").replace(/^\S+ /, "");
+const TABS = [
+  { id: "all", label: "All" },
+  { id: "screen", label: "Movies & TV", cats: ["movie", "tv_show"] },
+  { id: "repo", label: "Repos", cats: ["github_repo"] },
+  { id: "recipe", label: "Recipes", cats: ["recipe"] },
+  { id: "book", label: "Books", cats: ["book"] },
+  { id: "music", label: "Music & podcasts", cats: ["music", "podcast"] },
+  { id: "read", label: "Articles & videos", cats: ["article", "video"] },
+  { id: "place", label: "Places & events", cats: ["place", "event"] },
+  { id: "other", label: "Other", cats: ["product", "app", "course", "other"] },
+];
+const tabOf = (item) => TABS.find((t) => t.cats?.includes(item.category))?.id || "other";
+// What each type's detail sheet lists first (anything else Magpie found follows).
+const FACT_ORDER = {
+  movie: ["release_date", "runtime", "rated", "directors", "cast", "genres", "network_or_studio", "awards", "where_to_watch", "tagline"],
+  tv_show: ["first_air_date", "status", "seasons", "episodes", "creators", "cast", "genres", "network_or_studio", "where_to_watch", "tagline", "rated", "awards"],
+  github_repo: ["programming_language", "license", "last_push", "open_issues", "forks", "topics", "homepage", "archived"],
+  recipe: ["total_time", "prep_time", "cook_time", "servings", "cuisine", "calories", "author"],
+  book: ["author", "authors", "first_publish_year", "pages", "publisher", "isbn", "subjects"],
+  article: ["author", "published", "reading_time", "site"],
+};
+const TYPE_BLOCK = { movie: "Film", tv_show: "Series", github_repo: "Repository", recipe: "Recipe", book: "Book", music: "Release", podcast: "Show",
+  video: "Video", article: "Article", product: "Product", place: "Place", event: "Event", app: "App", course: "Course" };
 
 // Metadata keys shown elsewhere in the detail view (or not useful to show).
 const HIDDEN_META = new Set([
@@ -23,7 +48,7 @@ const HIDDEN_META = new Set([
 ]);
 
 const state = {
-  q: "", category: null, tags: [], review: false, unverified: false,
+  q: "", tab: "all", show: "all", tags: [], layout: (() => { try { return localStorage.getItem("magpie.layout") === "list" ? "list" : "grid"; } catch { return "grid"; } })(),
   items: new Map(),        // id -> item (mirror of the IndexedDB "items" store)
   ops: [],                 // queued changes, oldest first
   sync: "idle",            // idle | syncing | offline | auth | error
@@ -186,6 +211,7 @@ async function mergeServerItem(server) {
 // ---- local changes (all work offline) --------------------------------------
 
 async function addScreenshots(files, note) {
+  $("#add-dialog")?.close();
   const images = [...files].filter((f) => f.type.startsWith("image/"));
   if (!images.length) return toast("Only images can be added.");
   const now = new Date().toISOString();
@@ -210,6 +236,7 @@ async function addScreenshots(files, note) {
 
 // Save a link. Works offline too: it's queued and identified when the server is reachable.
 async function addLink(raw, note) {
+  $("#add-dialog")?.close();
   let url = (raw || "").trim();
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = "https://" + url;
   let parsed;
@@ -376,6 +403,7 @@ async function sync() {
       await db.put("kv", state.lastSync, "lastSync");
     } while (rerun);
     setSyncState("idle");
+    refreshCostPill();
   } catch (e) {
     if (e instanceof HttpError && e.status === 401) setSyncState("auth");
     else if (e instanceof HttpError) setSyncState("error", e.message);
@@ -519,7 +547,7 @@ let settingsTab = "AI provider";  // section shown in the settings dialog
 // Settings edited by the "AI provider" form rather than as separate rows.
 const PROVIDER_ENVS = new Set(["MAGPIE_ANALYZER", "ANTHROPIC_API_KEY", "MAGPIE_MODEL", "MAGPIE_LLM_PROVIDER", "OPENAI_API_KEY", "GEMINI_API_KEY",
   "OPENROUTER_API_KEY", "GROQ_API_KEY", "LOCAL_LLM_URL", "LOCAL_LLM_API_KEY", "LOCAL_LLM_MODEL"]);
-const ADVANCED_GROUPS = ["Identification", "Local LLM"];  // shown under "Advanced" in the AI provider section
+const ADVANCED_GROUPS = ["Identification", "Local LLM", "OCR"];  // shown under "Advanced" in the AI provider section
 const HIDDEN_GROUPS = ["Other AI providers"];
 
 function settingEntry(data, env) {
@@ -850,7 +878,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
               <details class="advanced" ${hasLevel(advanced) ? "open" : ""}><summary>Advanced</summary>
                 ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
             ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
-              ${g.name === "Security" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
+              ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
             ${section("Appearance", appearanceHtml())}
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>
@@ -1026,9 +1054,6 @@ function setSyncState(s, error = null) {
 
 // ---- rendering -------------------------------------------------------------
 
-function imageFor(item) {
-  return safeUrl(item.image_url) || blobUrls.get(item.id) || (item.image_file ? `/media/${encodeURIComponent(item.image_file)}` : null);
-}
 function screenshotFor(item) {
   return blobUrls.get(item.id) || (item.image_file ? `/media/${encodeURIComponent(item.image_file)}` : null);
 }
@@ -1050,15 +1075,22 @@ function searchBlob(item) {
 
 // Ready items that no metadata source (TMDB, GitHub, ...) confirmed and the user hasn't corrected.
 const isUnverified = (item) => item.status === "ready" && !(item.verified ?? item.corrected);
+const needsCheck = (item) => item.needs_review || isUnverified(item);
+
+// "#tag" words in the search box are tag filters, the rest is text.
+function searchTerms() {
+  const parts = fold(state.q).split(/[^\p{L}\p{N}#_+.-]+/u).filter(Boolean);
+  return { words: parts.filter((w) => !w.startsWith("#")).flatMap((w) => w.split(/[^\p{L}\p{N}]+/u)).filter(Boolean),
+           tags: [...state.tags, ...parts.filter((w) => w.startsWith("#") && w.length > 1).map((w) => w.slice(1))] };
+}
 
 function filteredItems() {
-  const words = fold(state.q).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const { words, tags } = searchTerms();
   return [...state.items.values()]
     .filter((item) => {
-      if (state.category && item.category !== state.category) return false;
-      if (state.review && !item.needs_review) return false;
-      if (state.unverified && !isUnverified(item)) return false;
-      if (state.tags.some((t) => !(item.tags || []).includes(t))) return false;
+      if (state.tab !== "all" && tabOf(item) !== state.tab) return false;
+      if (state.show === "check" && !needsCheck(item)) return false;
+      if (tags.some((t) => !(item.tags || []).some((x) => x === t || x.startsWith(t)))) return false;
       if (!words.length) return true;
       const tokens = searchBlob(item).split(/[^\p{L}\p{N}]+/u);
       return words.every((w) => tokens.some((t) => t.startsWith(w)));
@@ -1069,16 +1101,15 @@ function filteredItems() {
 function cardFacts(item) {
   const m = item.metadata || {};
   const facts = [];
-  if (m.imdb_rating) facts.push(`⭐ ${m.imdb_rating.replace("/10", "")}`);
-  else if (m.tmdb_rating) facts.push(`⭐ ${m.tmdb_rating.replace("/10", "")}`);
-  if (m.rotten_tomatoes) facts.push(`🍅 ${m.rotten_tomatoes}`);
+  if (m.year && !["github_repo", "recipe"].includes(item.category)) facts.push(String(m.year));
+  if (m.imdb_rating) facts.push(`★ ${m.imdb_rating.replace("/10", "")}`);
+  else if (m.tmdb_rating) facts.push(`★ ${m.tmdb_rating.replace("/10", "")}`);
   if (m.stars != null) facts.push(`★ ${Number(m.stars).toLocaleString()}`);
   if (m.programming_language) facts.push(m.programming_language);
-  if (m.total_time) facts.push(`⏱ ${m.total_time}`);
-  if (m.reading_time) facts.push(`📖 ${m.reading_time.replace(" read", "")}`);
-  if (m.rating && item.category === "recipe") facts.push(`⭐ ${m.rating}`);
-  if (m.year && !["github_repo", "recipe"].includes(item.category)) facts.push(m.year);
-  return facts.slice(0, 4);
+  if (m.total_time) facts.push(m.total_time);
+  if (m.reading_time) facts.push(m.reading_time.replace(" read", ""));
+  if (m.rating && item.category === "recipe") facts.push(`★ ${m.rating}`);
+  return facts;
 }
 
 function formatUsd(v) {
@@ -1087,52 +1118,113 @@ function formatUsd(v) {
 }
 
 function limitsPanel(c) {
-  const rows = Object.entries(c.limits || {}).map(([id, l]) =>
-    `<tr><td>${esc(PROVIDER_NAMES[id] || id)}</td><td>${esc(limitsText(l) || "—")}</td>
-     <td class="meta-line">${l.requests?.reset ? `resets ${esc(l.requests.reset)} · ` : ""}as of ${esc(new Date(l.updated).toLocaleTimeString())}</td></tr>`).join("");
-  const budget = c.monthly_budget_usd ? `<p class="meta-line">Monthly budget: ${esc(formatUsd(Math.max(0, c.monthly_budget_usd - c.month_spent_usd)))} left of ${esc(formatUsd(c.monthly_budget_usd))}.</p>` : "";
-  return `<h4>What's left</h4>${budget}${rows
-    ? `<table class="usage-table"><tbody>${rows}</tbody></table>`
+  const rows = Object.entries(c.limits || {}).map(([id, l]) => `<div><span>${esc(PROVIDER_NAMES[id] || id)}</span><b>${esc(limitsText(l) || "—")}</b></div>`).join("");
+  return `<h3>What's left</h3>${rows ? `<div class="funnel">${rows}</div>`
     : `<p class="meta-line">Providers report their remaining rate limits (and, for OpenRouter, credit) with each answer. Nothing seen yet: it appears after the next analysis or a key test. Billing balances aren't available from any provider's API.</p>`}`;
 }
 
 const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI", gemini: "Gemini", openrouter: "OpenRouter", groq: "Groq" };
 const providerName = (c) => PROVIDER_NAMES[c.provider] || "Claude";
 
-async function showUsage() {
+const USAGE_KINDS = [["local", "Your own model"], ["batch", "Claude, batched"], ["realtime", "Claude, real time"], ["hosted", "Other providers"]];
+
+function usageKindOf(mode) { return ["local", "batch", "realtime", "hosted"].includes(mode) ? mode : "local"; }
+
+function renderCostPill() {
+  const b = $("#cost-btn"), r = state.usage;
+  if (!r) { b.hidden = true; return; }
+  const c = r.config;
+  b.innerHTML = c.monthly_budget_usd
+    ? `<span class="meter"><span style="width:${Math.min(100, c.month_spent_usd / c.monthly_budget_usd * 100)}%"></span></span>${esc(formatUsd(c.month_spent_usd))} of ${esc(formatUsd(c.monthly_budget_usd))}`
+    : `${esc(formatUsd(c.month_spent_usd))} this month`;
+  b.title = c.monthly_budget_usd ? "Spent this month of your budget. Click for the full breakdown." : "Spent this month. Click for the full breakdown.";
+  b.hidden = false;
+}
+
+let costPillAt = 0;
+async function refreshCostPill(force = false) {
+  if (!force && Date.now() - costPillAt < 60000) return;
+  costPillAt = Date.now();
+  try { state.usage = await api("/api/usage?days=30", { timeout: 8000 }); renderCostPill(); } catch { /* older server, or offline: keep what we have */ }
+}
+
+async function downloadUsageCsv(days) {
+  try {
+    const token = await db.get("kv", "token");
+    const res = await fetch(`/api/usage.csv?days=${days}`, { headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: "no-store" });
+    if (!res.ok) throw new Error(res.statusText);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(await res.blob());
+    a.download = `magpie-usage-${days}d.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) { toast(`Couldn't export: ${e.message}`); }
+}
+
+async function showUsage(days = 30) {
   const dlg = $("#detail");
   dlg.dataset.id = "";
   dlg.innerHTML = `<div class="usage-panel"><button class="btn close" data-action="close" aria-label="Close">✕</button><h2>Usage & cost</h2><p class="meta-line">Loading…</p></div>`;
   if (!dlg.open) dlg.showModal();
   let r;
-  try { r = await api("/api/usage?days=30"); } catch (e) {
+  try { r = await api(`/api/usage?days=${days}`); } catch (e) {
     dlg.querySelector(".meta-line").textContent = `Needs a connection to the server (${e.message}).`;
     return;
   }
+  state.usage = { ...r, config: r.config }; renderCostPill();
   const t = r.totals, c = r.config;
-  const max = Math.max(...r.by_day.map((d) => d.cost_usd), 0.0001);
+  // one column per day of the period, stacked by who answered
+  const byDay = {};
+  for (const x of r.by_day_mode) (byDay[x.day] ||= {})[usageKindOf(x.mode)] = x.cost_usd;
+  const cols = Array.from({ length: days }, (_, i) => { const d = new Date(Date.now() - (days - 1 - i) * 864e5).toISOString().slice(0, 10); return [d, byDay[d] || {}]; });
+  const max = Math.max(...cols.map(([, k]) => Object.values(k).reduce((a, b) => a + b, 0)), 0.0001);
+  const dayShots = Object.fromEntries(r.by_day.map((d) => [d.day, d.screenshots]));
+  const budget = c.monthly_budget_usd, spent = c.month_spent_usd;
+  const projected = r.projected_30d_usd;
+  const paidShare = Math.round((r.cloud_share ?? r.claude_share) * 100);
+  const maxCat = Math.max(...r.by_category.map((x) => x.cost_usd), 0.0001);
   dlg.innerHTML = `
     <div class="usage-panel">
-      <button class="btn close" data-action="close" aria-label="Close">✕</button>
-      <h2>Usage & cost <span class="meta-line">last ${r.period_days} days</span></h2>
-      <div class="scores">
-        <div class="score"><b>${esc(formatUsd(t.cost_usd))}</b><small>total</small></div>
-        <div class="score"><b>${esc(formatUsd(r.per_screenshot_usd))}</b><small>per screenshot</small></div>
-        <div class="score"><b>${t.screenshots}</b><small>screenshots</small></div>
-        <div class="score"><b>${esc(formatUsd(r.projected_30d_usd))}</b><small>projected / 30 days</small></div>
-        <div class="score"><b>${Math.round((r.cloud_share ?? r.claude_share) * 100)}%</b><small>sent to ${esc(providerName(c))}</small></div>
+      <div class="panel-head"><h2>Usage & cost</h2>
+        <div class="seg" role="group" aria-label="Period">${[7, 30, 90].map((d) => `<button type="button" data-usage-days="${d}" aria-pressed="${d === days}">${d} days</button>`).join("")}</div>
+        <button class="btn close" data-action="close" aria-label="Close">✕</button></div>
+      <div class="kpis">
+        <div class="kpi"><b>${esc(formatUsd(t.cost_usd))}</b><span>total</span></div>
+        <div class="kpi"><b>${esc(formatUsd(r.per_screenshot_usd))}</b><span>per screenshot</span></div>
+        <div class="kpi"><b>${t.screenshots}</b><span>screenshots</span></div>
+        <div class="kpi"><b>${paidShare}%</b><span>sent to ${esc(providerName(c))}</span></div>
+        <div class="kpi"><b>${esc(formatUsd(r.saved_by_local_usd || 0))}</b><span>saved by answering on your own model</span></div>
       </div>
-      <h4>By analyzer</h4>
-      <table class="usage-table"><thead><tr><th>Analyzer</th><th>Runs</th><th>Avg</th><th>Total</th><th>Tokens in / out</th><th>Searches</th><th>Avg time</th></tr></thead><tbody>
+      ${budget ? `<div class="group"><h3>This month's budget</h3>
+        <div class="gauge"><i style="width:${Math.min(100, spent / budget * 100)}%"></i><u style="left:${Math.min(100, projected / budget * 100)}%" title="Projected"></u></div>
+        <div class="row-between"><span><b>${esc(formatUsd(spent))}</b> of ${esc(formatUsd(budget))} used</span><span class="meta-line">Projected ${esc(formatUsd(projected))} at this pace. Paid models pause at ${esc(formatUsd(budget))}.</span></div></div>`
+        : `<p class="meta-line">Projected ${esc(formatUsd(projected))} over 30 days. Set a monthly budget under Settings → Spending limits to cap it.</p>`}
+      ${r.by_day.length ? `<div><h3>Spend per day</h3><div class="chart" role="img" aria-label="Spend per day">${cols.map(([d, k]) => {
+        const total = Object.values(k).reduce((a, b) => a + b, 0);
+        return `<div class="col" title="${esc(d)}: ${esc(formatUsd(total))}, ${dayShots[d] || 0} screenshot(s)">${USAGE_KINDS.map(([kind]) => `<i class="k-${kind}" style="height:${(k[kind] || 0) / max * 100}%"></i>`).join("")}</div>`; }).join("")}</div>
+        <div class="key">${USAGE_KINDS.map(([kind, label]) => `<span><i class="k-${kind}"></i>${esc(label)}</span>`).join("")}</div></div>` : ""}
+      <div class="two">
+        <div><h3>Where answers came from</h3><div class="funnel">
+          <div><span>All screenshots</span><b>${t.screenshots}</b></div>
+          <div class="local"><span>Answered on your own model</span><b>${Math.max(0, t.screenshots - r.paid_screenshots)}</b></div>
+          <div class="paid"><span>Sent to a paid model</span><b>${r.paid_screenshots}</b></div></div></div>
+        <div>${limitsPanel(c)}</div>
+      </div>
+      <div><h3>By model</h3><div class="tbl"><table class="usage-table"><thead><tr><th>Model</th><th>Runs</th><th>Avg</th><th>Total</th><th>Tokens in / out</th><th>Searches</th><th>Avg time</th></tr></thead><tbody>
         ${r.by_analyzer.map((a) => `<tr><td>${esc(a.analyzer)}${a.model ? ` <span class="meta-line">${esc(a.model)}</span>` : ""} <span class="meta-line">${esc(a.mode || "")}</span></td>
           <td>${a.runs}${a.failures ? ` <span class="meta-line">(${a.failures} failed)</span>` : ""}</td><td>${esc(formatUsd(a.avg_cost_usd))}</td><td>${esc(formatUsd(a.cost_usd))}</td>
           <td>${(a.input_tokens || 0).toLocaleString()} / ${(a.output_tokens || 0).toLocaleString()}</td><td>${a.web_searches || 0}</td>
           <td>${a.avg_duration_ms ? (a.avg_duration_ms / 1000).toFixed(1) + " s" : "—"}</td></tr>`).join("") || `<tr><td colspan="7" class="meta-line">No analyses yet.</td></tr>`}
-      </tbody></table>
-      ${limitsPanel(c)}
-      ${r.by_day.length ? `<h4>Per day</h4><div class="bars">${r.by_day.map((d) => `
-        <div class="bar" title="${esc(d.day)}: ${esc(formatUsd(d.cost_usd))}, ${d.screenshots} screenshot(s)"><span style="height:${Math.max(3, d.cost_usd / max * 100)}%"></span></div>`).join("")}</div>` : ""}
-      <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.provider_model || c.claude_model)}${c.provider && c.provider !== "claude" ? "" : ` · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"} · fetch cap ${c.fetch_max_tokens ? c.fetch_max_tokens.toLocaleString() + " tokens" : "off"}`}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}${c.monthly_budget_usd ? ` · budget ${esc(formatUsd(c.month_spent_usd))} of ${esc(formatUsd(c.monthly_budget_usd))} this month` : ""}. Costs use list prices.</p>
+      </tbody></table></div></div>
+      <div class="two">
+        <div><h3>By type</h3><table class="usage-table"><tbody>${r.by_category.map((x) => `<tr><td>${esc(x.category === "deleted" ? "Deleted items" : typeName(x.category))}</td><td>${esc(formatUsd(x.cost_usd))}</td>
+          <td style="width:36%"><div class="bar2"><i style="width:${x.cost_usd / maxCat * 100}%"></i></div></td></tr>`).join("") || `<tr><td class="meta-line">Nothing yet.</td></tr>`}</tbody></table></div>
+        <div><h3>Most expensive items</h3><table class="usage-table"><tbody>${r.top_items.map((x) => `<tr><td>${state.items.has(x.item_id)
+          ? `<button class="link-btn" data-open-item="${esc(x.item_id)}">${esc(x.title || "Untitled")}</button>` : esc(x.title || "Deleted item")}<div class="meta-line">${esc(typeName(x.category))} · ${x.runs} run${x.runs > 1 ? "s" : ""}</div></td>
+          <td>${esc(formatUsd(x.cost_usd))}</td></tr>`).join("") || `<tr><td class="meta-line">Nothing yet.</td></tr>`}</tbody></table></div>
+      </div>
+      <div class="row"><button class="btn" type="button" data-usage-csv="${days}">Export CSV</button><span class="meta-line">One row per model call, for your own spreadsheet. Costs use list prices.</span></div>
+      <p class="meta-line">Settings: ${esc(c.analyzer)} · ${esc(c.provider_model || c.claude_model)}${c.provider && c.provider !== "claude" ? "" : ` · effort ${esc(c.effort)} · batch ${c.claude_batch ? "on" : "off"}`}${c.analyzer === "hybrid" ? ` · escalate below ${c.escalate_below}%` : ""}.</p>
     </div>`;
 }
 
@@ -1155,56 +1247,65 @@ function render() {
 
 function renderFilters() {
   const items = [...state.items.values()];
-  const catCounts = {}, tagCounts = {};
-  for (const i of items) {
-    if (i.category) catCounts[i.category] = (catCounts[i.category] || 0) + 1;
-    for (const t of i.tags || []) tagCounts[t] = (tagCounts[t] || 0) + 1;
-  }
-  const review = items.filter((i) => i.needs_review).length;
-  const unverified = items.filter(isUnverified).length;
-  $("#categories").innerHTML = (review ? `
-    <button class="chip warn ${state.review ? "active" : ""}" data-review>⚠ Needs review <span class="count">${review}</span></button>` : "") +
-    (unverified ? `
-    <button class="chip ${state.unverified ? "active" : ""}" data-unverified title="Not confirmed by TMDB, GitHub, Open Library or the page itself">○ Unverified <span class="count">${unverified}</span></button>` : "") +
-    (Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `
-    <button class="chip ${state.category === c ? "active" : ""}" data-category="${esc(c)}">
-      ${esc(CATEGORY_LABELS[c] || c)} <span class="count">${n}</span>
-    </button>`).join("") || `<span class="count">—</span>`);
-  $("#categories").closest("section").classList.toggle("is-empty", !review && !unverified && !Object.keys(catCounts).length);
-  $("#tags").closest("section").classList.toggle("is-empty", !Object.keys(tagCounts).length);
-  $("#tags").innerHTML = Object.entries(tagCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 40).map(([t, n]) => `
-    <button class="chip ${state.tags.includes(t) ? "active" : ""}" data-tag="${esc(t)}">
-      #${esc(t)} <span class="count">${n}</span>
-    </button>`).join("") || `<span class="count">—</span>`;
+  const counts = { all: items.length };
+  for (const i of items) counts[tabOf(i)] = (counts[tabOf(i)] || 0) + 1;
+  if (state.tab !== "all" && !counts[state.tab]) state.tab = "all";
+  $("#tabs").innerHTML = TABS.filter((t) => t.id === "all" || counts[t.id]).map((t) => `
+    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
+  const check = items.filter(needsCheck).length;
+  $("#check-count").textContent = check || "";
+  document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
+  document.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === state.layout)));
+
+  const tagCounts = {};
+  for (const i of items) for (const t of i.tags || []) tagCounts[t] = (tagCounts[t] || 0) + 1;
+  const f = fold($("#tag-filter").value || "").replace(/^#/, "");
+  $("#tags").innerHTML = Object.entries(tagCounts).filter(([t]) => fold(t).includes(f))
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 80).map(([t, n]) => `
+    <button class="chip ${state.tags.includes(t) ? "active" : ""}" type="button" data-tag="${esc(t)}" aria-pressed="${state.tags.includes(t)}">#${esc(t)} <span class="count">${n}</span></button>`).join("")
+    || `<span class="hint">No tags yet. Add them from an item's details.</span>`;
+  $("#tag-btn").textContent = state.tags.length ? `# Tags · ${state.tags.length}` : "# Tags";
+}
+
+const initialsOf = (item) => {
+  const text = item.title || hostOf(item.source_url) || "";
+  return text.replace(/[^\p{L}\p{N} ]/gu, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "·";
+};
+
+// The picture area of a card: the real poster/cover/header when there is one, else a cover themed for the type.
+function coverHtml(item, { chip = true } = {}) {
+  const pic = safeUrl(item.image_url);   // a real poster, cover or header; your own screenshot lives under "Original"
+  const wide = !!safeUrl(item.image_url) && WIDE_CATEGORIES.has(item.category);
+  const busy = ["queued", "processing"].includes(item.status) || item.batch_pending || item.pending_upload;
+  const flag = item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
+    : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
+    : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
+  const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
+  return `<div class="cover t-${esc(item.category || "other")} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
+    pic ? `<span class="cover-img" style="background-image:url('${esc(pic)}')"></span>` : ""}${
+    pic && !wide ? "" : `<span class="mono">${esc(initialsOf(item))}</span>`}${
+    chip ? `<span class="typechip">${esc(label)}</span>` : ""}${flag}</div>`;
+}
+
+function cardMeta(item) {
+  if (item.status !== "ready") return item.status === "error" ? "Open to retry" : item.pending_upload ? "Saved on this device" : "Working on it…";
+  return [typeName(item.category), ...cardFacts(item).slice(0, 2)].join(" · ");
 }
 
 function renderGrid() {
   const items = filteredItems();
   $("#empty").hidden = items.length > 0;
-  $("#empty").textContent = state.q || state.category || state.tags.length ? "No matches." : "Nothing here yet — add your first screenshot above.";
-  $("#grid").innerHTML = items.map((item) => {
-    const img = imageFor(item);
-    const wide = WIDE_CATEGORIES.has(item.category) || !item.category;
-    const badge = item.status === "error" ? "⚠ Failed" : CATEGORY_LABELS[item.category] || (item.status === "queued" ? "⏳ Queued" : item.status === "processing" ? "…" : "📌");
-    return `
-      <article class="card ${wide ? "wide" : ""} ${esc(item.status)}" data-id="${esc(item.id)}">
-        <div class="thumb ${img ? "" : "no-image"}" ${img ? `style="background-image:url('${esc(img)}')"` : ""}>${
-          !img && item.kind === "url" ? `<span class="thumb-host">🔗 ${esc(hostOf(item.source_url))}</span>` : ""}<span class="badge">${esc(badge)}</span>${
-          item.needs_review ? `<span class="badge warn" title="${esc(item.confidence_reason || "")}">Not sure? ${esc(item.confidence)}%</span>`
-            : isUnverified(item) ? `<span class="badge" title="No source such as TMDB or GitHub confirmed this">Unverified</span>` : ""}</div>
-        <div class="body">
-          <div class="title">${esc(cardTitle(item))}</div>
-          ${item.subtitle ? `<div class="sub">${esc(item.subtitle)}</div>` : ""}
-          <div class="facts">${cardFacts(item).map((f) => `<span>${esc(f)}</span>`).join("")}</div>
-        </div>
-      </article>`;
-  }).join("");
+  const filtered = state.q || state.tab !== "all" || state.show !== "all" || state.tags.length;
+  $("#empty").textContent = filtered ? "Nothing matches. Clear the search or switch tabs." : "Nothing here yet. Tap + Add, or paste a screenshot or link.";
+  $("#grid").className = `grid ${state.layout === "list" ? "list" : ""}`;
+  $("#grid").innerHTML = items.map((item) => `
+    <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
+      ${coverHtml(item)}
+      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div></div>
+    </article>`).join("");
 
   const active = [];
-  if (state.review) active.push(`<span class="chip active">⚠ Needs review<button data-review>×</button></span>`);
-  if (state.unverified) active.push(`<span class="chip active">○ Unverified<button data-unverified>×</button></span>`);
-  if (state.category) active.push(`<span class="chip active">${esc(CATEGORY_LABELS[state.category] || state.category)}<button data-clear-category>×</button></span>`);
-  state.tags.forEach((t) => active.push(`<span class="chip active">#${esc(t)}<button data-clear-tag="${esc(t)}">×</button></span>`));
+  state.tags.forEach((t) => active.push(`<span class="chip active">#${esc(t)}<button data-clear-tag="${esc(t)}" aria-label="Remove ${esc(t)}">×</button></span>`));
   $("#active-filters").innerHTML = active.join("");
 }
 
@@ -1275,7 +1376,7 @@ function statusHtml(item) {
   return "";
 }
 
-function confidenceHtml(item) {
+function confidenceHtml(item, { fixButton = true } = {}) {
   if (item.pending_upload || item.status !== "ready") return "";
   const c = item.confidence;
   const level = item.corrected ? "ok" : c == null ? "unknown" : c >= 85 ? "ok" : c >= 60 ? "mid" : "low";
@@ -1286,7 +1387,7 @@ function confidenceHtml(item) {
       <div class="confidence-head">
         <span class="confidence-label">${esc(label)}</span>
         ${c != null && !item.corrected ? `<span class="meter"><span style="width:${Math.max(4, Math.min(100, c))}%"></span></span>` : ""}
-        <button class="btn small" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>
+        ${fixButton ? `<button class="btn small" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
       </div>
       ${item.confidence_reason && !item.corrected ? `<div class="meta-line">${esc(item.confidence_reason)}</div>` : ""}
       ${alts.length && !item.corrected ? `<div class="alternatives"><span class="meta-line">Did you mean:</span>
@@ -1315,23 +1416,42 @@ function correctionFormHtml(item) {
     </form>`;
 }
 
-function renderDetail(item) {
+function orderedFacts(item) {
   const m = item.metadata || {};
-  const poster = safeUrl(item.image_url);
-  const shot = screenshotFor(item);
-  const canonical = safeUrl(item.canonical_url);
-  const facts = Object.entries(m).filter(([k, v]) => {
+  const shown = Object.entries(m).filter(([k, v]) => {
     if (HIDDEN_META.has(k) || v == null || v === "") return false;
     if (Array.isArray(v)) return v.length > 0 && v.every((x) => typeof x !== "object");
     return typeof v !== "object";
   });
+  const order = FACT_ORDER[item.category] || [];
+  const rank = (k) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
+  return shown.sort((a, b) => rank(a[0]) - rank(b[0]));
+}
+
+function originalHtml(item) {
+  const shot = screenshotFor(item);
+  const link = item.kind === "url" ? safeUrl(item.source_url) : null;
+  const when = item.created_at ? `Saved ${new Date(item.created_at).toLocaleDateString()}` : "";
+  const from = item.source_platform && item.source_platform !== "other" ? `from ${item.source_platform}` : "";
+  const note = [from, when].filter(Boolean).join(" · ");
+  if (link) {
+    return `<div class="orig"><a class="orig-link" href="${esc(link)}" target="_blank" rel="noopener"><b>${esc((hostOf(link)[0] || "·").toUpperCase())}</b></a>
+      <div><div><b>Saved from a link</b></div><div class="meta-line">${esc(hostOf(link))}${note ? `<br>${esc(note)}` : ""}</div>
+      <a class="btn small" href="${esc(link)}" target="_blank" rel="noopener">Open the link ↗</a></div></div>`;
+  }
+  if (shot) {
+    return `<div class="orig"><a class="orig-shot" href="${esc(shot)}" target="_blank" rel="noopener" title="View full size"><img src="${esc(shot)}" alt="Your screenshot"></a>
+      <div><div><b>Your screenshot</b></div><div class="meta-line">${esc(note)}</div><a class="btn small" href="${esc(shot)}" target="_blank" rel="noopener">View full size ↗</a></div></div>`;
+  }
+  return `<p class="meta-line" style="margin:0">The original isn't on this device${item.pending_upload ? "" : ". It opens once you're connected to the server."}</p>`;
+}
+
+function renderDetail(item) {
+  const m = item.metadata || {};
+  const canonical = safeUrl(item.canonical_url);
+  const facts = orderedFacts(item);
   const links = (item.links || []).filter((l) => safeUrl(l.url));
-  const metaLine = [
-    CATEGORY_LABELS[item.category] || item.category,
-    m.year,
-    item.source_platform && `saved from ${item.source_platform}`,
-    item.created_at && new Date(item.created_at).toLocaleDateString(),
-  ].filter(Boolean).map(esc).join(" · ");
+  const metaLine = [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
 
   const dlg = $("#detail");
   dlg.dataset.id = item.id;
@@ -1339,53 +1459,57 @@ function renderDetail(item) {
   if (fixing && document.activeElement?.closest?.("#correct-form")) return;  // don't wipe a form being typed in
   const noteFocused = document.activeElement?.id === "note-edit";
   const noteValue = noteFocused ? document.activeElement.value : item.note || "";
+  const about = [item.summary, m.description && m.description !== item.summary && m.description !== item.subtitle ? m.description : null].filter(Boolean);
+  const notice = item.status !== "ready" || item.corrected ? "" : item.needs_review
+    ? `<div class="notice warn"><span>Magpie isn't sure about this one. ${esc(item.confidence_reason || "")}</span></div>`
+    : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span></div>` : "";
   dlg.innerHTML = `
-    <div class="detail" data-id="${esc(item.id)}" tabindex="-1" autofocus>
-      <div class="media">
-        ${poster ? `<a href="${esc(canonical || poster)}" target="_blank" rel="noopener"><img src="${esc(poster)}" alt="" referrerpolicy="no-referrer"></a>` : ""}
-        ${shot ? `<div><div class="shot-label">Your screenshot</div><a href="${esc(shot)}" target="_blank"><img src="${esc(shot)}" alt="Screenshot"></a></div>` : ""}
-        ${item.kind === "url" && safeUrl(item.source_url) ? `<div class="shared-link"><div class="shot-label">Shared link</div><a href="${esc(safeUrl(item.source_url))}" target="_blank" rel="noopener">🔗 ${esc(hostOf(item.source_url))}<small>${esc(item.source_url)}</small></a></div>` : ""}
-      </div>
-      <div class="info">
-        <button class="btn close" data-action="close" aria-label="Close">✕</button>
-        <div>
+    <div class="detail t-${esc(item.category || "other")}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
+      <button class="btn close" data-action="close" aria-label="Close">✕</button>
+      <div class="hero">
+        <div class="hero-cover">${coverHtml(item, { chip: false })}</div>
+        <div class="hero-text">
+          <div class="eyebrow">${metaLine}</div>
           <h2>${esc(cardTitle(item))}</h2>
-          <div class="meta-line">${metaLine}</div>
-          ${item.subtitle ? `<div>${esc(item.subtitle)}</div>` : ""}
+          ${item.subtitle ? `<div class="sub">${esc(item.subtitle)}</div>` : ""}
         </div>
-        ${statusHtml(item)}
-        ${fixing === item.id ? correctionFormHtml(item) : confidenceHtml(item)}
-        ${scoresHtml(m)}
-        ${item.summary ? `<p style="margin:0">${esc(item.summary)}</p>` : ""}
-        ${m.description && m.description !== item.summary && m.description !== item.subtitle ? `<p class="meta-line" style="margin:0">${esc(m.description)}</p>` : ""}
-        ${(canonical || links.length) ? `<div class="links">
-          ${canonical ? `<a class="btn primary" href="${esc(canonical)}" target="_blank" rel="noopener">Open source ↗</a>` : ""}
-          ${links.map((l) => `<a class="btn" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(l.label)}</a>`).join("")}
-        </div>` : ""}
-        ${facts.length ? `<dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(humanize(k))}</dt><dd>${
-          typeof v === "string" && /^https?:/.test(v) && safeUrl(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(fmtValue(v))
-        }</dd>`).join("")}</dl>` : ""}
-        ${m.ingredients?.length ? `<h4>Ingredients</h4><ul>${m.ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>` : ""}
-        ${m.instructions?.length ? `<h4>Instructions</h4><ol>${m.instructions.map((i) => `<li>${esc(i)}</li>`).join("")}</ol>` : ""}
-        <h4>Tags</h4>
+      </div>
+      ${scoresHtml(m)}
+      ${statusHtml(item)}${notice}
+      <div class="actions primary-actions">
+        ${canonical ? `<a class="btn primary" href="${esc(canonical)}" target="_blank" rel="noopener">Open ${esc(hostOf(canonical) || "source")} ↗</a>` : ""}
+        ${item.status === "ready" && fixing !== item.id ? `<button class="btn" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
+        <details class="menu"><summary class="btn">More ▾</summary><div class="menu-list">
+          ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ Refresh metadata</button>
+          <button class="btn" data-action="reanalyze">↻ Re-analyze</button>`}
+          <label class="menu-select">Type <select id="category-edit">
+            ${Object.entries(CATEGORY_LABELS).map(([k, label]) => `<option value="${k}" ${k === item.category ? "selected" : ""}>${label}</option>`).join("")}
+          </select></label>
+          <button class="btn danger" data-action="delete">Delete</button>
+        </div></details>
+      </div>
+      ${fixing === item.id ? `<section>${correctionFormHtml(item)}</section>` : ""}
+      <section><h3>About</h3>${about.length ? about.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="meta-line">No description yet.${item.pending_upload ? "" : " Refresh metadata may find one."}</p>`}</section>
+      ${facts.length ? `<section><h3>${esc(TYPE_BLOCK[item.category] || "Details")}</h3><dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(humanize(k))}</dt><dd>${
+        typeof v === "string" && /^https?:/.test(v) && safeUrl(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(fmtValue(v))
+      }</dd>`).join("")}</dl></section>` : ""}
+      ${m.ingredients?.length ? `<section><h3>Ingredients</h3><ul>${m.ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></section>` : ""}
+      ${m.instructions?.length ? `<section><h3>Steps</h3><ol>${m.instructions.map((i) => `<li>${esc(i)}</li>`).join("")}</ol></section>` : ""}
+      ${links.length ? `<section><div class="links">${links.map((l) => `<a class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join("")}</div></section>` : ""}
+      <section><h3>Original</h3>${originalHtml(item)}</section>
+      ${item.status === "ready" && fixing !== item.id ? `<section><h3>How sure Magpie is</h3>${confidenceHtml(item, { fixButton: false })}</section>` : ""}
+      <section><h3>Your note</h3>
+        <textarea id="note-edit" placeholder="Why did you save this? Who recommended it?">${esc(noteValue)}</textarea>
         <div class="tag-editor">
           ${(item.tags || []).map((t) => `<span class="chip">#${esc(t)}<button data-remove-tag="${esc(t)}" aria-label="Remove tag">×</button></span>`).join("")}
           <input id="new-tag" placeholder="add tag ↵" enterkeyhint="done" autocapitalize="off">
         </div>
-        <h4>Note</h4>
-        <textarea id="note-edit" placeholder="Why did you save this?">${esc(noteValue)}</textarea>
-        ${m.screenshot_text ? `<details><summary>Text found in screenshot</summary><pre>${esc(m.screenshot_text)}</pre></details>` : ""}
-        <div class="actions">
-          <select id="category-edit" class="btn">
-            ${Object.entries(CATEGORY_LABELS).map(([k, label]) => `<option value="${k}" ${k === item.category ? "selected" : ""}>${label}</option>`).join("")}
-          </select>
-          ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ Refresh metadata</button>
-          <button class="btn" data-action="reanalyze">↻ Re-analyze</button>`}
-          <button class="btn danger" data-action="delete">Delete</button>
-          <span class="meta-line" style="margin-left:auto">${m.sources ? `via ${esc(m.sources.join(" → "))}` : ""}${
-            item.usage?.runs ? ` · ${esc(formatUsd(item.usage.cost_usd))}${item.usage.web_searches ? ` · ${item.usage.web_searches} search${item.usage.web_searches > 1 ? "es" : ""}` : ""}` : ""}</span>
-        </div>
-      </div>
+      </section>
+      <details class="provenance"><summary>Where this came from</summary>
+        <p class="meta-line">${m.sources ? `Identified via ${esc(m.sources.join(" → "))}.` : "Source trail not recorded."}${
+          item.usage?.runs ? ` Cost ${esc(formatUsd(item.usage.cost_usd))}${item.usage.web_searches ? `, ${item.usage.web_searches} web search${item.usage.web_searches > 1 ? "es" : ""}` : ""}.` : ""}</p>
+        ${m.screenshot_text ? `<pre>${esc(m.screenshot_text)}</pre>` : ""}
+      </details>
     </div>`;
   if (noteFocused) { const n = $("#note-edit"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
   if (!dlg.open) dlg.showModal();
@@ -1417,9 +1541,9 @@ $("#link-form").addEventListener("submit", (e) => {
   $("#note").value = "";
 });
 
-const dz = $("#dropzone");
-["dragenter", "dragover"].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("over"); }));
-["dragleave", "drop"].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); if (ev === "drop" || !e.relatedTarget) dz.classList.remove("over"); }));
+const veil = $("#dropveil");
+["dragenter", "dragover"].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); veil.hidden = false; }));
+["dragleave", "drop"].forEach((ev) => document.addEventListener(ev, (e) => { e.preventDefault(); if (ev === "drop" || !e.relatedTarget) veil.hidden = true; }));
 document.addEventListener("drop", (e) => {
   if (e.dataTransfer?.files?.length) { addScreenshots(e.dataTransfer.files, $("#note").value.trim()); $("#note").value = ""; return; }
   const link = (e.dataTransfer?.getData("text/uri-list") || e.dataTransfer?.getData("text/plain") || "").split("\n")[0];
@@ -1430,6 +1554,31 @@ let searchTimer;
 $("#search").addEventListener("input", (e) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => { state.q = e.target.value.trim(); renderGrid(); }, 120);
+});
+$("#tag-filter").addEventListener("input", renderFilters);
+
+// Keyboard: / searches, N adds, Esc closes the tag list, arrows move between cards.
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { $("#tag-pop").hidden = true; $("#tag-btn").setAttribute("aria-expanded", "false"); }
+  if (e.target.matches("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
+  if (e.key === "/") { e.preventDefault(); $("#search").focus(); return; }
+  if (e.key.toLowerCase() === "n") { e.preventDefault(); $("#add-dialog").showModal(); return; }
+  const card = e.target.closest?.(".card");
+  if (!card) return;
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); return; }
+  const cards = [...document.querySelectorAll("#grid .card")], i = cards.indexOf(card);
+  const rect = card.getBoundingClientRect();
+  let next = null;
+  if (e.key === "ArrowRight") next = cards[i + 1];
+  else if (e.key === "ArrowLeft") next = cards[i - 1];
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const dir = e.key === "ArrowDown" ? 1 : -1;
+    next = (dir > 0 ? cards.slice(i + 1) : cards.slice(0, i).reverse()).find((c) => {
+      const r = c.getBoundingClientRect();
+      return dir * (r.top - rect.top) > 4 && Math.abs(r.left - rect.left) < rect.width / 2;
+    });
+  }
+  if (next) { e.preventDefault(); next.focus(); }
 });
 
 $("#sync-status").addEventListener("click", () => (state.sync === "auth" ? askToken() : requestSync()));
@@ -1442,7 +1591,8 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-review],[data-unverified],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
+  const t = e.target.closest("[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1460,16 +1610,29 @@ document.addEventListener("click", async (e) => {
     field?.scrollIntoView({ block: "center" });
     return field?.focus();
   }
-  if (t.dataset.review !== undefined) {
-    state.review = !state.review;
-  } else if (t.dataset.unverified !== undefined) {
-    state.unverified = !state.unverified;
-  } else if (t.dataset.category !== undefined) {
-    state.category = state.category === t.dataset.category ? null : t.dataset.category;
+  if (t.dataset.tab !== undefined) {
+    state.tab = t.dataset.tab;
+  } else if (t.dataset.show !== undefined) {
+    state.show = t.dataset.show;
+  } else if (t.dataset.layout !== undefined) {
+    state.layout = t.dataset.layout;
+    try { localStorage.setItem("magpie.layout", state.layout); } catch {}
+  } else if (t.id === "tag-btn") {
+    const open = $("#tag-pop").hidden;
+    $("#tag-pop").hidden = !open;
+    t.setAttribute("aria-expanded", String(open));
+    if (open) $("#tag-filter").focus();
+    return;
+  } else if (t.dataset.usageDays !== undefined) {
+    return showUsage(Number(t.dataset.usageDays));
+  } else if (t.dataset.usageCsv !== undefined) {
+    return downloadUsageCsv(Number(t.dataset.usageCsv));
+  } else if (t.dataset.openItem !== undefined) {
+    const item = state.items.get(t.dataset.openItem);
+    if (item) renderDetail(item);
+    return;
   } else if (t.dataset.tag !== undefined) {
     state.tags = state.tags.includes(t.dataset.tag) ? state.tags.filter((x) => x !== t.dataset.tag) : [...state.tags, t.dataset.tag];
-  } else if (t.dataset.clearCategory !== undefined) {
-    state.category = null;
   } else if (t.dataset.clearTag !== undefined) {
     state.tags = state.tags.filter((x) => x !== t.dataset.clearTag);
   } else if (t.classList.contains("card")) {
@@ -1498,6 +1661,8 @@ document.addEventListener("click", async (e) => {
         return deleteItem(id);
       case "token": return askToken();
       case "usage": return showUsage();
+      case "add": return $("#add-dialog").showModal();
+      case "close-add": return $("#add-dialog").close();
       case "settings": return showSettings();
       case "sync": return requestSync();
       case "dismiss-install":
@@ -1576,6 +1741,7 @@ async function boot() {
   render();
   if (new URLSearchParams(location.search).has("shared")) history.replaceState(null, "", "/");
   requestSync();
+  refreshCostPill(true);
 }
 
 boot().catch((e) => { console.error(e); toast(`Couldn't open the offline library: ${e.message}`); });

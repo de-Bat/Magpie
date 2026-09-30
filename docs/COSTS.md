@@ -79,7 +79,7 @@ That's about $0.05 in real time and $0.03 batched. Web search is enabled only wh
 
 ## Cost controls for every provider
 
-These apply to Claude, OpenAI, Gemini, OpenRouter and Groq alike (Settings → Cost controls):
+These apply to Claude, OpenAI, Gemini, OpenRouter and Groq alike (Settings → Spending limits):
 
 | Setting | Effect |
 |---|---|
@@ -123,7 +123,7 @@ Also on by default: the OCR pre-pass (it lets small local models get more screen
 
 Magpie records every analyzer run: model, mode (realtime, batch or local), input, output and cache tokens, web searches and fetches, duration, and cost at list prices. This includes runs that failed and screenshots you later deleted.
 
-- **Web app / PWA:** sidebar → **$ Usage & cost**. Shows total, per screenshot, the share sent to Claude, a 30-day projection, a per-analyzer breakdown and a daily chart. Each item's details show what it cost and how it was identified (`ocr → local:qwen3-vl:8b → claude`).
+- **Web app / PWA:** click the budget pill in the top bar. Shows total, per screenshot, the share sent to paid models, what answering locally saved, the month's budget with a projection, spend per day by model, what's left per provider, and breakdowns by model, item type and most expensive items. **Export CSV** gives one row per model call. Each item's details show what it cost and how it was identified (`ocr → local:qwen3-vl:8b → claude`).
 - **iOS app:** Settings → *Usage & cost*, plus the per-item cost in its details.
 - **API:** `GET /api/usage?days=30`
 

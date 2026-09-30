@@ -354,7 +354,7 @@ class AnalyzerRouter:
 
     def budget_error(self) -> AnalysisError:
         return AnalysisError(f"The monthly budget of ${self.budget:g} is used up, so paid AI providers are paused "
-                             "until next month. Raise it under Settings → Cost controls.")
+                             "until next month. Raise it under Settings → Spending limits.")
 
     async def analyze(self, image: bytes | None, media_type: str | None, note: str | None = None,
                       correction: dict | None = None, interactive: bool = False,

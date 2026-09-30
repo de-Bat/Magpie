@@ -28,45 +28,57 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img class="logo-light" src="/static/icons/logo-96.png" alt="" width="36" height="36"><img class="logo-dark" src="/static/icons/logo-96-dark.png" alt="" width="36" height="36"><span>Magpie</span></div>
-    <input id="search" type="search" placeholder="Search titles, summaries, tags, text in screenshots…" autocomplete="off">
+    <div class="brand"><img class="logo-light" src="/static/icons/logo-96.png" alt="" width="32" height="32"><img class="logo-dark" src="/static/icons/logo-96-dark.png" alt="" width="32" height="32"><span>Magpie</span></div>
+    <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search everything you saved" autocomplete="off" aria-label="Search"><kbd>/</kbd></label>
+    <button id="cost-btn" class="pill-btn" type="button" data-action="usage" title="Usage &amp; cost" hidden></button>
     <button id="sync-status" class="sync-status" type="button" title="Sync status"></button>
-    <button id="settings-btn" class="btn settings-btn" type="button" data-action="settings" title="Settings" aria-label="Settings">⚙<span id="settings-dot" class="status-dot" hidden></span></button>
-    <label class="btn primary" for="file-input"><span class="add-long">+ Add screenshot</span><span class="add-short">+</span></label>
-    <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+    <button id="settings-btn" class="pill-btn settings-btn" type="button" data-action="settings" title="Settings" aria-label="Settings">⚙<span id="settings-dot" class="status-dot" hidden></span></button>
   </header>
 
-  <main class="layout">
-    <aside class="filters">
-      <section>
-        <h3>Category</h3>
-        <div id="categories" class="chips"></div>
-      </section>
-      <section>
-        <h3>Tags</h3>
-        <div id="tags" class="chips"></div>
-      </section>
-      <section class="usage-link">
-        <button class="btn small" data-action="usage">$ Usage &amp; cost</button>
-      </section>
-    </aside>
+  <nav id="tabs" class="tabs" role="tablist" aria-label="Type"></nav>
 
-    <section class="content">
-      <div id="dropzone" class="dropzone">
-        <strong>Drop, paste (Ctrl/⌘+V) or pick screenshots, or save a link</strong>
-        <span>Facebook & Instagram posts, web pages, tweets, GitHub repos, IMDb pages, recipes… Magpie works out what it is and looks up the details.</span>
-        <form id="link-form" class="link-form" autocomplete="off">
-          <input id="link-input" type="text" inputmode="url" autocorrect="off" spellcheck="false" placeholder="Paste a link: https://…" enterkeyhint="go" autocapitalize="off">
-          <button class="btn" type="submit">Save link</button>
-        </form>
-        <input id="note" type="text" placeholder="Optional note for the next item (e.g. “Dana recommended this”)">
-      </div>
-      <div id="banner" class="banner" hidden></div>
-      <div id="active-filters" class="active-filters"></div>
-      <div id="grid" class="grid"></div>
-      <p id="empty" class="empty" hidden>Nothing here yet.</p>
-    </section>
+  <div class="subbar">
+    <div class="seg" role="group" aria-label="Show">
+      <button type="button" data-show="all" aria-pressed="true">All</button>
+      <button type="button" data-show="check" aria-pressed="false" title="Items Magpie isn't sure about, or that no source confirmed">To check <span id="check-count" class="count"></span></button>
+    </div>
+    <button id="tag-btn" class="pill-btn" type="button" aria-expanded="false" aria-controls="tag-pop"># Tags</button>
+    <div id="active-filters" class="active-filters"></div>
+    <span class="spacer"></span>
+    <div class="seg" role="group" aria-label="Layout">
+      <button type="button" data-layout="grid" aria-pressed="true" aria-label="Grid">▦</button>
+      <button type="button" data-layout="list" aria-pressed="false" aria-label="List">☰</button>
+    </div>
+  </div>
+
+  <div id="tag-pop" class="tag-pop" role="dialog" aria-label="Tags" hidden>
+    <input id="tag-filter" type="search" placeholder="Filter tags" aria-label="Filter tags" autocomplete="off">
+    <div id="tags" class="chips"></div>
+    <p class="hint">Pick several to narrow down. You can also type <kbd>#tag</kbd> in the search box.</p>
+  </div>
+
+  <main class="content">
+    <div id="banner" class="banner" hidden></div>
+    <div id="grid" class="grid"></div>
+    <p id="empty" class="empty" hidden>Nothing here yet.</p>
   </main>
+
+  <button id="fab" class="fab" type="button" data-action="add"><span aria-hidden="true">＋</span> Add</button>
+  <div id="dropveil" class="dropveil" hidden><div>Drop screenshots or a link to add them</div></div>
+
+  <dialog id="add-dialog" class="sheet-dialog">
+    <div class="sheet-head"><h2>Add to Magpie</h2><button class="btn close" type="button" data-action="close-add" aria-label="Close">✕</button></div>
+    <div id="dropzone" class="dropzone">
+      <label class="btn primary" for="file-input">Choose screenshots</label>
+      <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+      <span class="hint">Or paste (Ctrl/⌘+V) or drop them anywhere on the page.</span>
+      <form id="link-form" class="link-form" autocomplete="off">
+        <input id="link-input" type="text" inputmode="url" autocorrect="off" spellcheck="false" placeholder="Or paste a link: https://…" enterkeyhint="go" autocapitalize="off" aria-label="Link">
+        <button class="btn" type="submit">Save link</button>
+      </form>
+      <input id="note" type="text" placeholder="Note for this one (optional), e.g. Dana recommended it" aria-label="Note">
+    </div>
+  </dialog>
 
   <dialog id="detail"></dialog>
   <div id="toast" class="toast" hidden></div>
