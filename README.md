@@ -122,7 +122,7 @@ These cost controls are on by default:
 ## Confidence & corrections
 
 - **Confidence (0–100).** Claude scores its identification based on the evidence: a legible title confirmed by a matching source scores 90+, while a guess from a blurry poster or an ambiguous title (remakes, a book and its film) scores lower. The score comes with a one-line reason.
-- **To check.** Anything under 60% gets a "!" marker, and anything no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
+- **To check.** Anything under 60% gets a "!" marker, and anything below 90% that no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
 - **Did you mean…** Claude lists up to 3 alternatives. Tap one to switch to it.
 - **Fix it.** Open an item → **Wrong? Fix it**:
   - Change the **title, type, year or link**. Magpie keeps the facts about the post itself (who shared it, where, the screenshot text), throws away the wrong item's poster, scores and details, and looks up the right ones. The model isn't called again.

@@ -101,16 +101,18 @@ MIGRATIONS = {
     "corrected": "INTEGER NOT NULL DEFAULT 0",
     "kind": "TEXT NOT NULL DEFAULT 'screenshot'",
     "source_url": "TEXT",
+    "confirmed": "INTEGER NOT NULL DEFAULT 0",   # the user marked this identification as correct
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
 # Metadata sources that confirm what an item is (as opposed to the model's say-so or a generic page card).
+VERIFIED_CONFIDENCE = 90   # default: a confident model answer counts as verified (settings: MAGPIE_VERIFIED_CONFIDENCE)
 VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"}
 
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed",
 }
 
 
@@ -125,7 +127,9 @@ def normalize_tag(tag: str) -> str:
 
 
 class Database:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, verified_confidence=None):
+        # () -> the confidence from which an answer counts as verified (a callable, so settings changes apply at once)
+        self.verified_confidence = verified_confidence or (lambda: VERIFIED_CONFIDENCE)
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -420,7 +424,9 @@ class Database:
             and item.get("confidence") is not None and item["confidence"] < REVIEW_THRESHOLD
         )
         sources = (item.get("metadata") or {}).get("sources") or []
-        item["verified"] = item["corrected"] or bool(VERIFYING_SOURCES.intersection(sources))
+        item["confirmed"] = bool(item.get("confirmed"))
+        item["verified"] = (item["corrected"] or item["confirmed"] or bool(VERIFYING_SOURCES.intersection(sources))
+                            or (item.get("confidence") or 0) >= self.verified_confidence())
         item["tags"] = self.get_tags(item["id"])
         cost = self.conn.execute(
             "SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost, "

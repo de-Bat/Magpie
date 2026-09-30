@@ -285,6 +285,12 @@ function looksLikeUrl(text) {
   return /^(https?:\/\/)?[\w-]+(\.[\w-]+)+(\/\S*)?$/i.test((text || "").trim());
 }
 
+// The user confirms an identification Magpie couldn't check itself.
+async function verifyItem(id) {
+  await editItem(id, { confirmed: true });
+  toast("Marked as correct.");
+}
+
 async function editItem(id, patch) {
   const item = state.items.get(id);
   if (!item) return;
@@ -1059,6 +1065,7 @@ async function putSettings(changes) {
   const firstToken = (changes.MAGPIE_API_TOKEN || "").split(/[,\s]+/).find(Boolean);
   if (firstToken) await setToken(firstToken);
   state.server = settingsData.status;
+  render();   // e.g. a new verification threshold changes which cards need checking
   renderServerStatus();
   renderSyncStatus();
   if (!(settingsData.notices || []).length) toast("Settings saved.");
@@ -1093,7 +1100,11 @@ function searchBlob(item) {
 }
 
 // Ready items that no metadata source (TMDB, GitHub, ...) confirmed and the user hasn't corrected.
-const isUnverified = (item) => item.status === "ready" && !(item.verified ?? item.corrected);
+// Worked out here from the item's own fields (same rule as the server), so items saved before the rule existed or changed are judged too.
+const VERIFYING_SOURCES = new Set(["github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"]);
+const verifiedFrom = () => state.server?.verified_confidence ?? 90;   // the user's threshold (Settings → Verification)
+const isVerified = (item) => !!item.corrected || !!item.confirmed || (item.confidence ?? 0) >= verifiedFrom() || (item.metadata?.sources || []).some((x) => VERIFYING_SOURCES.has(x));
+const isUnverified = (item) => item.status === "ready" && !isVerified(item);
 const needsCheck = (item) => item.needs_review || isUnverified(item);
 
 // "#tag" words in the search box are tag filters, the rest is text.
@@ -1321,6 +1332,7 @@ function renderGrid() {
     <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
       <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div></div>
+      ${isUnverified(item) ? `<button class="verify-btn" type="button" data-verify="${esc(item.id)}" title="Mark this identification as correct">✓ Verify</button>` : ""}
     </article>`).join("");
 
   const active = [];
@@ -1481,7 +1493,7 @@ function renderDetail(item) {
   const about = [item.summary, m.description && m.description !== item.summary && m.description !== item.subtitle ? m.description : null].filter(Boolean);
   const notice = item.status !== "ready" || item.corrected ? "" : item.needs_review
     ? `<div class="notice warn"><span>Magpie isn't sure about this one. ${esc(item.confidence_reason || "")}</span></div>`
-    : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span></div>` : "";
+    : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span><button class="btn small" data-action="verify">✓ Mark as correct</button></div>` : "";
   dlg.innerHTML = `
     <div class="detail t-${esc(item.category || "other")}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
       <button class="btn close" data-action="close" aria-label="Close">✕</button>
@@ -1611,7 +1623,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1629,6 +1641,7 @@ document.addEventListener("click", async (e) => {
     field?.scrollIntoView({ block: "center" });
     return field?.focus();
   }
+  if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
   if (t.dataset.tab !== undefined) {
     state.tab = t.dataset.tab;
   } else if (t.dataset.show !== undefined) {
@@ -1670,6 +1683,7 @@ document.addEventListener("click", async (e) => {
     }
     switch (t.dataset.action) {
       case "close": return $("#detail").close();
+      case "verify": return verifyItem(id);
       case "fix": fixing = id; renderDetail(item); return $("#correct-form input[name=title]")?.focus();
       case "cancel-fix": fixing = null; return renderDetail(item);
       case "refresh": return refreshItemMetadata(id);

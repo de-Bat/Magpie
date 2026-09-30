@@ -115,6 +115,9 @@ SPECS: list[Spec] = [
     Spec("batch_poll_seconds", "MAGPIE_BATCH_POLL_SECONDS", "int", 60, "Claude options", "Batch poll interval (s)", min=5),
     Spec("fetch_max_tokens", "MAGPIE_FETCH_MAX_TOKENS", "int", 8000, "Claude options", "Max tokens per fetched page",
          "0 = no cap.", min=0),
+    Spec("verified_confidence", "MAGPIE_VERIFIED_CONFIDENCE", "int", 90, "Verification", "Count as verified from confidence (%)",
+         "Answers this sure count as verified, even when no source (TMDB, GitHub, ...) confirmed them. Anything below and "
+         "unconfirmed shows a Verify button and appears under To check. You can lower it to 60, no further.", min=60, max=100),
     Spec("ocr_engine", "MAGPIE_OCR", "choice", "rapidocr", "OCR", "OCR engine", "", ("rapidocr", "tesseract", "off")),
     Spec("ocr_langs", "MAGPIE_OCR_LANGS", "str", "eng", "OCR", "Tesseract languages", "e.g. eng+heb"),
     Spec("enrich", "MAGPIE_ENRICH", "bool", True, "Lookups", "Online lookups",
@@ -218,6 +221,8 @@ class Settings:
     # Cost controls for every provider (see docs/COSTS.md)
     monthly_budget_usd: float = field(default_factory=_from_env("monthly_budget_usd"))  # 0 = no limit
     max_output_tokens: int = field(default_factory=_from_env("max_output_tokens"))      # 0 = provider default
+    # From this confidence an answer counts as verified (below it, and unconfirmed by a source, the item is "unverified")
+    verified_confidence: int = field(default_factory=_from_env("verified_confidence"))
     # OCR pre-pass: rapidocr (bundled, CPU) | tesseract (needs the binary; better for Hebrew/Arabic/...) | off
     ocr_engine: str = field(default_factory=_from_env("ocr_engine"))
     ocr_langs: str = field(default_factory=_from_env("ocr_langs"))  # tesseract only, e.g. eng+heb

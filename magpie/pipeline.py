@@ -318,7 +318,7 @@ class Pipeline:
         self.db.set_tags(item_id, [t for t in item.get("tags", []) if t not in stale] + auto_tags)
 
         return self.db.update_item(
-            item_id, **fields, analysis=analysis, status="ready", error=None,
+            item_id, **fields, analysis=analysis, status="ready", error=None, confirmed=0,
             corrected=int(corrected or bool(item.get("corrected"))),
         )
 
