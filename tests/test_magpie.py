@@ -563,6 +563,12 @@ def test_pwa_assets_are_served(settings):
         for icon in manifest.json()["icons"]:
             assert client.get(icon["src"]).status_code == 200
         assert client.get("/static/icons/apple-touch-icon.png").status_code == 200
+        dark = client.get("/static/manifest-dark.webmanifest")   # the dark-theme install icons
+        assert dark.json()["start_url"] == manifest.json()["start_url"] and dark.json()["theme_color"] == "#151412"
+        assert [i["sizes"] for i in dark.json()["icons"]] == [i["sizes"] for i in manifest.json()["icons"]]
+        for icon in dark.json()["icons"]:
+            assert client.get(icon["src"]).status_code == 200
+        assert client.get("/static/icons/apple-touch-icon-dark.png").status_code == 200
         index = client.get("/").text
         assert 'rel="manifest"' in index and "apple-mobile-web-app-capable" in index
         assert client.post("/share-target", follow_redirects=False).status_code == 303

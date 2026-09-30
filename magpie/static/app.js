@@ -1058,7 +1058,19 @@ function applyTheme(theme) {
     const scheme = (m.media.match(/(light|dark)/) || [])[1] || "light";
     m.content = THEME_COLORS[theme === "light" || theme === "dark" ? theme : scheme];
   });
+  installIcons(theme);
 }
+
+// The icon an installed app gets is read when it is added to the home screen, from the manifest and the touch
+// icon, which can't adapt to the colour scheme by themselves: point them at the dark set when the app is dark.
+const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)");
+function installIcons(theme = getTheme()) {
+  const dark = theme === "dark" || (theme !== "light" && !!prefersDark?.matches);
+  const set = (selector, href) => { const el = document.querySelector(selector); if (el && el.getAttribute("href") !== href) el.setAttribute("href", href); };
+  set('link[rel="manifest"]', dark ? "/static/manifest-dark.webmanifest" : "/static/manifest.webmanifest");
+  set('link[rel="apple-touch-icon"]', dark ? "/static/icons/apple-touch-icon-dark.png" : "/static/icons/apple-touch-icon.png");
+}
+prefersDark?.addEventListener?.("change", () => installIcons());
 
 function setTheme(theme) {
   try {
