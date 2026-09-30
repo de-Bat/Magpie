@@ -216,6 +216,7 @@ class Database:
         tags: list[str] | None = None,
         needs_review: bool = False,
         unverified: bool = False,
+        to_check: bool = False,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -240,6 +241,10 @@ class Database:
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += f" ORDER BY {order} LIMIT ? OFFSET ?"
+        if to_check:  # failed, unsure or unverified: derived per item, so filter after loading
+            rows = self.conn.execute(sql.replace(" LIMIT ? OFFSET ?", ""), params).fetchall()
+            found = [i for i in (self._row_to_item(r) for r in rows) if i["to_check"]]
+            return found[offset:offset + limit]
         if unverified:  # derived from each item's metadata sources, so filter after loading
             rows = self.conn.execute(sql.replace(" LIMIT ? OFFSET ?", ""), params).fetchall()
             found = [i for i in (self._row_to_item(r) for r in rows) if i["status"] == "ready" and not i["verified"]]
@@ -427,6 +432,8 @@ class Database:
         item["confirmed"] = bool(item.get("confirmed"))
         item["verified"] = (item["corrected"] or item["confirmed"] or bool(VERIFYING_SOURCES.intersection(sources))
                             or (item.get("confidence") or 0) >= self.verified_confidence())
+        item["to_check"] = (item.get("status") == "error" or item["needs_review"]
+                            or (item.get("status") == "ready" and not item["verified"]))
         item["tags"] = self.get_tags(item["id"])
         cost = self.conn.execute(
             "SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost, "

@@ -1106,7 +1106,8 @@ const VERIFYING_SOURCES = new Set(["github", "tmdb", "tmdb+omdb", "omdb", "openl
 const verifiedFrom = () => state.server?.verified_confidence ?? 90;   // the user's threshold (Settings → Verification)
 const isVerified = (item) => !!item.corrected || !!item.confirmed || (item.confidence ?? 0) >= verifiedFrom() || (item.metadata?.sources || []).some((x) => VERIFYING_SOURCES.has(x));
 const isUnverified = (item) => item.status === "ready" && !isVerified(item);
-const needsCheck = (item) => item.needs_review || isUnverified(item);
+// A failed analysis needs the user too: retry it, or fix it by hand.
+const needsCheck = (item) => item.status === "error" || item.needs_review || isUnverified(item);
 
 // "#tag" words in the search box are tag filters, the rest is text.
 function searchTerms() {
