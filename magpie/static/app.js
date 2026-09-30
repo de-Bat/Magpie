@@ -1101,7 +1101,7 @@ function searchBlob(item) {
 
 // Ready items that no metadata source (TMDB, GitHub, ...) confirmed and the user hasn't corrected.
 // Worked out here from the item's own fields (same rule as the server), so items saved before the rule existed or changed are judged too.
-const VERIFYING_SOURCES = new Set(["github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"]);
+const VERIFYING_SOURCES = new Set(["github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm", "huggingface"]);
 const verifiedFrom = () => state.server?.verified_confidence ?? 90;   // the user's threshold (Settings → Verification)
 const isVerified = (item) => !!item.corrected || !!item.confirmed || (item.confidence ?? 0) >= verifiedFrom() || (item.metadata?.sources || []).some((x) => VERIFYING_SOURCES.has(x));
 const isUnverified = (item) => item.status === "ready" && !isVerified(item);
