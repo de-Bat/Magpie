@@ -589,3 +589,21 @@ def test_legacy_keeper_settings_database_and_cookie_still_work(tmp_path, monkeyp
     with client:
         client.cookies.set("keeper_token", "s3cret")
         assert client.get("/api/items").status_code == 200
+
+
+def test_refresh_metadata_updates_facts_without_calling_the_model(settings):
+    stars = {"n": 70000}
+    routes = {"https://api.github.com/repos/astral-sh/uv":
+              lambda request: httpx.Response(200, json={**GITHUB_REPO, "stargazers_count": stars["n"]})}
+    client, analyzer = make_client(settings, analysis(), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
+        client.patch(f"/api/items/{item_id}", json={"tags": ["mine"]})
+        stars["n"] = 71234
+        r = client.post(f"/api/items/{item_id}/refresh-metadata")
+        assert r.status_code == 200
+        item = r.json()
+        assert item["metadata"]["stars"] == 71234 and item["image_url"].startswith("https://")
+        assert item["title"] == "astral-sh/uv" and item["status"] == "ready" and "mine" in item["tags"]
+        assert len(analyzer.calls) == 1   # only the original analysis
+        assert client.post("/api/items/nope/refresh-metadata").status_code == 404
