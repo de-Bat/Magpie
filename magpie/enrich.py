@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 
@@ -20,8 +20,8 @@ from . import readability
 from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
 from .related import outbound_related
-from .images import (best_image, oembed_thumbnail, origin_icons, package_logos, page_image_candidates, readme_images,
-                     youtube_thumbnails)
+from .images import (best_image, manifest_icons, oembed_thumbnail, origin_icons, package_logos, page_image_candidates,
+                     page_pictures, readme_images, site_logos, verify_image, youtube_thumbnails)
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ class Enrichment:
     source: str | None = None
     # Name of the thing the source matched; used to double-check non-Claude identifications.
     matched_title: str | None = None
+    image_kind: str | None = None   # "logo" when the picture is the site's logo rather than one of the thing itself
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +619,44 @@ class _PageParser(HTMLParser):
             self.title += data
 
 
+TRACKING_PARAMS = re.compile(r"^(utm_\w+|fbclid|gclid|dclid|msclkid|igshid|igsh|mc_cid|mc_eid|ref_src|ref_url|_hsenc|_hsmi|"
+                             r"cmpid|ocid|mbid|smid|sr_share|share_id|guccounter|guce_referrer\w*|__twitter_impression|_ga|_gl|"
+                             r"trk|trkcampaign|spm|at_medium|at_campaign|wt_mc|oly_enc_id|vero_id|mkt_tok)$", re.I)
+# Parameters that are only tracking on specific sites (elsewhere they can matter, e.g. ?s= search).
+SITE_TRACKING = {"x.com": {"s", "t"}, "twitter.com": {"s", "t"}, "youtube.com": {"si", "feature", "pp"},
+                 "open.spotify.com": {"si"}, "instagram.com": {"img_index"}}
+
+
+def strip_tracking(url: str | None) -> str | None:
+    """The same address without campaign and click-tracking parameters or a fragment."""
+    if not url or not url.startswith("http"):
+        return url
+    parts = urlsplit(url)
+    site = SITE_TRACKING.get((parts.hostname or "").lower().removeprefix("www."), set())
+    kept = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not TRACKING_PARAMS.match(k) and k not in site]
+    query = urlencode(kept) if len(kept) != len(parse_qsl(parts.query, keep_blank_values=True)) else parts.query
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
+def canonical_link(page: "Page") -> str:
+    """The article's own address: the page's declared canonical link (which also leads from an AMP, mobile or
+    syndicated copy back to the original), else og:url, else where the fetch ended up; without tracking parameters.
+    A declared address that is just the site's home page (a common template mistake) is ignored."""
+    here = urlsplit(page.url)
+    declared = [l["href"] for l in page.links if "canonical" in l["rel"].split()] + [page.meta.get("og:url")]
+    for href in declared:
+        if not href:
+            continue
+        url = urljoin(page.url, href.strip())
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            continue
+        if parts.path.strip("/") == "" and here.path.strip("/") != "":
+            continue
+        return strip_tracking(url)
+    return strip_tracking(page.url)
+
+
 @dataclass
 class Page:
     url: str
@@ -807,7 +846,7 @@ def opengraph_from_page(page: Page) -> Enrichment:
         meta["page_description"] = desc
     return Enrichment(
         metadata=meta,
-        canonical_url=m.get("og:url") or page.url,
+        canonical_url=canonical_link(page),
         image_url=_absolute(page.url, m.get("og:image") or m.get("twitter:image")),
         source="opengraph",
     )
@@ -824,16 +863,20 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
     page = await fetch_page(url, http)
     if not page:
         # Blocked or behind a consent wall: a YouTube video still has a thumbnail we can address directly,
-        # and many articles have a copy in the Internet Archive with the same share image.
+        # many articles have a copy in the Internet Archive with the same share image, and failing that
+        # the site's logo is at a known address.
         thumb = await best_image(http, youtube_thumbnails(url)) or (await archived_picture(url, http) if page_refused(url) else None)
-        return Enrichment(image_url=thumb, source="archive") if thumb else None
+        if thumb:
+            return Enrichment(image_url=thumb, source="archive", canonical_url=strip_tracking(url))
+        logo = await best_image(http, origin_icons(url), verified_only=True) if page_refused(url) else None
+        return Enrichment(image_url=logo, image_kind="logo", canonical_url=strip_tracking(url)) if logo else None
     if analysis.get("category") == "recipe":
         found = recipe_from_page(page)
         if found:
             found.image_url = await best_image(http, page_image_candidates(page, [found.image_url]), page.url) or found.image_url
             return found
     e = with_readability(opengraph_from_page(page), page)
-    e.image_url = await page_picture(http, page, e.image_url)
+    e.image_url, e.image_kind = await page_picture(http, page, e.image_url)
     e.related = outbound_related(page)   # the repository, app, paper or company the article is about
     return e
 
@@ -857,18 +900,29 @@ async def archived_picture(url: str, http: httpx.AsyncClient) -> str | None:
     return await best_image(http, [*originals, *(f"https://web.archive.org/web/{ts}im_/{u}" for u in originals)], verified_only=True)
 
 
-async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = None) -> str | None:
-    """The best picture a web page offers, trying progressively less direct sources:
-    1. its own candidates (share image, structured data, lead and content pictures, touch icon), checked;
-    2. the oEmbed thumbnail, the video's own thumbnail, the site's icon at its usual address;
-    3. failing all checks, the first candidate that merely couldn't be ruled out (a host may refuse servers but serve browsers)."""
-    candidates = page_image_candidates(page, [lead])
-    found = await best_image(http, candidates, page.url, verified_only=True)
+async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = None) -> tuple[str | None, str | None]:
+    """The best picture a web page offers, and whether it is only the site's logo ("logo"). In order:
+    1. a picture of the page, checked: share image, structured data, the header picture, lead and content pictures;
+    2. the oEmbed thumbnail and the video's own thumbnail;
+    3. the page's own share image even if its host wouldn't let us check it (browsers usually get it);
+    4. the site's logo: publisher logo, app manifest and touch icons, the icon at its usual addresses;
+    5. any picture that merely couldn't be ruled out."""
+    pictures = page_pictures(page, [lead])
+    found = await best_image(http, pictures, page.url, verified_only=True)
     if found:
-        return found
-    extra = [await oembed_thumbnail(http, page), *youtube_thumbnails(page.url), *origin_icons(page.url)]
+        return found, None
+    extra = [await oembed_thumbnail(http, page), *youtube_thumbnails(page.url)]
     found = await best_image(http, extra, page.url, verified_only=True)
-    return found or await best_image(http, candidates, page.url) or lead
+    if found:
+        return found, None
+    for share in pictures[:2]:
+        if await verify_image(http, share) is None:
+            return share, None
+    logos = [*site_logos(page)[:3], *await manifest_icons(http, page), *site_logos(page)[3:]]
+    found = await best_image(http, logos, page.url, verified_only=True)
+    if found:
+        return found, "logo"
+    return (await best_image(http, pictures, page.url) or lead), None
 
 
 def with_readability(e: Enrichment, page: Page) -> Enrichment:

@@ -926,6 +926,76 @@ async def test_working_blocked_and_shared_links_are_left_alone(settings):
     assert not any("duckduckgo" in u for u in asked)   # never searched
 
 
+def test_canonical_link_leads_to_the_original_without_tracking():
+    from magpie.enrich import Page, canonical_link
+    def page(url, links=(), meta=None):
+        return Page(url=url, meta=meta or {}, ld=[], title="", links=[{"rel": "canonical", "href": h} for h in links])
+    # a syndicated / AMP copy points at the original article
+    assert canonical_link(page("https://news.aggregator.example/amp/story-123?utm_source=fb",
+                               ["https://www.publisher.example/2026/09/story?utm_medium=social&id=7#top"])) \
+        == "https://www.publisher.example/2026/09/story?id=7"
+    # a template bug that declares the home page as canonical is ignored; og:url is next
+    assert canonical_link(page("https://blog.example/post", ["https://blog.example/"], {"og:url": "https://blog.example/post-final"})) \
+        == "https://blog.example/post-final"
+    assert canonical_link(page("https://blog.example/post?fbclid=abc&page=2")) == "https://blog.example/post?page=2"
+
+
+async def test_article_header_picture_then_the_site_logo(settings):
+    # no share image: the header picture the page preloads / marks as the hero comes before body pictures
+    html = ('<html><head><link rel="preload" as="image" href="/img/hero-1200.jpg"></head><body>'
+            '<img src="/img/inline.jpg" width="800" height="500"></body></html>')
+    routes = {"https://blog.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://blog.example/img/hero-1200.jpg": httpx.Response(200, content=_png((1200, 630)), headers={"content-type": "image/png"}),
+              "https://blog.example/img/inline.jpg": httpx.Response(200, content=_png((800, 500)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://blog.example/img/hero-1200.jpg" and e.image_kind is None
+
+    html = '<img class="wp-post-image attachment-full" src="/uploads/featured.jpg"><img src="/uploads/body.jpg" width="900" height="600">'
+    from magpie.images import header_images
+    assert header_images(html) == ["/uploads/featured.jpg"]
+
+    # no picture of the article at all: the publisher's logo, flagged as a logo
+    ld = '{"@type": "NewsArticle", "headline": "x", "publisher": {"@type": "Organization", "logo": {"url": "/brand/logo-square.png"}}}'
+    html = f'<html><head><script type="application/ld+json">{ld}</script><meta property="og:image" content="/gone.jpg"></head></html>'
+    routes = {"https://news.example/story": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://news.example/brand/logo-square.png": httpx.Response(200, content=_png((400, 400)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://news.example/story", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://news.example/brand/logo-square.png" and e.image_kind == "logo"
+    from magpie.pipeline import merge
+    assert merge(a, [e])["metadata"]["image_kind"] == "logo"
+
+
+async def test_web_app_manifest_icon_is_a_logo_too(settings):
+    html = '<html><head><link rel="manifest" href="/site.webmanifest"></head></html>'
+    manifest = {"icons": [{"src": "/i/192.png", "sizes": "192x192"}, {"src": "/i/512.png", "sizes": "512x512"}, {"src": "/i/48.png", "sizes": "48x48"}]}
+    routes = {"https://app.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://app.example/site.webmanifest": httpx.Response(200, json=manifest),
+              "https://app.example/i/512.png": httpx.Response(200, content=_png((512, 512)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://app.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://app.example/i/512.png" and e.image_kind == "logo"
+
+
+async def test_article_without_a_link_is_looked_up_and_bing_backs_up_duckduckgo(settings):
+    import base64
+    from magpie.findlink import repair_link
+    real = "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    wrapped = "https://www.bing.com/ck/a?!&amp;p=x&amp;u=a1" + base64.urlsafe_b64encode(real.encode()).decode().rstrip("=")
+    bing = f'<html><body><ol><li class="b_algo"><h2><a href="{wrapped}">t</a></h2></li></ol></body></html>'
+    routes = {"https://html.duckduckgo.com/html/": httpx.Response(202),   # DuckDuckGo's bot check
+              "https://www.bing.com/search": httpx.Response(200, text=bing, headers={"content-type": "text/html"}),
+              real: _article_page(TITLE)}
+    a = analysis(category="article", title=TITLE, canonical_url=None, details={**blank_details(), "publisher": "XDA"})
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real
+
+
 ARTICLE_WITH_LINKS = '''<html><head><title>uv replaced pip for me</title><meta property="og:title" content="uv replaced pip for me"></head><body>
 <a href="/about">About us</a> <a href="https://www.xda-developers.com/other-post">More posts</a>
 <a href="https://twitter.com/share?u=1">Tweet</a> <a href="https://www.facebook.com/sharer.php?u=1">Share</a>

@@ -12,13 +12,9 @@ import re
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from .enrich import Page, _ld_image, _ld_name, _ld_types, hf_repo
+from .enrich import SITE_TRACKING, TRACKING_PARAMS, Page, _ld_image, _ld_name, _ld_types, hf_repo
 from .readability import Article
 
-TRACKING_PARAMS = re.compile(r"^(utm_\w+|fbclid|gclid|dclid|msclkid|igshid|igsh|mc_cid|mc_eid|ref_src|ref_url|_hsenc|_hsmi)$", re.I)
-# Parameters that are only tracking on specific sites (elsewhere they can matter, e.g. ?s= search).
-SITE_TRACKING = {"x.com": {"s", "t"}, "twitter.com": {"s", "t"}, "youtube.com": {"si", "feature", "pp"},
-                 "open.spotify.com": {"si"}, "instagram.com": {"img_index"}}
 GITHUB_RESERVED = {
     "about", "apps", "collections", "contact", "customer-stories", "enterprise", "events", "explore", "features",
     "login", "marketplace", "new", "notifications", "orgs", "organizations", "pricing", "pulls", "issues", "search",

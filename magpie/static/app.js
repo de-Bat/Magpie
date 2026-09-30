@@ -1580,20 +1580,22 @@ document.addEventListener("error", (e) => {
   const img = e.target;
   if (!(img instanceof HTMLImageElement) || !img.classList.contains("cover-img")) return;
   brokenImages.add(img.getAttribute("src"));
-  img.closest(".cover")?.classList.remove("has-img", "wide-img");
+  img.closest(".cover")?.classList.remove("has-img", "wide-img", "logo-img");
   img.remove();
 }, true);
 
 function coverHtml(item, { chip = true } = {}) {
   // a real poster, cover or header; your own screenshot lives under "Original"
   const pic = safeUrl(item.image_url) && !brokenImages.has(safeUrl(item.image_url)) ? safeUrl(item.image_url) : null;
-  const wide = !!pic && WIDE_CATEGORIES.has(item.category);
+  // only the site's logo (no picture of the article): shown whole on a tile, with the title still on the cover
+  const logo = !!pic && item.metadata?.image_kind === "logo";
+  const wide = !!pic && !logo && WIDE_CATEGORIES.has(item.category);
   const busy = ["queued", "processing"].includes(item.status) || item.batch_pending || item.pending_upload;
   const flag = item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
   const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
-  return `<div class="cover t-${themeOf(item.category)} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
+  return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
     `${typeIcon(themeOf(item.category), "glyph")}${coverTitleHtml(item)}`}${
     // no-referrer: many sites refuse images to pages on other sites but serve them without a Referer
