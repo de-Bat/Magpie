@@ -105,6 +105,7 @@ MIGRATIONS = {
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
 # Metadata sources that confirm what an item is (as opposed to the model's say-so or a generic page card).
+VERIFIED_CONFIDENCE = 90   # a confident model answer counts as verified: with web search it checked the facts itself
 VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"}
 
 EDITABLE_COLUMNS = {
@@ -420,7 +421,8 @@ class Database:
             and item.get("confidence") is not None and item["confidence"] < REVIEW_THRESHOLD
         )
         sources = (item.get("metadata") or {}).get("sources") or []
-        item["verified"] = item["corrected"] or bool(VERIFYING_SOURCES.intersection(sources))
+        item["verified"] = (item["corrected"] or bool(VERIFYING_SOURCES.intersection(sources))
+                            or (item.get("confidence") or 0) >= VERIFIED_CONFIDENCE)
         item["tags"] = self.get_tags(item["id"])
         cost = self.conn.execute(
             "SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost, "

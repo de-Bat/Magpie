@@ -614,10 +614,13 @@ def test_unverified_items_are_flagged_and_filterable(settings):
     client, analyzer = make_client(settings, analysis(), routes)
     with client:
         good = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
-        analyzer.result = analysis(category="other", title="Mystery", canonical_url=None, details=blank_details())
+        analyzer.result = analysis(category="other", title="Mystery", canonical_url=None, details=blank_details(), confidence=75)
         odd = client.post("/api/items", files={"file": ("b.png", png_bytes((41, 60)), "image/png")}).json()["id"]
         assert client.get(f"/api/items/{good}").json()["verified"] is True    # confirmed by GitHub
-        assert client.get(f"/api/items/{odd}").json()["verified"] is False    # only the model's word
+        assert client.get(f"/api/items/{odd}").json()["verified"] is False    # only the model's word, and not sure
+        analyzer.result = analysis(category="other", title="Sure thing", canonical_url=None, details=blank_details(), confidence=95)
+        sure = client.post("/api/items", files={"file": ("c.png", png_bytes((42, 60)), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{sure}").json()["verified"] is True    # a confident answer counts
         assert [i["id"] for i in client.get("/api/items", params={"unverified": True}).json()] == [odd]
         client.post(f"/api/items/{odd}/correct", json={"title": "Mystery Box"})
         assert client.get(f"/api/items/{odd}").json()["verified"] is True     # corrected by the user

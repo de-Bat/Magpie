@@ -1093,7 +1093,10 @@ function searchBlob(item) {
 }
 
 // Ready items that no metadata source (TMDB, GitHub, ...) confirmed and the user hasn't corrected.
-const isUnverified = (item) => item.status === "ready" && !(item.verified ?? item.corrected);
+// Worked out here from the item's own fields (same rule as the server), so items saved before the rule existed or changed are judged too.
+const VERIFYING_SOURCES = new Set(["github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"]);
+const isVerified = (item) => !!item.corrected || (item.confidence ?? 0) >= 90 || (item.metadata?.sources || []).some((x) => VERIFYING_SOURCES.has(x));
+const isUnverified = (item) => item.status === "ready" && !isVerified(item);
 const needsCheck = (item) => item.needs_review || isUnverified(item);
 
 // "#tag" words in the search box are tag filters, the rest is text.
