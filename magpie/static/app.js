@@ -26,6 +26,25 @@ const TABS = [
   { id: "place", label: "Places & events", cats: ["place", "event"] },
   { id: "other", label: "Other", cats: ["product", "app", "course", "other"] },
 ];
+// One icon per type, drawn with the same stroke so they read as a set. Shown on every card, whether or not it has a picture.
+const TYPE_ICON_PATHS = {
+  movie: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>',
+  tv_show: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M8 21h8M12 18v3M9 3l3 3 3-3"/>',
+  github_repo: '<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 7v10M18 11c0 4-6 3-12 6"/>',
+  recipe: '<path d="M5 11h14v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2zM3 11h18M9 7c0-2 1-3 3-3s3 1 3 3"/>',
+  book: '<path d="M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3zM5 17a3 3 0 0 1 3-3h11"/>',
+  music: '<path d="M9 18V6l10-2v12"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="16.5" cy="16" r="2.5"/>',
+  podcast: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  video: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9l5 3-5 3z"/>',
+  article: '<path d="M6 3h9l4 4v14H6zM14 3v5h5M9 12h6M9 16h6"/>',
+  product: '<path d="M5 8h14l-1 12H6zM9 8V6a3 3 0 0 1 6 0v2"/>',
+  place: '<path d="M12 21s7-6 7-11a7 7 0 0 0-14 0c0 5 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+  event: '<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M8 3v4M16 3v4"/>',
+  app: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+  course: '<path d="M2 9l10-5 10 5-10 5zM6 11v5c0 1.5 3 3 6 3s6-1.5 6-3v-5"/>',
+  other: '<path d="M4 4h8l8 8-8 8-8-8z"/><circle cx="8.5" cy="8.5" r="1.2"/>',
+};
+const typeIcon = (c, cls = "ticon") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${TYPE_ICON_PATHS[c] || TYPE_ICON_PATHS.other}</svg>`;
 const tabOf = (item) => TABS.find((t) => t.cats?.includes(item.category))?.id || "other";
 // What each type's detail sheet lists first (anything else Magpie found follows).
 const FACT_ORDER = {
@@ -1251,7 +1270,7 @@ function renderFilters() {
   for (const i of items) counts[tabOf(i)] = (counts[tabOf(i)] || 0) + 1;
   if (state.tab !== "all" && !counts[state.tab]) state.tab = "all";
   $("#tabs").innerHTML = TABS.filter((t) => t.id === "all" || counts[t.id]).map((t) => `
-    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
+    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${t.cats[0]}">${typeIcon(t.cats[0])}</span>` : ""}${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
   const check = items.filter(needsCheck).length;
   $("#check-count").textContent = check || "";
   document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
@@ -1283,8 +1302,8 @@ function coverHtml(item, { chip = true } = {}) {
   const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
   return `<div class="cover t-${esc(item.category || "other")} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
     pic ? `<span class="cover-img" style="background-image:url('${esc(pic)}')"></span>` : ""}${
-    pic && !wide ? "" : `<span class="mono">${esc(initialsOf(item))}</span>`}${
-    chip ? `<span class="typechip">${esc(label)}</span>` : ""}${flag}</div>`;
+    pic && !wide ? "" : `${typeIcon(item.category || "other", "glyph")}<span class="mono">${esc(initialsOf(item))}</span>`}${
+    chip ? `<span class="typechip">${typeIcon(item.category || "other")}${esc(label)}</span>` : ""}${flag}</div>`;
 }
 
 function cardMeta(item) {
@@ -1451,7 +1470,7 @@ function renderDetail(item) {
   const canonical = safeUrl(item.canonical_url);
   const facts = orderedFacts(item);
   const links = (item.links || []).filter((l) => safeUrl(l.url));
-  const metaLine = [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
+  const metaLine = `<span class="eyebrow-type t-${esc(item.category || "other")}">${typeIcon(item.category || "other")}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
 
   const dlg = $("#detail");
   dlg.dataset.id = item.id;

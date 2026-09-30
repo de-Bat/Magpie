@@ -114,7 +114,15 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .cover.wide-img .cover-img { box-shadow: 0 2px 14px rgb(0 0 0 / .3); }
 .cover.has-img::before, .cover.wide-img::before { display: none; }
 .mono { position: absolute; left: 12px; bottom: 10px; font-weight: 800; font-size: 44px; line-height: 1; letter-spacing: -.03em; opacity: .92; }
-.typechip { position: absolute; left: 10px; top: 10px; font: 10.5px ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase; background: rgb(0 0 0 / .42); backdrop-filter: blur(4px); padding: 3px 8px; border-radius: 999px; }
+.typechip { position: absolute; left: 10px; top: 10px; display: inline-flex; align-items: center; gap: 5px; font: 600 10.5px ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase;
+  background: oklch(0.36 0.11 var(--h, 260)); color: #fff; box-shadow: 0 0 0 1.5px rgb(255 255 255 / .55); padding: 3px 9px 3px 6px; border-radius: 999px; }
+.ticon { width: 14px; height: 14px; flex: none; }
+.glyph { position: absolute; right: -6px; bottom: -6px; width: 58%; height: auto; color: #fff; opacity: .16; stroke-width: 1.2; pointer-events: none; }
+.tabs .tabicon { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; margin-right: 7px; vertical-align: -6px; color: #fff; background: oklch(0.5 0.12 var(--h, 260)); }
+.tabs .tabicon .ticon { width: 14px; height: 14px; }
+.tabs button[aria-selected="false"] .tabicon { opacity: .8; }
+.eyebrow-type { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; margin-right: 7px; vertical-align: -5px; color: #fff; background: oklch(0.5 0.12 var(--h, 260)); }
+.eyebrow-type .ticon { width: 13px; height: 13px; }
 .flag { position: absolute; right: 9px; top: 9px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
 .flag.warn { background: var(--warn-soft); color: var(--warn); }
 .flag.err { background: var(--err); color: #fff; }
@@ -136,8 +144,11 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .t-video .cover::before, .t-product .cover::before { background: repeating-linear-gradient(135deg, #fff 0 2px, transparent 2px 16px); opacity: .14; }
 .grid.list .card { grid-template-columns: 52px 1fr; align-items: center; gap: 14px; background: var(--surface); padding: 8px; }
 .grid.list .cover { aspect-ratio: 1; border-radius: 8px; }
-.grid.list .mono { font-size: 20px; left: 8px; bottom: 6px; }
+.grid.list .mono { display: none; }
+.grid.list .glyph { position: static; opacity: 1; width: 26px; margin: auto; display: block; height: 100%; }
+.grid.list .cover { display: grid; place-items: center; }
 .grid.list .typechip, .grid.list .flag, .grid.list .cover.busy::after { display: none; }
+.grid.list .cover.has-img .cover-img, .grid.list .cover.wide-img .cover-img { inset: 0; height: auto; background-size: cover; }
 .grid.list .card .title { min-height: 0; -webkit-line-clamp: 1; }
 .empty { color: var(--muted); text-align: center; padding: 48px 16px; }
 .fab { position: fixed; right: calc(20px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 4; border: 0; background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 13px 20px; font: inherit; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); }
