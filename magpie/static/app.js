@@ -754,18 +754,129 @@ function providerSwitch(sel) {
 // ---- model picker: the provider's own model list, fetched by the server ----------
 const modelLists = {};   // provider id -> [{id, label}]
 
+// ---- fuzzy search over a provider's models --------------------------------------
+// "gpt4omini" finds "gpt-4o-mini", "opus5" finds "claude-opus-5": every typed word must appear in order (not
+// necessarily side by side); exact runs, word starts and tight matches rank first.
+function fuzzyOne(token, text) {
+  const at = text.indexOf(token);
+  if (at >= 0) {
+    const boundary = at === 0 || /[^a-z0-9]/.test(text[at - 1]);
+    return { score: 1000 - at + (boundary ? 200 : 0) + token.length * 3, pos: Array.from({ length: token.length }, (_, i) => at + i) };
+  }
+  let from = 0, prev = -2, score = 0;
+  const pos = [];
+  for (const c of token) {
+    const i = text.indexOf(c, from);
+    if (i < 0) return null;
+    score += (i === prev + 1 ? 18 : 0) + (i === 0 || /[^a-z0-9]/.test(text[i - 1]) ? 12 : 0) - Math.min(i - from, 12);
+    pos.push(i);
+    prev = i; from = i + 1;
+  }
+  return { score, pos };
+}
+
+function fuzzyMatch(query, text) {
+  const t = fold(text), tokens = fold(query).split(/\s+/).filter(Boolean);
+  if (!tokens.length) return { score: 0, pos: new Set() };
+  let score = 0;
+  const pos = new Set();
+  for (const token of tokens) {
+    const m = fuzzyOne(token, t);
+    if (!m) return null;
+    score += m.score;
+    m.pos.forEach((i) => pos.add(i));
+  }
+  return { score: score - t.length * 0.2, pos };
+}
+
+function highlight(text, pos) {
+  return [...text].map((ch, i) => (pos.has(i) ? `<mark>${esc(ch)}</mark>` : esc(ch))).join("");
+}
+
 function modelControlHtml(prefix, p, value, defaultModel) {
   const list = modelLists[p.id];
   const refresh = `<button class="link-btn" type="button" data-load-models="${prefix}" title="Fetch the models this provider offers">${list ? "Refresh" : "Load models"}</button>`;
-  if (!list) {
-    return `<input id="${prefix}-model" name="${prefix}_model" type="text" value="${esc(value)}" placeholder="${esc(defaultModel)}" spellcheck="false" autocapitalize="off">${refresh}`;
-  }
-  const ids = list.map((m) => m.id);
-  const options = [`<option value="" ${value === "" ? "selected" : ""}>Default${defaultModel ? ` (${esc(defaultModel)})` : ""}</option>`]
-    .concat(value && !ids.includes(value) ? [`<option value="${esc(value)}" selected>${esc(value)}</option>`] : [])
-    .concat(list.map((m) => `<option value="${esc(m.id)}" ${m.id === value ? "selected" : ""}>${esc(m.label === m.id ? m.id : `${m.label} (${m.id})`)}</option>`));
-  return `<select id="${prefix}-model" name="${prefix}_model">${options.join("")}</select>${refresh}`;
+  return `<div class="combo" data-provider="${esc(p.id)}">
+    <input id="${prefix}-model" name="${prefix}_model" class="combo-input" type="text" value="${esc(value)}" placeholder="${esc(defaultModel)}"
+      role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="${prefix}-model-list" data-default="${esc(defaultModel)}"
+      autocomplete="off" spellcheck="false" autocapitalize="off" ${list ? `title="Type to search ${list.length} models"` : ""}>
+    <ul class="combo-list" id="${prefix}-model-list" role="listbox" hidden></ul></div>${refresh}`;
 }
+
+// The list under a model box: the provider's models that fit what was typed, best first.
+function renderComboList(input, query) {
+  const box = input.closest(".combo"), ul = box.querySelector(".combo-list");
+  const models = modelLists[box.dataset.provider];
+  if (!models) { ul.hidden = true; input.setAttribute("aria-expanded", "false"); return; }
+  const rows = [];
+  for (const m of models) {
+    const shown = m.label === m.id ? m.id : `${m.label} (${m.id})`;
+    const hit = fuzzyMatch(query, shown);
+    if (hit) rows.push({ id: m.id, shown, hit });
+  }
+  if (query.trim()) rows.sort((a, b) => b.hit.score - a.hit.score);
+  const def = input.dataset.default;
+  const items = [...(!query.trim() ? [{ id: "", html: `<b>Default</b>${def ? ` <span class="combo-sub">${esc(def)}</span>` : ""}` }] : []),
+    ...rows.slice(0, 60).map((r) => ({ id: r.id, html: highlight(r.shown, r.hit.pos) }))];
+  ul.innerHTML = items.length
+    ? items.map((it, i) => `<li role="option" class="combo-opt${i === 0 ? " active" : ""}" data-value="${esc(it.id)}" id="${ul.id}-${i}">${it.html}</li>`).join("")
+    : `<li class="combo-empty">No model matches “${esc(query)}”. You can still use it as typed.</li>`;
+  ul.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+  if (!items.length) input.removeAttribute("aria-activedescendant"); else input.setAttribute("aria-activedescendant", `${ul.id}-0`);
+  ul.scrollTop = 0;
+  // a box at the bottom of the scrolling settings pane: scroll so the whole list is in view
+  requestAnimationFrame(() => { if (!ul.hidden) ul.scrollIntoView({ block: "nearest" }); });
+}
+
+function closeCombo(input) {
+  input.closest(".combo")?.querySelector(".combo-list")?.setAttribute("hidden", "");
+  input.setAttribute("aria-expanded", "false");
+  input.removeAttribute("aria-activedescendant");
+}
+
+function moveCombo(input, delta) {
+  const ul = input.closest(".combo").querySelector(".combo-list");
+  const opts = [...ul.querySelectorAll(".combo-opt")];
+  if (!opts.length) return;
+  const at = Math.max(0, opts.findIndex((o) => o.classList.contains("active")));
+  const next = opts[(at + delta + opts.length) % opts.length];
+  opts.forEach((o) => o.classList.toggle("active", o === next));
+  input.setAttribute("aria-activedescendant", next.id);
+  next.scrollIntoView({ block: "nearest" });
+}
+
+function pickCombo(input, value) {
+  input.value = value;
+  closeCombo(input);
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+document.addEventListener("focusin", (e) => { if (e.target.matches?.(".combo-input")) renderComboList(e.target, ""); });
+document.addEventListener("input", (e) => { if (e.target.matches?.(".combo-input")) renderComboList(e.target, e.target.value); });
+document.addEventListener("focusout", (e) => { if (e.target.matches?.(".combo-input")) setTimeout(() => closeCombo(e.target), 120); });
+document.addEventListener("mousedown", (e) => {
+  const opt = e.target.closest?.(".combo-opt");
+  if (!opt) return;
+  e.preventDefault();   // keep the box focused; the pick below closes the list
+  pickCombo(opt.closest(".combo").querySelector(".combo-input"), opt.dataset.value);
+});
+document.addEventListener("keydown", (e) => {
+  const input = e.target.matches?.(".combo-input") ? e.target : null;
+  if (!input) return;
+  const open = !input.closest(".combo").querySelector(".combo-list").hidden;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!open) renderComboList(input, ""); else moveCombo(input, e.key === "ArrowDown" ? 1 : -1);
+  } else if (e.key === "Enter" && open) {
+    e.preventDefault();   // choose, don't save the whole form
+    const active = input.closest(".combo").querySelector(".combo-opt.active");
+    if (active) pickCombo(input, active.dataset.value); else closeCombo(input);
+  } else if (e.key === "Escape" && open) {
+    e.preventDefault(); e.stopPropagation();   // closes the list, not the settings dialog
+    closeCombo(input);
+  }
+}, true);
 
 function renderModelControl(prefix, p, value, defaultModel) {
   const control = $(`#${prefix}-model`)?.closest(".setting-control");
