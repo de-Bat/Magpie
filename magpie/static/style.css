@@ -464,6 +464,17 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
   .settings-panel { height: calc(100dvh - 24px); }
 }
 
+.combo { position: relative; flex: 1; min-width: 0; }
+.combo-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; max-height: 260px; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.combo-opt, .combo-empty { padding: 6px 9px; border-radius: 7px; font-size: 14px; overflow-wrap: anywhere; }
+.combo-opt { cursor: pointer; }
+.combo-opt.active, .combo-opt:hover { background: var(--accent-soft); }
+.combo-empty { color: var(--muted); font-size: 13px; }
+.combo-sub { color: var(--muted); font-size: 13px; }
+.combo mark { background: none; color: var(--accent); font-weight: 700; }
+.setting-control .combo input { width: 100%; }
+
 /* ---- appearance picker ---- */
 .appearance { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .appearance h4 { margin: 0; font-size: 14px; }
