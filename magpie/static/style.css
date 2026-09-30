@@ -102,9 +102,12 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .grid.list { grid-template-columns: 1fr; gap: 8px; }
 .grid.cols { grid-template-columns: repeat(var(--cols), minmax(0, 1fr)); }
 .grid.cols.dense { gap: 12px 8px; }
-.cols-seg { align-items: center; }
-.cols-seg button { padding: 5px 10px; font-size: 15px; line-height: 1; }
-.cols-label { min-width: 52px; text-align: center; font-size: 13px; color: var(--muted); }
+.cols-pick { display: inline-flex; align-items: center; gap: 4px; background: var(--surface-2); border-radius: 10px; padding: 3px 4px 3px 10px; color: var(--muted); }
+.cols-pick select { appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; font-weight: 500;
+  padding: 3px 18px 3px 2px; cursor: pointer; border-radius: 8px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 9px) 55%, calc(100% - 5px) 55%; background-size: 4px 4px; background-repeat: no-repeat; }
+.cols-pick select option { background: var(--surface); color: var(--text); }
 
 .card { display: grid; gap: 8px; cursor: pointer; border-radius: 12px; align-content: start; position: relative; container-type: inline-size; }
 .card:focus-visible { outline-offset: 4px; }
