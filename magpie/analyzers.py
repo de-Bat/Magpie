@@ -32,8 +32,8 @@ ARRAY_DETAILS = {k for k, v in SCHEMA["properties"]["details"]["properties"].ite
 
 LOCAL_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
     "2. Use web search to confirm the identity and find the canonical source.",
-    "2. You have no web access. Use what you know plus the screenshot and OCR text to name the thing and, "
-    "when you are sure of it, its canonical URL.",
+    "2. You have no web access. Use what you know plus the screenshot and OCR text to name the thing. Give a "
+    "canonical URL only if it is written in the screenshot; never guess an address.",
 ).replace(
     "Finish by calling save_analysis once. Do not ask the user questions.",
     "Reply with a single JSON object matching the requested schema. Do not ask the user questions.",
