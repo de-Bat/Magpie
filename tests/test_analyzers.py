@@ -362,9 +362,10 @@ def test_rate_limit_headers_are_normalized_and_key_check_reports_them(tmp_path):
     from magpie.models import check_key
     from magpie.usage import LIMITS, parse_limits
 
-    assert parse_limits({"x-ratelimit-remaining-requests": "59", "x-ratelimit-limit-requests": "60",
-                         "x-ratelimit-remaining-tokens": "5000", "x-ratelimit-reset-tokens": "1s"}) == {
-        "requests": {"remaining": 59, "limit": 60, "reset": None}, "tokens": {"remaining": 5000, "limit": None, "reset": "1s"}}
+    parsed = parse_limits({"x-ratelimit-remaining-requests": "59", "x-ratelimit-limit-requests": "60",
+                           "x-ratelimit-remaining-tokens": "5000", "x-ratelimit-reset-tokens": "1s"})
+    assert parsed["requests"] == {"remaining": 59, "limit": 60, "reset": None, "reset_at": None}
+    assert parsed["tokens"]["remaining"] == 5000 and parsed["tokens"]["reset"] == "1s" and parsed["tokens"]["reset_at"]
     assert parse_limits({"anthropic-ratelimit-tokens-remaining": "900", "anthropic-ratelimit-tokens-limit": "1000"})["tokens"]["limit"] == 1000
     assert parse_limits({"content-type": "x"}) is None
 

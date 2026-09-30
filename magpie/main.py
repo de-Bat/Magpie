@@ -29,7 +29,7 @@ from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
 from .models import check_key
-from .usage import LIMITS
+from . import limits
 from .db import Database
 from .pipeline import Pipeline
 
@@ -132,9 +132,29 @@ def create_app(
         pipeline.analyzer = build_analyzer(pipeline.http)
         start_worker(pipeline.analyzer)
 
+    async def retry_limited() -> None:
+        """Re-run items that failed because a model hit its limit, once their retry time has come."""
+        while True:
+            await asyncio.sleep(RETRY_POLL_SECONDS)
+            try:
+                if not rt.db_ok:
+                    continue
+                for item_id in db.due_retries():
+                    item = db.get_item(item_id)
+                    if not item or item.get("status") != "error":
+                        continue
+                    db.update_item(item_id, status="processing", error=None)
+                    await state["pipeline"].process(item_id, None, "analyze")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Automatic retry failed")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         client = http or httpx.AsyncClient(timeout=20)
+        limits.count_requests = lambda provider, model, since: db.requests_since(provider, model, since) if rt.db_ok else 0
+        retry_task = asyncio.create_task(retry_limited())
         chosen = build_analyzer(client)
         state["pipeline"] = app.state.pipeline = Pipeline(db, settings, chosen, client)
         try:
@@ -148,6 +168,7 @@ def create_app(
         if not settings.api_tokens:
             log_setup_code()
         yield
+        retry_task.cancel()
         if rt.worker_task:
             rt.worker_task.cancel()
         if http is None:
@@ -473,9 +494,14 @@ def create_app(
             "provider_model": settings.llm_model if settings.hosted_llm in HOSTED_LLMS else settings.model,
             "claude_batch": settings.claude_batch, "fetch_max_tokens": settings.fetch_max_tokens,
             "escalate_below": settings.escalate_below, "monthly_budget_usd": settings.monthly_budget_usd,
-            "month_spent_usd": round(db.month_cost(), 4), "limits": LIMITS,
+            "month_spent_usd": round(db.month_cost(), 4), "limits": limits.report(settings.paid_models()),
         }
         return report
+
+    @app.get("/api/limits")
+    def model_limits():
+        """What each provider/model in use has left, and any that hit a limit with when they're back."""
+        return {"models": limits.report(settings.paid_models()), "waiting": db.waiting_for_limits()}
 
     @app.get("/api/usage.csv")
     def usage_csv(days: int = Query(30, ge=1, le=366)):
@@ -541,6 +567,7 @@ def _normalize_time(value: str | None) -> str | None:
 
 
 INTERRUPTED = "The server stopped before this finished. Re-analyze to try again."
+RETRY_POLL_SECONDS = 30   # how often items waiting for a model's limit are checked
 SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I: easy to copy from a log
 
 

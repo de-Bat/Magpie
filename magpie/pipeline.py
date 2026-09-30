@@ -4,6 +4,7 @@ import json
 import logging
 import mimetypes
 import re
+from datetime import timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 import anthropic
 import httpx
 
-from .analyzer import AnalysisError
+from .analyzer import AnalysisError, RateLimited
 from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import links, readability
@@ -363,6 +364,10 @@ class Pipeline:
             d.context["runs"] = []
             self.db.add_batch_job(item_id, purpose, d.params, d.context)
             return self.db.get_item(item_id)
+        except RateLimited as e:
+            self.db.record_runs(item_id, e.runs, purpose)
+            return self.db.update_item(item_id, status="error", error=str(e),
+                                       retry_at=e.until.astimezone(timezone.utc).isoformat(timespec="microseconds") if e.until else None)
         except AnalysisError as e:
             self.db.record_runs(item_id, e.runs, purpose)
             return self.db.update_item(item_id, status="error", error=str(e))

@@ -6,6 +6,7 @@ search to pin down the canonical source, and reports back through a strict tool 
 the result always matches the schema below.
 """
 
+import asyncio
 import base64
 import io
 import logging
@@ -14,6 +15,7 @@ from typing import Any
 
 import anthropic
 
+from . import limits
 from .usage import Run, claude_cost, record_limits
 
 log = logging.getLogger(__name__)
@@ -173,6 +175,23 @@ class AnalysisError(Exception):
     def __init__(self, message: str, runs: list | None = None):
         super().__init__(message)
         self.runs = runs or []  # usage already spent before the failure, so it is still recorded
+
+
+PROVIDER_LABELS = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini", "openrouter": "OpenRouter", "groq": "Groq"}
+REASONS = {"rate limit": "rate limit", "daily quota": "daily quota", "credit": "credit or billing quota"}
+
+
+class RateLimited(AnalysisError):
+    """The provider won't take requests for this model until `until` (a UTC datetime)."""
+
+    def __init__(self, provider: str, model: str | None, until, reason: str, runs: list | None = None):
+        self.provider, self.model, self.until, self.reason = provider, model, until, reason
+        name = PROVIDER_LABELS.get(provider, provider) + (f" ({model})" if model else "")
+        if reason == "credit":
+            msg = f"{name} is out of credit or over its billing quota. Add credit with the provider; Magpie retries automatically."
+        else:
+            msg = f"{name} reached its {REASONS.get(reason, reason)}. Magpie retries automatically when it's available again."
+        super().__init__(msg, runs)
 
 
 def correction_prompt(correction: dict) -> str:
@@ -348,6 +367,19 @@ class ScreenshotAnalyzer:
             raise
 
     async def _create(self, params: dict):
+        hit = limits.blocked("claude", self.model)
+        if hit and limits.wait_seconds(hit[0]) > limits.WAIT_AT_MOST:
+            raise RateLimited("claude", self.model, hit[0], hit[1])
+        if hit:
+            await asyncio.sleep(limits.wait_seconds(hit[0]))
+        try:
+            return await self._send(params)
+        except anthropic.RateLimitError as e:
+            response = getattr(e, "response", None)
+            entry = limits.mark_limited("claude", self.model, getattr(response, "headers", None), getattr(response, "text", "") or str(e))
+            raise RateLimited("claude", self.model, limits._parse_iso(entry["blocked_until"]), entry["blocked_reason"]) from e
+
+    async def _send(self, params: dict):
         fallback = self.model in FALLBACK_MODELS
         messages = self.client.beta.messages if fallback else self.client.messages
         kwargs = {**params, "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if fallback else params
@@ -355,5 +387,5 @@ class ScreenshotAnalyzer:
         if raw is None:
             return await messages.create(**kwargs)
         response = await raw.create(**kwargs)
-        record_limits("claude", response.headers)  # what the account has left in this rate-limit window
+        record_limits("claude", response.headers, model=self.model, status=200)  # what's left in this rate-limit window
         return response.parse()
