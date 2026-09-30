@@ -363,10 +363,11 @@ def create_app(
         tag: list[str] = Query(default=[]),
         needs_review: bool = False,
         unverified: bool = Query(False, description="Only items no metadata source (TMDB, GitHub, ...) confirmed and you haven't corrected"),
+        to_check: bool = Query(False, description="Only items that failed, are unsure, or that nothing confirmed"),
         limit: int = Query(200, le=500),
         offset: int = 0,
     ):
-        return db.list_items(q=q, category=category, tags=tag, needs_review=needs_review, unverified=unverified,
+        return db.list_items(q=q, category=category, tags=tag, needs_review=needs_review, unverified=unverified, to_check=to_check,
                              limit=limit, offset=offset)
 
     @app.get("/api/items/{item_id}")

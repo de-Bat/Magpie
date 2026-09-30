@@ -148,10 +148,13 @@ def test_failed_analysis_is_kept_and_can_be_retried(settings):
         item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
         item = client.get(f"/api/items/{item_id}").json()
         assert item["status"] == "error" and "declined" in item["error"]
+        assert item["to_check"] is True       # a failed analysis needs a look
+        assert [i["id"] for i in client.get("/api/items", params={"to_check": True}).json()] == [item_id]
 
         analyzer.result = analysis()
         client.post(f"/api/items/{item_id}/reanalyze")
-        assert client.get(f"/api/items/{item_id}").json()["status"] == "ready"
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["status"] == "ready" and item["to_check"] is False    # solved by the retry
 
 
 def test_rejects_non_images(settings):
