@@ -104,6 +104,8 @@ MIGRATIONS = {
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
+# Metadata sources that confirm what an item is (as opposed to the model's say-so or a generic page card).
+VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe"}
 
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
@@ -209,6 +211,7 @@ class Database:
         category: str | None = None,
         tags: list[str] | None = None,
         needs_review: bool = False,
+        unverified: bool = False,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -233,6 +236,10 @@ class Database:
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += f" ORDER BY {order} LIMIT ? OFFSET ?"
+        if unverified:  # derived from each item's metadata sources, so filter after loading
+            rows = self.conn.execute(sql.replace(" LIMIT ? OFFSET ?", ""), params).fetchall()
+            found = [i for i in (self._row_to_item(r) for r in rows) if i["status"] == "ready" and not i["verified"]]
+            return found[offset:offset + limit]
         rows = self.conn.execute(sql, (*params, limit, offset)).fetchall()
         return [self._row_to_item(r) for r in rows]
 
@@ -387,6 +394,8 @@ class Database:
             item.get("status") == "ready" and not item["corrected"]
             and item.get("confidence") is not None and item["confidence"] < REVIEW_THRESHOLD
         )
+        sources = (item.get("metadata") or {}).get("sources") or []
+        item["verified"] = item["corrected"] or bool(VERIFYING_SOURCES.intersection(sources))
         item["tags"] = self.get_tags(item["id"])
         cost = self.conn.execute(
             "SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost, "

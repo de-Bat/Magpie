@@ -242,7 +242,7 @@ Before running on a device:
 | `GET` | `/api/status` | Setup problems, most serious first: `{status, problems: [{level, key, message}]}` |
 | `GET` / `PUT` | `/api/settings` | Settings with their source (`ui`, `env`, `default`) and problems; secrets masked. PUT `{"changes": {"ENV_NAME": value}}` (`null` resets); invalid values → `422` with per-field `errors` |
 | `POST` | `/api/items` | Multipart form with **either** `file` (PNG/JPEG/WebP/GIF screenshot) **or** `url` (a link), plus optional `note`, `tags` (comma-separated), `id` (client-generated, idempotent), `created_at`. Returns `202`; identification runs in the background. A link that is already saved returns the existing item with `"duplicate": true` |
-| `GET` | `/api/items` | `?q=` full-text, `?category=`, `?tag=` (repeatable), `?needs_review=true` |
+| `GET` | `/api/items` | `?q=` full-text, `?category=`, `?tag=` (repeatable), `?needs_review=true`, `?unverified=true` |
 | `GET` / `PATCH` / `DELETE` | `/api/items/{id}` | PATCH accepts `title`, `subtitle`, `summary`, `category`, `note`, `canonical_url`, `tags` |
 | `POST` | `/api/items/{id}/reanalyze` | Run identification again |
 | `POST` | `/api/items/{id}/refresh-metadata` | Look up the poster/cover, ratings and links again in TMDB, GitHub, Open Library, etc. No model call, so it's free; title, category and tags stay as they are |
