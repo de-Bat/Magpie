@@ -125,6 +125,10 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .cover .typechip, .cover .flag { z-index: 2; }
 .cover.busy::after { z-index: 2; }
 .cover.has-img::before, .cover.wide-img::before { display: none; }
+/* a site's logo: whole, on a light tile in the upper part of the themed cover; the title stays readable below */
+.cover.logo-img .cover-img { inset: auto; left: 50%; top: 23%; width: 42%; height: auto; aspect-ratio: 1; transform: translateX(-50%);
+  object-fit: contain; padding: 7%; box-sizing: border-box; background: #fff; border-radius: 18%; box-shadow: 0 4px 18px rgb(0 0 0 / .28); }
+.cover.logo-img .glyph { visibility: hidden; }
 .cover-title { position: absolute; left: 7%; right: 7%; bottom: 7%; font-weight: 800; line-height: 1.02; letter-spacing: -.02em;
   text-wrap: balance; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--lines, 2);
   font-size: clamp(11px, var(--fs, 10cqw), 64px);
@@ -166,6 +170,8 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .grid.list .cover { display: grid; place-items: center; }
 .grid.list .typechip, .grid.list .flag, .grid.list .cover.busy::after { display: none; }
 .grid.list .cover.has-img .cover-img, .grid.list .cover.wide-img .cover-img { top: 0; height: 100%; object-fit: cover; filter: none; }
+.grid.list .cover.logo-img .cover-img { inset: 0; left: 0; top: 0; width: 100%; height: 100%; transform: none; border-radius: 0; box-shadow: none; padding: 12%; }
+.grid.list .cover.logo-img .glyph { display: none; }
 .grid.list .card .title { min-height: 0; -webkit-line-clamp: 1; }
 .verify-btn { z-index: 3; position: absolute; right: 8px; top: 38px; border: 0; border-radius: 999px; padding: 5px 11px; font: 600 12px system-ui, sans-serif; cursor: pointer;
   background: rgb(255 255 255 / .94); color: #14181f; box-shadow: 0 1px 6px rgb(0 0 0 / .35); }

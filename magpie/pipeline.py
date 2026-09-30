@@ -71,11 +71,13 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     related = list(analysis.get("related") or [])
     tags = list(analysis.get("tags") or [])
     sources = ["claude"]
+    image_kind = None
 
     for e in enrichments:
         metadata.update({k: v for k, v in e.metadata.items() if not _empty(v)})
         canonical_url = e.canonical_url or canonical_url
-        image_url = e.image_url or image_url
+        if e.image_url:
+            image_url, image_kind = e.image_url, e.image_kind
         subtitle = subtitle or e.subtitle
         if e.subtitle and e.subtitle != subtitle:
             metadata.setdefault("description", e.subtitle)
@@ -98,6 +100,9 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         if url and url.startswith("http") and url not in seen:
             seen.add(url)
             unique_links.append({"label": link.get("label") or url, "url": url})
+    metadata.pop("image_kind", None)
+    if image_kind:
+        metadata["image_kind"] = image_kind   # the card shows a logo whole on the themed cover instead of cropping it
     used = analysis.get("_analyzer") or ["claude"]
     metadata["sources"] = used + sources[1:]
     if analysis.get("_ocr_text"):
@@ -278,7 +283,9 @@ class Pipeline:
         repaired = await repair_link({**analysis, "_analyzer": ["link"] if item.get("kind") == "url" else []}, self.http) \
             if self.settings.enrich else analysis
         analysis = {**analysis, "canonical_url": repaired.get("canonical_url")}
-        fresh = merge(analysis, await run_enrichers(analysis, self.settings, self.http))
+        enrichments = await run_enrichers(analysis, self.settings, self.http)
+        fresh = merge(analysis, enrichments)
+        from_page = any((e.source or "").startswith("opengraph") for e in enrichments)
         links, seen = list(item.get("links") or []), {l.get("url") for l in item.get("links") or []}
         links += [l for l in fresh["links"] if l["url"] not in seen]
         changes = {
@@ -288,8 +295,15 @@ class Pipeline:
             "related": clean_related([*(item.get("related") or []), *fresh["related"]], exclude=[analysis["canonical_url"] or fresh["canonical_url"], *[l.get("url") for l in links]]),
             "subtitle": item.get("subtitle") or fresh["subtitle"],
             "summary": item.get("summary") or fresh["summary"],
-            "canonical_url": analysis["canonical_url"] or fresh["canonical_url"],   # a dead link is replaced, or dropped
+            # a dead link is replaced, or dropped; a page's own canonical address (the original of a syndicated or
+            # AMP copy, without tracking parameters) replaces the one we had, unless you set the link yourself
+            "canonical_url": (fresh["canonical_url"] if from_page and not item.get("corrected") and fresh["canonical_url"]
+                              else analysis["canonical_url"] or fresh["canonical_url"]),
         }
+        if fresh["image_url"]:
+            changes["metadata"].pop("image_kind", None)
+            if fresh["metadata"].get("image_kind"):
+                changes["metadata"]["image_kind"] = fresh["metadata"]["image_kind"]
         return self.db.update_item(item_id, **changes)
 
     async def complete_batch_job(self, job: dict, result: Any) -> dict | None:

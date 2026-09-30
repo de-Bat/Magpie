@@ -6,13 +6,15 @@ something else, we search for the article by title, prefer results on the same s
 first page whose title really matches. If nothing checks out, no link is better than a dead one.
 """
 
+import base64
+import html as html_lib
 import logging
 import re
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
-from .enrich import Page, fetch_page, link_is_gone
+from .enrich import Page, canonical_link, fetch_page, link_is_gone
 from .fetch import BlockedURL, safe_get
 
 log = logging.getLogger(__name__)
@@ -46,7 +48,47 @@ def _unwrap(href: str) -> str | None:
     return real if real.startswith("http") and "duckduckgo.com" not in urlsplit(real).netloc else None
 
 
+def _unwrap_bing(href: str) -> str | None:
+    """Bing wraps result links as bing.com/ck/a?...&u=a1<base64 of the real url>."""
+    href = html_lib.unescape(href)
+    if "bing.com/ck/" in href:
+        u = (parse_qs(urlsplit(href).query).get("u") or [""])[0]
+        if not u.startswith("a1"):
+            return None
+        try:
+            href = base64.urlsafe_b64decode(u[2:] + "=" * (-len(u[2:]) % 4)).decode()
+        except (ValueError, UnicodeDecodeError):
+            return None
+    host = urlsplit(href).netloc
+    return href if href.startswith("http") and not host.endswith(("bing.com", "microsoft.com", "msn.com")) else None
+
+
+async def bing_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> list[str]:
+    """Result addresses from Bing's HTML page, when DuckDuckGo gives nothing."""
+    try:
+        r = await safe_get(http, "https://www.bing.com/search", params={"q": query, "setlang": "en"},
+                           headers={"User-Agent": SEARCH_UA, "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"}, timeout=12)
+    except (httpx.HTTPError, BlockedURL) as e:
+        log.info("Bing search failed: %s", e)
+        return []
+    if r.status_code != 200:
+        return []
+    found: list[str] = []
+    for href in re.findall(r'<li class="b_algo"[^>]*>.*?<h2[^>]*>\s*<a[^>]*href="([^"]+)"', r.text, re.S):
+        url = _unwrap_bing(href)
+        if url and url not in found:
+            found.append(url)
+        if len(found) >= limit:
+            break
+    return found
+
+
 async def search_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> list[str]:
+    """Result addresses for a query: DuckDuckGo's HTML page (no key), then Bing's. Empty when both refuse."""
+    return await ddg_results(query, http, limit) or await bing_results(query, http, limit)
+
+
+async def ddg_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> list[str]:
     """Result addresses from DuckDuckGo's HTML page (no key). Empty when it refuses or changes shape."""
     try:
         r = await safe_get(http, "https://html.duckduckgo.com/html/", params={"q": query},
@@ -66,15 +108,15 @@ async def search_results(query: str, http: httpx.AsyncClient, limit: int = 6) ->
     return found
 
 
-async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncClient) -> str | None:
-    """The address of the page titled `title`, looked for on the same site first."""
+async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncClient, publisher: str | None = None) -> str | None:
+    """The address of the page titled `title`, looked for on the same site (or at the named publisher) first."""
     host = (urlsplit(wrong_url or "").hostname or "").removeprefix("www.")
-    queries = ([f'"{title}" site:{host}'] if host else []) + [f'"{title}"']
+    queries = ([f'"{title}" site:{host}'] if host else []) + ([f'"{title}" {publisher}'] if publisher else []) + [f'"{title}"']
     for query in queries:
         for url in await search_results(query, http):
             page = await fetch_page(url, http)
             if page and page_matches(title, page):
-                return page.url
+                return canonical_link(page)
     return None
 
 
@@ -82,6 +124,11 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
     """The analysis with a working link: unchanged if the model's link opens and fits the title; otherwise the
     real article's address, or no link at all when it can't be found. Links you shared yourself are never touched."""
     url, title = analysis.get("canonical_url"), analysis.get("title")
+    if not url and title and analysis.get("category") == "article" and "link" not in (analysis.get("_analyzer") or []):
+        # the model named the article but found no address for it: look it up
+        publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
+        found = await find_article_url(title, None, http, publisher)
+        return {**analysis, "canonical_url": found} if found else analysis
     if (not url or not title or analysis.get("category") not in REPAIRABLE or not url.startswith("http")
             or "link" in (analysis.get("_analyzer") or [])):
         return analysis
