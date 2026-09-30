@@ -23,7 +23,7 @@ const HIDDEN_META = new Set([
 ]);
 
 const state = {
-  q: "", category: null, tags: [], review: false,
+  q: "", category: null, tags: [], review: false, unverified: false,
   items: new Map(),        // id -> item (mirror of the IndexedDB "items" store)
   ops: [],                 // queued changes, oldest first
   sync: "idle",            // idle | syncing | offline | auth | error
@@ -276,7 +276,7 @@ async function correctItem(id, correction) {
   await putItem({
     ...item, ...("title" in fix ? { title: fix.title } : {}), ...("category" in fix ? { category: fix.category } : {}),
     status: item.pending_upload ? item.status : "processing", error: null,
-    corrected: true, needs_review: false, confidence: "hint" in fix && Object.keys(fix).length === 1 ? item.confidence : 100,
+    corrected: true, verified: true, needs_review: false, confidence: "hint" in fix && Object.keys(fix).length === 1 ? item.confidence : 100,
   });
   await enqueue({ type: "correct", id, correction: fix });
   toast(navigator.onLine ? "Correction saved — updating details…" : "Correction saved — will update when you're back online");
@@ -1048,12 +1048,16 @@ function searchBlob(item) {
   return fold(parts.filter(Boolean).join(" ").replace(/-/g, " ") + " " + (item.tags || []).join(" "));
 }
 
+// Ready items that no metadata source (TMDB, GitHub, ...) confirmed and the user hasn't corrected.
+const isUnverified = (item) => item.status === "ready" && !(item.verified ?? item.corrected);
+
 function filteredItems() {
   const words = fold(state.q).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
   return [...state.items.values()]
     .filter((item) => {
       if (state.category && item.category !== state.category) return false;
       if (state.review && !item.needs_review) return false;
+      if (state.unverified && !isUnverified(item)) return false;
       if (state.tags.some((t) => !(item.tags || []).includes(t))) return false;
       if (!words.length) return true;
       const tokens = searchBlob(item).split(/[^\p{L}\p{N}]+/u);
@@ -1157,13 +1161,16 @@ function renderFilters() {
     for (const t of i.tags || []) tagCounts[t] = (tagCounts[t] || 0) + 1;
   }
   const review = items.filter((i) => i.needs_review).length;
+  const unverified = items.filter(isUnverified).length;
   $("#categories").innerHTML = (review ? `
     <button class="chip warn ${state.review ? "active" : ""}" data-review>⚠ Needs review <span class="count">${review}</span></button>` : "") +
+    (unverified ? `
+    <button class="chip ${state.unverified ? "active" : ""}" data-unverified title="Not confirmed by TMDB, GitHub, Open Library or the page itself">○ Unverified <span class="count">${unverified}</span></button>` : "") +
     (Object.entries(catCounts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `
     <button class="chip ${state.category === c ? "active" : ""}" data-category="${esc(c)}">
       ${esc(CATEGORY_LABELS[c] || c)} <span class="count">${n}</span>
     </button>`).join("") || `<span class="count">—</span>`);
-  $("#categories").closest("section").classList.toggle("is-empty", !review && !Object.keys(catCounts).length);
+  $("#categories").closest("section").classList.toggle("is-empty", !review && !unverified && !Object.keys(catCounts).length);
   $("#tags").closest("section").classList.toggle("is-empty", !Object.keys(tagCounts).length);
   $("#tags").innerHTML = Object.entries(tagCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 40).map(([t, n]) => `
     <button class="chip ${state.tags.includes(t) ? "active" : ""}" data-tag="${esc(t)}">
@@ -1183,7 +1190,8 @@ function renderGrid() {
       <article class="card ${wide ? "wide" : ""} ${esc(item.status)}" data-id="${esc(item.id)}">
         <div class="thumb ${img ? "" : "no-image"}" ${img ? `style="background-image:url('${esc(img)}')"` : ""}>${
           !img && item.kind === "url" ? `<span class="thumb-host">🔗 ${esc(hostOf(item.source_url))}</span>` : ""}<span class="badge">${esc(badge)}</span>${
-          item.needs_review ? `<span class="badge warn" title="${esc(item.confidence_reason || "")}">Not sure? ${esc(item.confidence)}%</span>` : ""}</div>
+          item.needs_review ? `<span class="badge warn" title="${esc(item.confidence_reason || "")}">Not sure? ${esc(item.confidence)}%</span>`
+            : isUnverified(item) ? `<span class="badge" title="No source such as TMDB or GitHub confirmed this">Unverified</span>` : ""}</div>
         <div class="body">
           <div class="title">${esc(cardTitle(item))}</div>
           ${item.subtitle ? `<div class="sub">${esc(item.subtitle)}</div>` : ""}
@@ -1194,6 +1202,7 @@ function renderGrid() {
 
   const active = [];
   if (state.review) active.push(`<span class="chip active">⚠ Needs review<button data-review>×</button></span>`);
+  if (state.unverified) active.push(`<span class="chip active">○ Unverified<button data-unverified>×</button></span>`);
   if (state.category) active.push(`<span class="chip active">${esc(CATEGORY_LABELS[state.category] || state.category)}<button data-clear-category>×</button></span>`);
   state.tags.forEach((t) => active.push(`<span class="chip active">#${esc(t)}<button data-clear-tag="${esc(t)}">×</button></span>`));
   $("#active-filters").innerHTML = active.join("");
@@ -1433,7 +1442,7 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  const t = e.target.closest("[data-review],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-review],[data-unverified],[data-category],[data-tag],[data-clear-category],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1453,6 +1462,8 @@ document.addEventListener("click", async (e) => {
   }
   if (t.dataset.review !== undefined) {
     state.review = !state.review;
+  } else if (t.dataset.unverified !== undefined) {
+    state.unverified = !state.unverified;
   } else if (t.dataset.category !== undefined) {
     state.category = state.category === t.dataset.category ? null : t.dataset.category;
   } else if (t.dataset.tag !== undefined) {

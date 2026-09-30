@@ -607,3 +607,17 @@ def test_refresh_metadata_updates_facts_without_calling_the_model(settings):
         assert item["title"] == "astral-sh/uv" and item["status"] == "ready" and "mine" in item["tags"]
         assert len(analyzer.calls) == 1   # only the original analysis
         assert client.post("/api/items/nope/refresh-metadata").status_code == 404
+
+
+def test_unverified_items_are_flagged_and_filterable(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)}
+    client, analyzer = make_client(settings, analysis(), routes)
+    with client:
+        good = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        analyzer.result = analysis(category="other", title="Mystery", canonical_url=None, details=blank_details())
+        odd = client.post("/api/items", files={"file": ("b.png", png_bytes((41, 60)), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{good}").json()["verified"] is True    # confirmed by GitHub
+        assert client.get(f"/api/items/{odd}").json()["verified"] is False    # only the model's word
+        assert [i["id"] for i in client.get("/api/items", params={"unverified": True}).json()] == [odd]
+        client.post(f"/api/items/{odd}/correct", json={"title": "Mystery Box"})
+        assert client.get(f"/api/items/{odd}").json()["verified"] is True     # corrected by the user
