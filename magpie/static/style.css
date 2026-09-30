@@ -131,13 +131,13 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
   overflow: hidden; text-shadow: 0 1px 12px rgb(0 0 0 / .25); }
 .cover-title small { display: block; font-size: .5em; font-weight: 600; letter-spacing: 0; opacity: .75; margin-bottom: .15em; }
 .typechip { position: absolute; left: 10px; top: 10px; display: inline-flex; align-items: center; gap: 5px; font: 600 10.5px ui-monospace, Menlo, monospace; letter-spacing: .06em; text-transform: uppercase;
-  background: oklch(0.36 0.11 var(--h, 260)); color: #fff; box-shadow: 0 0 0 1.5px rgb(255 255 255 / .55); padding: 3px 9px 3px 6px; border-radius: 999px; }
+  background: var(--type-color); color: #fff; box-shadow: 0 0 0 1.5px rgb(255 255 255 / .55); padding: 3px 9px 3px 6px; border-radius: 999px; }
 .ticon { width: 14px; height: 14px; flex: none; }
 .glyph { position: absolute; right: -6px; bottom: -6px; width: 58%; height: auto; color: #fff; opacity: .16; stroke-width: 1.2; pointer-events: none; }
-.tabs .tabicon { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; margin-right: 7px; vertical-align: -6px; color: #fff; background: oklch(0.5 0.12 var(--h, 260)); }
+.tabs .tabicon { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 7px; margin-right: 7px; vertical-align: -6px; color: #fff; background: var(--type-color); }
 .tabs .tabicon .ticon { width: 14px; height: 14px; }
-.tabs button[aria-selected="false"] .tabicon { opacity: .8; }
-.eyebrow-type { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; margin-right: 7px; vertical-align: -5px; color: #fff; background: oklch(0.5 0.12 var(--h, 260)); }
+.tabs button[aria-selected="false"] .tabicon { opacity: .85; }
+.eyebrow-type { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; margin-right: 7px; vertical-align: -5px; color: #fff; background: var(--type-color); }
 .eyebrow-type .ticon { width: 13px; height: 13px; }
 .flag { position: absolute; right: 9px; top: 9px; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
 .flag.warn { background: var(--warn-soft); color: var(--warn); }
@@ -146,10 +146,11 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .cover.busy::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: linear-gradient(90deg, transparent, #fff, transparent) 0 0 / 60% 100% no-repeat; animation: slide 1.4s linear infinite; }
 @keyframes slide { from { background-position: -60% 0; } to { background-position: 160% 0; } }
 @media (prefers-reduced-motion: reduce) { .cover.busy::after { animation: none; background: #fff; opacity: .6; } .cover, .card:hover .cover { transition: none; transform: none; } }
-/* one hue per type; a pattern from that type's world when there is no picture */
+/* one hue per type group; the chip, the tab icon and the detail icon all use the same color, and a pattern from that type's world covers a card without a picture */
+.cover, .tabicon, .eyebrow-type { --type-color: oklch(0.44 var(--type-c, 0.12) var(--h, 260)); }
 .t-movie { --h: 285; } .t-tv_show { --h: 250; } .t-github_repo { --h: 200; } .t-recipe { --h: 45; } .t-book { --h: 25; }
 .t-music { --h: 340; } .t-podcast { --h: 315; } .t-video { --h: 15; } .t-article { --h: 160; } .t-product { --h: 75; }
-.t-place { --h: 130; } .t-event { --h: 100; } .t-app { --h: 225; } .t-course { --h: 180; } .t-other { --h: 260; --cover-c: 0.02; }
+.t-place { --h: 130; } .t-event { --h: 100; } .t-app { --h: 225; } .t-course { --h: 180; } .t-other { --h: 260; --cover-c: 0.02; --type-c: 0.03; }
 .t-movie .cover::before, .t-tv_show .cover::before { background: repeating-linear-gradient(90deg, transparent 0 10px, #fff 10px 14px) top / 100% 8px no-repeat, repeating-linear-gradient(90deg, transparent 0 10px, #fff 10px 14px) bottom / 100% 8px no-repeat; }
 .t-github_repo .cover::before, .t-app .cover::before { background: radial-gradient(#fff 1.2px, transparent 1.4px) 0 0 / 14px 14px; }
 .t-recipe .cover::before { background: repeating-radial-gradient(circle at 80% 90%, #fff 0 2px, transparent 2px 18px); }

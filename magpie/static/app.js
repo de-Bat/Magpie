@@ -24,7 +24,7 @@ const TABS = [
   { id: "music", label: "Music & podcasts", cats: ["music", "podcast"] },
   { id: "read", label: "Articles & videos", cats: ["article", "video"] },
   { id: "place", label: "Places & events", cats: ["place", "event"] },
-  { id: "other", label: "Other", cats: ["product", "app", "course", "other"] },
+  { id: "other", label: "Other", cats: ["other", "product", "app", "course"] },
 ];
 // One icon per type, drawn with the same stroke so they read as a set. Shown on every card, whether or not it has a picture.
 const TYPE_ICON_PATHS = {
@@ -45,6 +45,9 @@ const TYPE_ICON_PATHS = {
   other: '<path d="M4 4h8l8 8-8 8-8-8z"/><circle cx="8.5" cy="8.5" r="1.2"/>',
 };
 const typeIcon = (c, cls = "ticon") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${TYPE_ICON_PATHS[c] || TYPE_ICON_PATHS.other}</svg>`;
+// A tab groups related types and gives them one icon and color (its first type), so a card, its tab and the
+// detail sheet always match. The chip on the card still names the exact type ("TV show", "Podcast").
+const themeOf = (category) => TABS.find((t) => t.cats?.includes(category))?.cats[0] || "other";
 const tabOf = (item) => TABS.find((t) => t.cats?.includes(item.category))?.id || "other";
 // What each type's detail sheet lists first (anything else Magpie found follows).
 const FACT_ORDER = {
@@ -1283,7 +1286,7 @@ function renderFilters() {
   for (const i of items) counts[tabOf(i)] = (counts[tabOf(i)] || 0) + 1;
   if (state.tab !== "all" && !counts[state.tab]) state.tab = "all";
   $("#tabs").innerHTML = TABS.filter((t) => t.id === "all" || counts[t.id]).map((t) => `
-    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${t.cats[0]}">${typeIcon(t.cats[0])}</span>` : ""}${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
+    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${themeOf(t.cats[0])}">${typeIcon(themeOf(t.cats[0]))}</span>` : ""}${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
   const check = items.filter(needsCheck).length;
   $("#check-count").textContent = check || "";
   document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
@@ -1334,12 +1337,12 @@ function coverHtml(item, { chip = true } = {}) {
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
   const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
-  return `<div class="cover t-${esc(item.category || "other")} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
+  return `<div class="cover t-${themeOf(item.category)} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
-    `${typeIcon(item.category || "other", "glyph")}${coverTitleHtml(item)}`}${
+    `${typeIcon(themeOf(item.category), "glyph")}${coverTitleHtml(item)}`}${
     // no-referrer: many sites refuse images to pages on other sites but serve them without a Referer
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
-    chip ? `<span class="typechip">${typeIcon(item.category || "other")}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
+    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
 }
 
 function cardMeta(item) {
@@ -1519,7 +1522,7 @@ function renderDetail(item) {
   const canonical = safeUrl(item.canonical_url);
   const facts = orderedFacts(item);
   const links = (item.links || []).filter((l) => safeUrl(l.url));
-  const metaLine = `<span class="eyebrow-type t-${esc(item.category || "other")}">${typeIcon(item.category || "other")}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
+  const metaLine = `<span class="eyebrow-type t-${themeOf(item.category)}">${typeIcon(themeOf(item.category))}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
 
   const dlg = $("#detail");
   dlg.dataset.id = item.id;
@@ -1532,7 +1535,7 @@ function renderDetail(item) {
     ? `<div class="notice warn"><span>Magpie isn't sure about this one. ${esc(item.confidence_reason || "")}</span></div>`
     : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span><button class="btn small" data-action="verify">✓ Mark as correct</button></div>` : "";
   dlg.innerHTML = `
-    <div class="detail t-${esc(item.category || "other")}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
+    <div class="detail t-${themeOf(item.category)}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
       <button class="btn close" data-action="close" aria-label="Close">✕</button>
       <div class="hero">
         <div class="hero-cover">${coverHtml(item, { chip: false })}</div>
