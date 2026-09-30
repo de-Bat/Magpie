@@ -16,8 +16,9 @@ from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import links, readability
 from .findlink import repair_link
+from .related import clean_related, drop_dead
 from .images import best_image
-from .enrich import fetch_page
+from .enrich import fetch_page, link_is_gone
 from .config import Settings
 from .db import Database, normalize_tag
 from .enrich import Enrichment, run_enrichers
@@ -67,6 +68,7 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     subtitle = analysis.get("subtitle")
     summary = analysis.get("summary") or None
     links = list(analysis.get("links") or [])
+    related = list(analysis.get("related") or [])
     tags = list(analysis.get("tags") or [])
     sources = ["claude"]
 
@@ -83,6 +85,7 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
             else:
                 summary = e.summary  # e.g. after a manual correction, when there is no model summary
         links.extend(e.links)
+        related.extend(e.related)
         tags.extend(e.tags)
         if e.source:
             sources.append(e.source)
@@ -125,6 +128,8 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         "image_url": image_url,
         "metadata": metadata,
         "links": unique_links,
+        # worth a look, but not what the item already links to (its own page, source links)
+        "related": clean_related(related, exclude=[canonical_url, analysis.get("canonical_url"), *[l["url"] for l in unique_links]]),
         "tags": tags,
         "confidence": confidence,
         "confidence_reason": confidence_reason,
@@ -151,6 +156,7 @@ def corrected_analysis(previous: dict, correction: dict) -> dict:
         "summary": previous.get("summary") if same_thing else None,
         "image_url": None,
         "links": [],
+        "related": [],
         "tags": list(previous.get("tags") or []) if same_thing else [],
         "screenshot_text": previous.get("screenshot_text"),
         "details": {k: old_details.get(k) for k in ("posted_by", "post_url") if old_details.get(k)},
@@ -279,6 +285,7 @@ class Pipeline:
             "image_url": fresh["image_url"] or item.get("image_url"),
             "metadata": {**(item.get("metadata") or {}), **{k: v for k, v in fresh["metadata"].items() if k != "screenshot_text"}},
             "links": links,
+            "related": clean_related([*(item.get("related") or []), *fresh["related"]], exclude=[analysis["canonical_url"] or fresh["canonical_url"], *[l.get("url") for l in links]]),
             "subtitle": item.get("subtitle") or fresh["subtitle"],
             "summary": item.get("summary") or fresh["summary"],
             "canonical_url": analysis["canonical_url"] or fresh["canonical_url"],   # a dead link is replaced, or dropped
@@ -313,6 +320,7 @@ class Pipeline:
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
         if self.settings.enrich:
             analysis = await repair_link(analysis, self.http)   # a made-up address becomes the real article's, or none
+            analysis = {**analysis, "related": await drop_dead(clean_related(analysis.get("related")), self.http, fetch_page, link_is_gone)}
         enrichments = await run_enrichers(analysis, self.settings, self.http)
         fields = merge(analysis, enrichments)
         if fields["image_url"] and not any(e.image_url for e in enrichments):

@@ -106,6 +106,23 @@ SAVE_TOOL: dict[str, Any] = {
                     "additionalProperties": False,
                 },
             },
+            "related": {
+                "type": "array",
+                "description": "Up to 5 links to things connected to this one that the reader would want next, each with its own page: "
+                               "the repository or package of a tool an article describes, an app's homepage or docs, the company or "
+                               "project behind it, the paper it is based on. Not the item's own page, and only URLs you saw.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["repo", "package", "app", "paper", "company", "docs", "video", "reference", "site"]},
+                        "label": {"type": "string", "description": "What it is, e.g. 'astral-sh/uv' or 'Astral (the company)'."},
+                        "url": {"type": "string"},
+                        "why": {"type": "string", "description": "A few words on why it is related."},
+                    },
+                    "required": ["kind", "label", "url", "why"],
+                    "additionalProperties": False,
+                },
+            },
             "tags": {"type": "array", "items": {"type": "string"}, "description": "5-10 short lowercase retrieval tags (genre, topic, mood, cuisine, tech...)."},
             "screenshot_text": {"type": "string", "description": "The key text visible in the screenshot, condensed (max ~500 chars)."},
             "confidence": {
@@ -147,8 +164,9 @@ How to work:
 3. Only report URLs, ratings and facts you actually saw in search results or the screenshot. Use null rather than guessing.
 4. If the screenshot recommends several things, catalogue the most prominent one and mention the others in the summary.
 5. Be honest about confidence. Score it on evidence: a clearly visible title confirmed by a matching search result is 90+; an inference from partial text, a blurry poster, or an ambiguous title (remakes, same-name books and films) is lower. List the plausible alternatives.
-6. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
-7. Finish by calling save_analysis once. Do not ask the user questions."""
+6. Also note what is connected to it in `related`: when an article or post is about a tool, name its repository, package or homepage; when it names a company, project or paper, link that. Each link must be a page you saw, and must not be the item's own page.
+7. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
+8. Finish by calling save_analysis once. Do not ask the user questions."""
 
 
 class AnalysisError(Exception):

@@ -924,3 +924,77 @@ async def test_working_blocked_and_shared_links_are_left_alone(settings):
             a = analysis(category="article", title=TITLE, canonical_url=url, details=blank_details(), **extra)
             assert (await repair_link(a, http))["canonical_url"] == url
     assert not any("duckduckgo" in u for u in asked)   # never searched
+
+
+ARTICLE_WITH_LINKS = '''<html><head><title>uv replaced pip for me</title><meta property="og:title" content="uv replaced pip for me"></head><body>
+<a href="/about">About us</a> <a href="https://www.xda-developers.com/other-post">More posts</a>
+<a href="https://twitter.com/share?u=1">Tweet</a> <a href="https://www.facebook.com/sharer.php?u=1">Share</a>
+<p>I've been using <a href="https://github.com/astral-sh/uv">uv</a>, from <a href="https://astral.sh">Astral</a>, and
+<a href="https://docs.astral.sh/uv/guides/">the guide</a>. Also <a href="https://pypi.org/project/ruff/">ruff</a> and this
+<a href="https://arxiv.org/pdf/2307.09288.pdf">paper</a>. <a href="https://apps.apple.com/us/app/some-app/id123?ign-mpt=uo%3D4">Some App</a></p>
+</body></html>'''
+
+
+def test_outbound_links_become_related_items():
+    from magpie.enrich import Page
+    from magpie.related import outbound_related
+    page = Page(url="https://www.xda-developers.com/uv-replaced-pip/", meta={}, ld=[], title="", html=ARTICLE_WITH_LINKS)
+    got = [(r["kind"], r["label"], r["url"]) for r in outbound_related(page)]
+    assert got == [
+        ("repo", "astral-sh/uv", "https://github.com/astral-sh/uv"),
+        ("package", "ruff", "https://pypi.org/project/ruff/"),
+        ("app", "Some App", "https://apps.apple.com/us/app/some-app/id123"),
+        ("paper", "arXiv 2307.09288", "https://arxiv.org/abs/2307.09288"),
+        ("docs", "the guide", "https://docs.astral.sh/uv/guides/"),
+        ("site", "Astral", "https://astral.sh"),   # a named homepage; the share buttons and same-site links are not listed
+    ]
+
+
+async def test_article_item_lists_what_it_is_about_and_drops_the_dead_and_its_own_links(settings):
+    routes = {
+        "https://www.xda-developers.com/uv-replaced-pip/": httpx.Response(200, text=ARTICLE_WITH_LINKS, headers={"content-type": "text/html"}),
+        "https://astral.sh": httpx.Response(200, text="<html><title>Astral</title></html>", headers={"content-type": "text/html"}),
+        "https://made-up.example/": httpx.Response(404),
+    }
+    model = [{"kind": "company", "label": "Astral (the company)", "url": "https://astral.sh", "why": "makes uv"},
+             {"kind": "site", "label": "Invented", "url": "https://made-up.example/", "why": ""},
+             {"kind": "site", "label": "The article itself", "url": "https://www.xda-developers.com/uv-replaced-pip/", "why": ""}]
+    client, _ = make_client(settings, analysis(category="article", title="uv replaced pip for me", confidence=95,
+                                               canonical_url="https://www.xda-developers.com/uv-replaced-pip/",
+                                               details=blank_details(), related=model), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+    related = {(r["kind"], r["url"]) for r in item["related"]}
+    assert ("repo", "https://github.com/astral-sh/uv") in related              # from the article's own links
+    assert ("company", "https://astral.sh") in related                          # from the model, and it opens
+    assert not any("made-up.example" in u for _, u in related)                  # a made-up address is dropped
+    assert not any(u.rstrip("/") == "https://www.xda-developers.com/uv-replaced-pip" for _, u in related)   # not the item itself
+    assert len([1 for _, u in related if "astral.sh" in u and "docs" not in u]) == 1   # no duplicates (model + page)
+    assert len(item["related"]) <= 8
+
+
+async def test_github_npm_and_hugging_face_add_related_links(settings):
+    repo = {**GITHUB_REPO, "owner": {"login": "astral-sh", "type": "Organization", "html_url": "https://github.com/astral-sh"},
+            "parent": {"full_name": "someone/uv", "html_url": "https://github.com/someone/uv"}}
+    async with mock_http({"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=repo)}) as http:
+        [e] = await run_enrichers(analysis(), settings, http)
+    assert {(r["kind"], r["url"]) for r in e.related} == {("company", "https://github.com/astral-sh"), ("repo", "https://github.com/someone/uv")}
+    model = {"tags": ["arxiv:2307.09288", "license:mit"], "cardData": {"base_model": "meta-llama/Llama-2-7b"}}
+    routes = {"https://huggingface.co/api/models/acme/tuned": httpx.Response(200, json=model)}
+    a = analysis(category="app", canonical_url="https://huggingface.co/acme/tuned", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    hf = next(e for e in results if e.source == "huggingface")
+    assert {r["url"] for r in hf.related} == {"https://arxiv.org/abs/2307.09288", "https://huggingface.co/meta-llama/Llama-2-7b"}
+
+
+def test_refresh_metadata_adds_related_links_without_losing_the_old_ones(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json={**GITHUB_REPO,
+              "owner": {"login": "astral-sh", "type": "Organization", "html_url": "https://github.com/astral-sh"}})}
+    client, _ = make_client(settings, analysis(related=[{"kind": "docs", "label": "Docs", "url": "https://docs.astral.sh/uv/", "why": ""}]), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        before = {r["url"] for r in client.get(f"/api/items/{item_id}").json()["related"]}
+        after = {r["url"] for r in client.post(f"/api/items/{item_id}/refresh-metadata").json()["related"]}
+    assert "https://github.com/astral-sh" in before | after and before <= after

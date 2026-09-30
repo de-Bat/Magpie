@@ -122,6 +122,7 @@ These cost controls are on by default:
 ## Confidence & corrections
 
 - **Confidence (0–100).** Claude scores its identification based on the evidence: a legible title confirmed by a matching source scores 90+, while a guess from a blurry poster or an ambiguous title (remakes, a book and its film) scores lower. The score comes with a one-line reason.
+- **Related.** Each item lists things connected to it that are worth a look: the repository, package or app an article is about, the paper behind a model, the company or project it names. They come from the model, from the article's own links and from the sources Magpie looks up, and dead or made-up addresses are dropped.
 - **To check.** Anything under 60% gets a "!" marker, and anything below 90% that no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
 - **Did you mean…** Claude lists up to 3 alternatives. Tap one to switch to it.
 - **Fix it.** Open an item → **Wrong? Fix it**:

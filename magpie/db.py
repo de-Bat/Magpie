@@ -91,7 +91,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
 );
 """
 
-JSON_COLUMNS = ("metadata", "links", "analysis", "alternatives")
+JSON_COLUMNS = ("metadata", "links", "analysis", "alternatives", "related")
 
 # Columns added after the first release; created on startup for existing databases.
 MIGRATIONS = {
@@ -102,6 +102,7 @@ MIGRATIONS = {
     "kind": "TEXT NOT NULL DEFAULT 'screenshot'",
     "source_url": "TEXT",
     "confirmed": "INTEGER NOT NULL DEFAULT 0",   # the user marked this identification as correct
+    "related": "TEXT NOT NULL DEFAULT '[]'",     # worth-a-look links: [{kind, label, url, why?}]
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -112,7 +113,7 @@ VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "sche
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related",
 }
 
 

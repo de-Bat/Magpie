@@ -1203,7 +1203,7 @@ function hostOf(url) {
 }
 
 function searchBlob(item) {
-  const parts = [item.title, item.subtitle, item.summary, item.note, item.category, item.source_platform, ...(item.tags || [])];
+  const parts = [item.title, item.subtitle, item.summary, item.note, item.category, item.source_platform, ...(item.tags || []), ...(item.related || []).map((r) => r.label)];
   const walk = (v) => {
     if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === "object") Object.values(v).forEach(walk);
@@ -1610,6 +1610,18 @@ function orderedFacts(item) {
   return shown.sort((a, b) => rank(a[0]) - rank(b[0]));
 }
 
+// Things connected to this item that are worth a look: the repository an article describes, an app's homepage, the company behind it.
+const REL_KIND = { repo: "Repo", package: "Package", app: "App", paper: "Paper", company: "Company", docs: "Docs", video: "Video", reference: "Reference", site: "Site" };
+function relatedHtml(item) {
+  const rows = (item.related || []).filter((r) => safeUrl(r.url));
+  if (!rows.length) return "";
+  return `<section><h3>Related</h3><ul class="related">${rows.map((r) => `
+    <li><a class="rel" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener"${r.why ? ` title="${esc(r.why)}"` : ""}>
+      <span class="rel-kind">${esc(REL_KIND[r.kind] || "Link")}</span>
+      <span class="rel-main"><b>${esc(r.label)}</b><small>${esc(hostOf(r.url))}${r.why ? ` · ${esc(r.why)}` : ""}</small></span>
+      <span class="rel-go" aria-hidden="true">↗</span></a></li>`).join("")}</ul></section>`;
+}
+
 function originalHtml(item) {
   const shot = screenshotFor(item);
   const link = item.kind === "url" ? safeUrl(item.source_url) : null;
@@ -1678,6 +1690,7 @@ function renderDetail(item) {
       ${m.ingredients?.length ? `<section><h3>Ingredients</h3><ul>${m.ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></section>` : ""}
       ${m.instructions?.length ? `<section><h3>Steps</h3><ol>${m.instructions.map((i) => `<li>${esc(i)}</li>`).join("")}</ol></section>` : ""}
       ${links.length ? `<section><div class="links">${links.map((l) => `<a class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join("")}</div></section>` : ""}
+      ${relatedHtml(item)}
       <section><h3>Original</h3>${originalHtml(item)}</section>
       ${item.status === "ready" && fixing !== item.id ? `<section><h3>How sure Magpie is</h3>${confidenceHtml(item, { fixButton: false })}</section>` : ""}
       <section><h3>Your note</h3>
