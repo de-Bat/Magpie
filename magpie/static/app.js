@@ -258,6 +258,15 @@ async function reanalyzeItem(id) {
   requestSync();
 }
 
+// Look up posters, covers and ratings again; the identification itself stays as it is.
+async function refreshItemMetadata(id) {
+  const item = state.items.get(id);
+  if (!item || item.pending_upload) return;
+  await enqueue({ type: "refresh", id });
+  toast("Refreshing metadata…");
+  requestSync();
+}
+
 // "The model got it wrong": fix facts directly, or describe it and let Claude look again.
 async function correctItem(id, correction) {
   const item = state.items.get(id);
@@ -416,6 +425,10 @@ async function pushOps() {
         if (!hasPendingOps(op.id)) await mergeServerItem(saved);
       } else if (op.type === "reanalyze") {
         const saved = await api(`/api/items/${encodeURIComponent(op.id)}/reanalyze`, { method: "POST" });
+        await dropOp(op);
+        if (!hasPendingOps(op.id)) await mergeServerItem(saved);
+      } else if (op.type === "refresh") {
+        const saved = await api(`/api/items/${encodeURIComponent(op.id)}/refresh-metadata`, { method: "POST", timeout: 60000 });
         await dropOp(op);
         if (!hasPendingOps(op.id)) await mergeServerItem(saved);
       } else if (op.type === "delete") {
@@ -1357,7 +1370,8 @@ function renderDetail(item) {
           <select id="category-edit" class="btn">
             ${Object.entries(CATEGORY_LABELS).map(([k, label]) => `<option value="${k}" ${k === item.category ? "selected" : ""}>${label}</option>`).join("")}
           </select>
-          ${item.pending_upload ? "" : `<button class="btn" data-action="reanalyze">↻ Re-analyze</button>`}
+          ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ Refresh metadata</button>
+          <button class="btn" data-action="reanalyze">↻ Re-analyze</button>`}
           <button class="btn danger" data-action="delete">Delete</button>
           <span class="meta-line" style="margin-left:auto">${m.sources ? `via ${esc(m.sources.join(" → "))}` : ""}${
             item.usage?.runs ? ` · ${esc(formatUsd(item.usage.cost_usd))}${item.usage.web_searches ? ` · ${item.usage.web_searches} search${item.usage.web_searches > 1 ? "es" : ""}` : ""}` : ""}</span>
@@ -1465,6 +1479,7 @@ document.addEventListener("click", async (e) => {
       case "close": return $("#detail").close();
       case "fix": fixing = id; renderDetail(item); return $("#correct-form input[name=title]")?.focus();
       case "cancel-fix": fixing = null; return renderDetail(item);
+      case "refresh": return refreshItemMetadata(id);
       case "reanalyze": return reanalyzeItem(id);
       case "delete":
         if (!confirm("Delete this item?")) return;

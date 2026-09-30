@@ -103,6 +103,8 @@ final class SyncEngine: ObservableObject {
                     store.completeOp(op, result: try await api.update(id: op.itemID, patch: patch))
                 case .correct(let correction):
                     store.completeOp(op, result: try await api.correct(id: op.itemID, correction: correction))
+                case .refreshMetadata:
+                    store.completeOp(op, result: try await api.refreshMetadata(id: op.itemID))
                 case .reanalyze:
                     store.completeOp(op, result: try await api.reanalyze(id: op.itemID))
                 case .delete:

@@ -259,6 +259,7 @@ struct PendingOp: Codable, Identifiable, Equatable {
         case update(ItemPatch)
         case correct(Correction)
         case reanalyze
+        case refreshMetadata
         case delete
     }
 

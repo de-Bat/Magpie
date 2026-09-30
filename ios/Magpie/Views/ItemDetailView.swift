@@ -117,6 +117,9 @@ struct ItemDetailView: View {
                     Link(destination: link) { Label("Open shared link", systemImage: "link") }
                 }
                 if !item.pendingUpload {
+                    Button { store.refreshMetadata(item.id); sync.requestSync() } label: {
+                        Label("Refresh metadata", systemImage: "photo.on.rectangle")
+                    }
                     Button { store.reanalyze(item.id); sync.requestSync() } label: {
                         Label("Re-analyze", systemImage: "arrow.clockwise")
                     }

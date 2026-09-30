@@ -151,6 +151,13 @@ final class LibraryStore: ObservableObject {
 
     var needsReviewCount: Int { items.filter(\.needsReview).count }
 
+    /// Look up the poster, cover, ratings and links again; the identification stays as it is.
+    func refreshMetadata(_ id: String) {
+        guard let i = items.firstIndex(where: { $0.id == id }), !items[i].pendingUpload else { return }
+        pending.append(PendingOp(itemID: id, kind: .refreshMetadata))
+        save()
+    }
+
     func reanalyze(_ id: String) {
         guard let i = items.firstIndex(where: { $0.id == id }), !items[i].pendingUpload else { return }
         items[i].status = "processing"

@@ -385,6 +385,13 @@ def create_app(
         background.add_task(state["pipeline"].process, item_id, None, "reanalyze")
         return item
 
+    @app.post("/api/items/{item_id}/refresh-metadata")
+    async def refresh_metadata(item_id: str):
+        """Look the item up again in TMDB/GitHub/Open Library/its page for a poster, cover, ratings and links.
+        No model is called, so it costs nothing and never changes the identification."""
+        get_or_404(item_id)
+        return await state["pipeline"].refresh_metadata(item_id)
+
     @app.post("/api/items/{item_id}/correct", status_code=202)
     def correct(item_id: str, correction: Correction, background: BackgroundTasks):
         """Fix a wrong identification. The item is re-enriched in the background."""

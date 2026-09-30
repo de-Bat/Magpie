@@ -245,6 +245,7 @@ Before running on a device:
 | `GET` | `/api/items` | `?q=` full-text, `?category=`, `?tag=` (repeatable), `?needs_review=true` |
 | `GET` / `PATCH` / `DELETE` | `/api/items/{id}` | PATCH accepts `title`, `subtitle`, `summary`, `category`, `note`, `canonical_url`, `tags` |
 | `POST` | `/api/items/{id}/reanalyze` | Run identification again |
+| `POST` | `/api/items/{id}/refresh-metadata` | Look up the poster/cover, ratings and links again in TMDB, GitHub, Open Library, etc. No model call, so it's free; title, category and tags stay as they are |
 | `POST` | `/api/items/{id}/correct` | JSON with any of `title`, `category`, `year`, `canonical_url` (re-enrich with these facts) and/or `hint` (Claude looks again with your description). Returns `202` |
 | `GET` | `/api/sync?since=` | Delta sync: `{server_time, items, deleted}`. Pass `server_time` back as the next `since` |
 | `GET` | `/api/tags`, `/api/categories` | Counts for filters |

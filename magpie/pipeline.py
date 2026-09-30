@@ -254,6 +254,32 @@ class Pipeline:
 
         return await self._run(item_id, "correct", fixed(), corrected=True)
 
+    async def refresh_metadata(self, item_id: str) -> dict | None:
+        """Look the item up again in the metadata sources (posters, covers, ratings, links) without asking a
+        model anything: free, and nothing the user edited or the model decided (title, category, tags,
+        confidence) changes. Fields a source doesn't return this time keep their current value."""
+        item = self.db.get_item(item_id)
+        if not item:
+            return None
+        stored = item.get("analysis") if isinstance(item.get("analysis"), dict) else {}
+        # Look up what the item is now, including the user's edits, not what the model first said.
+        analysis = {**stored, "category": item.get("category"), "title": item.get("title"), "year": stored.get("year"),
+                    "canonical_url": item.get("canonical_url"), "image_url": None, "links": [], "tags": [],
+                    "details": {**(stored.get("details") or {}), **{k: v for k, v in (item.get("metadata") or {}).items()
+                                                                     if k in ("imdb_id", "github_full_name", "author", "isbn")}}}
+        fresh = merge(analysis, await run_enrichers(analysis, self.settings, self.http))
+        links, seen = list(item.get("links") or []), {l.get("url") for l in item.get("links") or []}
+        links += [l for l in fresh["links"] if l["url"] not in seen]
+        changes = {
+            "image_url": fresh["image_url"] or item.get("image_url"),
+            "metadata": {**(item.get("metadata") or {}), **{k: v for k, v in fresh["metadata"].items() if k != "screenshot_text"}},
+            "links": links,
+            "subtitle": item.get("subtitle") or fresh["subtitle"],
+            "summary": item.get("summary") or fresh["summary"],
+            "canonical_url": item.get("canonical_url") or fresh["canonical_url"],
+        }
+        return self.db.update_item(item_id, **changes)
+
     async def complete_batch_job(self, job: dict, result: Any) -> dict | None:
         """Finish an analysis whose Claude step ran in a Message Batch."""
         params, context = json.loads(job["params"]), json.loads(job["context"])

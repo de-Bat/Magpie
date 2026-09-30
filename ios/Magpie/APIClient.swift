@@ -174,6 +174,10 @@ struct APIClient {
         try await send(request("api/usage?days=\(days)"))
     }
 
+    func refreshMetadata(id: String) async throws -> Item {
+        try await send(request("api/items/\(id)/refresh-metadata", method: "POST"))
+    }
+
     func reanalyze(id: String) async throws -> Item {
         try await send(request("api/items/\(id)/reanalyze", method: "POST"))
     }
