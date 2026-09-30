@@ -77,6 +77,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         log.info("GitHub lookup for %s failed: %s", full_name, r.status_code)
         return None
     repo = r.json()
+    hero = await _readme_image(full_name, headers, http)
     meta = {
         "github_full_name": repo["full_name"],
         "stars": repo.get("stargazers_count"),
@@ -96,13 +97,44 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
     return Enrichment(
         metadata=meta,
         canonical_url=repo["html_url"],
-        image_url=f"https://opengraph.githubassets.com/1/{repo['full_name']}",
+        # The README's header/logo image, else GitHub's social card (the repo's custom social preview when it has one).
+        image_url=hero or f"https://opengraph.githubassets.com/1/{repo['full_name']}",
         subtitle=repo.get("description"),
         links=links,
         tags=tags,
         source="github",
         matched_title=repo["full_name"],
     )
+
+
+_README_IMG = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)|<img\b[^>]*?\bsrc=["\']([^"\']+)["\']', re.I)
+_NOT_A_HEADER = re.compile(r"shields\.io|badge|travis-ci|codecov|coveralls|star-history|contrib\.rocks|visitor|"
+                           r"buymeacoffee|ko-fi|opencollective|/workflows/|\.svg(\?|$)|gh-dark-mode-only|emoji|"
+                           r"github\.com/sponsors|img\.youtube\.com|/donate", re.I)
+
+
+def readme_image(markdown: str, full_name: str) -> str | None:
+    """The first real picture near the top of a README (its header or logo), skipping badges and SVGs
+    (which the mobile app can't draw). Relative paths are resolved against the repo."""
+    for m in _README_IMG.finditer(markdown[:6000]):
+        src = (m.group(1) or m.group(2) or "").strip()
+        if not src or src.startswith("data:") or _NOT_A_HEADER.search(src):
+            continue
+        if src.startswith("//"):
+            src = "https:" + src
+        elif not src.startswith("http"):
+            src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.lstrip('./')}"
+        return src
+    return None
+
+
+async def _readme_image(full_name: str, headers: dict, http: httpx.AsyncClient) -> str | None:
+    try:
+        r = await http.get(f"https://api.github.com/repos/{full_name}/readme",
+                           headers={**headers, "Accept": "application/vnd.github.raw+json"})
+        return readme_image(r.text, full_name) if r.status_code == 200 else None
+    except httpx.HTTPError:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +195,35 @@ async def enrich_screen(analysis: dict, settings: Settings, http: httpx.AsyncCli
             _apply_omdb(out, r.json())
             out.source = "tmdb+omdb" if out.metadata.get("tmdb_id") else "omdb"
 
+    if not out.image_url and analysis.get("title"):
+        out.image_url = await _wikipedia_poster(analysis["title"], analysis.get("year"), is_tv, http)
+
     if imdb_id:
         out.metadata["imdb_id"] = imdb_id
         out.canonical_url = f"https://www.imdb.com/title/{imdb_id}/"
-    return out if (out.metadata or out.canonical_url) else None
+    return out if (out.metadata or out.canonical_url or out.image_url) else None
+
+
+def _norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+async def _wikipedia_poster(title: str, year: Any, is_tv: bool, http: httpx.AsyncClient) -> str | None:
+    """The poster from the film's / show's Wikipedia infobox (no API key needed), when TMDB and OMDb gave none."""
+    kind = "TV series" if is_tv else "film"
+    query = f"{title} {year or ''} {kind}".replace("  ", " ")
+    try:
+        r = await http.get("https://en.wikipedia.org/w/api.php", params={
+            "action": "query", "format": "json", "generator": "search", "gsrsearch": query, "gsrlimit": 1,
+            "prop": "pageimages", "piprop": "thumbnail", "pithumbsize": 500})
+        if r.status_code != 200:
+            return None
+        pages = list(((r.json().get("query") or {}).get("pages") or {}).values())
+    except (httpx.HTTPError, ValueError):
+        return None
+    if not pages or _norm(title) not in _norm(pages[0].get("title", "")):
+        return None  # the top hit isn't about this title
+    return (pages[0].get("thumbnail") or {}).get("source")
 
 
 def _apply_tmdb(out: Enrichment, d: dict, kind: str, region: str) -> None:

@@ -8,6 +8,7 @@ MAGPIE_PRICING='{"model-id": [input_per_mtok, output_per_mtok], ...}'.
 import json
 import os
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 
 # USD per million tokens (input, output). Anthropic list prices.
 PRICES: dict[str, tuple[float, float]] = {
@@ -36,6 +37,40 @@ CACHE_WRITE_MULT = 1.25   # 5-minute cache writes
 CACHE_READ_MULT = 0.10
 BATCH_MULT = 0.50         # Message Batches: half price on tokens
 WEB_SEARCH_USD = 0.01     # $10 per 1,000 searches; web fetch has no per-call fee
+
+
+# Latest rate-limit / credit snapshot each provider reported (from real calls and key tests), by provider id.
+LIMITS: dict[str, dict] = {}
+
+
+def parse_limits(headers) -> dict | None:
+    """Normalize the rate-limit headers of Anthropic (anthropic-ratelimit-*) and OpenAI-compatible providers
+    (x-ratelimit-*) into {"requests": {...}, "tokens": {...}}. None when the response carried none."""
+    h = {str(k).lower(): v for k, v in dict(headers).items()}
+    out: dict[str, dict] = {}
+    for kind in ("requests", "tokens"):
+        for remaining, limit, reset in ((f"anthropic-ratelimit-{kind}-remaining", f"anthropic-ratelimit-{kind}-limit", f"anthropic-ratelimit-{kind}-reset"),
+                                        (f"x-ratelimit-remaining-{kind}", f"x-ratelimit-limit-{kind}", f"x-ratelimit-reset-{kind}")):
+            if remaining in h:
+                try:
+                    out[kind] = {"remaining": int(float(h[remaining])),
+                                 "limit": int(float(h[limit])) if limit in h else None,
+                                 "reset": h.get(reset)}
+                except ValueError:
+                    pass
+                break
+    return out or None
+
+
+def record_limits(provider: str, headers=None, **extra) -> dict | None:
+    """Remember what a provider just reported about what's left (headers and/or extra fields such as credit)."""
+    snapshot = (parse_limits(headers) if headers is not None else None) or {}
+    snapshot.update({k: v for k, v in extra.items() if v is not None})
+    if not snapshot:
+        return LIMITS.get(provider)
+    snapshot["updated"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    LIMITS[provider] = snapshot
+    return snapshot
 
 
 def _prices() -> dict[str, tuple[float, float]]:

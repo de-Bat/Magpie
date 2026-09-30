@@ -355,3 +355,25 @@ async def test_budget_stops_paid_fallback_but_keeps_local_answer(tmp_path):
         await r.analyze(png(), "image/png")
     r.spent = lambda: 0.5  # under budget: the fallback is used again
     assert (await r.analyze(png(), "image/png"))["title"] == "Paid"
+
+
+def test_rate_limit_headers_are_normalized_and_key_check_reports_them(tmp_path):
+    import asyncio
+    from magpie.models import check_key
+    from magpie.usage import LIMITS, parse_limits
+
+    assert parse_limits({"x-ratelimit-remaining-requests": "59", "x-ratelimit-limit-requests": "60",
+                         "x-ratelimit-remaining-tokens": "5000", "x-ratelimit-reset-tokens": "1s"}) == {
+        "requests": {"remaining": 59, "limit": 60, "reset": None}, "tokens": {"remaining": 5000, "limit": None, "reset": "1s"}}
+    assert parse_limits({"anthropic-ratelimit-tokens-remaining": "900", "anthropic-ratelimit-tokens-limit": "1000"})["tokens"]["limit"] == 1000
+    assert parse_limits({"content-type": "x"}) is None
+
+    def handler(request):
+        if request.url.path.endswith("/key"):
+            return httpx.Response(200, json={"data": {"limit_remaining": 4.5, "limit": 10, "usage": 5.5}})
+        return httpx.Response(200, json={"data": [{"id": "openai/gpt-4o-mini"}]})
+
+    s = Settings(data_dir=tmp_path, openrouter_api_key="k")
+    out = asyncio.run(check_key(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)), "openrouter"))
+    assert out["models"][0]["id"] == "openai/gpt-4o-mini" and out["limits"]["credit"]["remaining"] == 4.5
+    assert LIMITS["openrouter"]["credit"]["used"] == 5.5

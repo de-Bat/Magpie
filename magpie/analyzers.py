@@ -22,7 +22,7 @@ import httpx
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, ScreenshotAnalyzer, correction_prompt, prepare_image
 from .config import HOSTED_LLMS, Settings
 from .ocr import Ocr, OcrResult, Signals, extract_signals
-from .usage import Run, local_cost, token_cost
+from .usage import Run, local_cost, record_limits, token_cost
 
 log = logging.getLogger(__name__)
 
@@ -258,6 +258,8 @@ class LocalLLMAnalyzer:
                 r = await self.http.post(self.url, json=req, headers=self.headers, timeout=self.timeout)
             except httpx.HTTPError as e:
                 raise AnalysisError(f"Can't reach the local LLM at {self.url}: {e!r}") from e
+            if self.hosted:
+                record_limits(self.name, r.headers)
             if r.status_code not in self.RETRY_STATUSES or attempt == self.MAX_RETRIES:
                 return r
             try:

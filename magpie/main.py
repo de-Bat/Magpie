@@ -25,7 +25,8 @@ from .analyzers import AnalyzerRouter
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
-from .models import fetch_models
+from .models import check_key
+from .usage import LIMITS
 from .db import Database
 from .pipeline import Pipeline
 
@@ -256,7 +257,7 @@ def create_app(
         require_settings_access(request)
         client = state["pipeline"].http if "pipeline" in state else httpx.AsyncClient(timeout=20)
         try:
-            return {"models": await fetch_models(settings, client, req.provider, req.url, req.key)}
+            return await check_key(settings, client, req.provider, req.url, req.key)
         except ValueError as e:
             raise HTTPException(400, str(e))
         except httpx.HTTPError as e:
@@ -418,7 +419,7 @@ def create_app(
             "provider_model": settings.llm_model if settings.hosted_llm in HOSTED_LLMS else settings.model,
             "claude_batch": settings.claude_batch, "fetch_max_tokens": settings.fetch_max_tokens,
             "escalate_below": settings.escalate_below, "monthly_budget_usd": settings.monthly_budget_usd,
-            "month_spent_usd": round(db.month_cost(), 4),
+            "month_spent_usd": round(db.month_cost(), 4), "limits": LIMITS,
         }
         return report
 

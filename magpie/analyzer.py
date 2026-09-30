@@ -14,7 +14,7 @@ from typing import Any
 
 import anthropic
 
-from .usage import Run, claude_cost
+from .usage import Run, claude_cost, record_limits
 
 log = logging.getLogger(__name__)
 
@@ -330,8 +330,12 @@ class ScreenshotAnalyzer:
             raise
 
     async def _create(self, params: dict):
-        if self.model in FALLBACK_MODELS:
-            return await self.client.beta.messages.create(
-                **params, betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-            )
-        return await self.client.messages.create(**params)
+        fallback = self.model in FALLBACK_MODELS
+        messages = self.client.beta.messages if fallback else self.client.messages
+        kwargs = {**params, "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if fallback else params
+        raw = getattr(messages, "with_raw_response", None)
+        if raw is None:
+            return await messages.create(**kwargs)
+        response = await raw.create(**kwargs)
+        record_limits("claude", response.headers)  # what the account has left in this rate-limit window
+        return response.parse()
