@@ -21,6 +21,7 @@ import httpx
 
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, ScreenshotAnalyzer, correction_prompt, prepare_image
 from .config import HOSTED_LLMS, Settings
+from .related import clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
 from .usage import Run, local_cost, record_limits, token_cost
 
@@ -40,13 +41,16 @@ LOCAL_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
 ).replace(
     "Only report URLs, ratings and facts you actually saw in search results or the screenshot.",
     "Only report URLs, ratings and facts you saw in the screenshot or are certain of; ratings are looked up later.",
+).replace(
+    "Each link must be a page you saw, and must not be the item's own page.",
+    "Only include links written in the screenshot or the OCR text; otherwise leave `related` empty.",
 )
 
 
 def blank_analysis() -> dict:
     return {
         "category": "other", "source_platform": "other", "title": "", "subtitle": None, "year": None,
-        "summary": "", "canonical_url": None, "image_url": None, "links": [], "tags": [],
+        "summary": "", "canonical_url": None, "image_url": None, "links": [], "related": [], "tags": [],
         "screenshot_text": "", "confidence": 0, "confidence_reason": "", "alternatives": [],
         "details": {k: ([] if k in ARRAY_DETAILS else None) for k in DETAIL_KEYS},
     }
@@ -87,6 +91,7 @@ def normalize(raw: dict) -> dict:
         out["year"] = None
     out["tags"] = [str(t) for t in out["tags"]] if isinstance(out["tags"], list) else []
     out["links"] = [l for l in out["links"] if isinstance(l, dict) and l.get("url")] if isinstance(out["links"], list) else []
+    out["related"] = clean_related(out["related"] if isinstance(out["related"], list) else [])
     out["alternatives"] = [
         {"title": str(a.get("title")), "category": a.get("category") if a.get("category") in CATEGORIES else "other",
          "year": a.get("year") if isinstance(a.get("year"), int) else None,

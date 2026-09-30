@@ -19,6 +19,7 @@ import httpx
 from . import readability
 from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
+from .related import outbound_related
 from .images import (best_image, oembed_thumbnail, origin_icons, package_logos, page_image_candidates, readme_images,
                      youtube_thumbnails)
 
@@ -39,6 +40,7 @@ class Enrichment:
     summary: str | None = None
     subtitle: str | None = None
     links: list[dict] = field(default_factory=list)
+    related: list[dict] = field(default_factory=list)   # worth-a-look links: [{kind, label, url}], see related.py
     tags: list[str] = field(default_factory=list)
     source: str | None = None
     # Name of the thing the source matched; used to double-check non-Claude identifications.
@@ -96,8 +98,13 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
     tags = list((repo.get("topics") or [])[:6])
     if repo.get("language"):
         tags.append(repo["language"])
+    related = []
+    if (repo.get("owner") or {}).get("type") == "Organization":
+        related.append({"kind": "company", "label": f"{repo['owner']['login']} on GitHub", "url": repo["owner"]["html_url"]})
+    if isinstance(repo.get("parent"), dict) and repo["parent"].get("html_url"):
+        related.append({"kind": "repo", "label": f"{repo['parent']['full_name']} (forked from)", "url": repo["parent"]["html_url"]})
     return Enrichment(
-        metadata=meta,
+        metadata=meta, related=related,
         canonical_url=repo["html_url"],
         image_url=hero,
         subtitle=repo.get("description"),
@@ -199,8 +206,13 @@ async def enrich_npm(analysis: dict, settings: Settings, http: httpx.AsyncClient
         links.append({"label": "Repository", "url": f"https://github.com/{full_name}"})
     if isinstance(homepage, str) and homepage.startswith("http") and (not full_name or full_name.lower() not in homepage.lower()):
         links.append({"label": "Homepage", "url": homepage})
+    related = []
+    if full_name:
+        related.append({"kind": "repo", "label": full_name, "url": f"https://github.com/{full_name}"})
+    if isinstance(homepage, str) and homepage.startswith("http") and (not full_name or full_name.lower() not in homepage.lower()):
+        related.append({"kind": "site", "label": "Homepage", "url": homepage})
     return Enrichment(
-        metadata=meta, canonical_url=f"https://www.npmjs.com/package/{name}", image_url=image,
+        related=related, metadata=meta, canonical_url=f"https://www.npmjs.com/package/{name}", image_url=image,
         subtitle=d.get("description"), links=links, tags=[str(k).lower() for k in (d.get("keywords") or [])[:5]],
         source="npm", matched_title=name,
     )
@@ -281,7 +293,12 @@ async def enrich_huggingface(analysis: dict, settings: Settings, http: httpx.Asy
     image = await best_image(http, candidates, verified_only=True) or await best_image(
         http, await hf_owner_logo(rid.split("/")[0], http)) or await best_image(http, candidates)
     skip = ("region:", "license:", "endpoints_compatible", "autotrain_compatible", "text-generation-inference")
+    related = [{"kind": "paper", "label": f"arXiv {t.split(':', 1)[1]}", "url": f"https://arxiv.org/abs/{t.split(':', 1)[1]}"}
+               for t in tags if t.startswith("arxiv:")][:2]
+    if meta["base_model"] and "/" in meta["base_model"]:
+        related.append({"kind": "repo", "label": f"{meta['base_model']} (base model)", "url": f"https://huggingface.co/{meta['base_model']}"})
     return Enrichment(
+        related=related,
         metadata=meta, canonical_url=page_url, image_url=image, subtitle=" · ".join(x for x in (d.get("pipeline_tag"), d.get("library_name")) if x) or None,
         links=[{"label": "Hugging Face", "url": page_url}],
         tags=[t for t in ([d.get("pipeline_tag")] + tags) if t and ":" not in t and not t.startswith(skip)][:5],
@@ -817,6 +834,7 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
             return found
     e = with_readability(opengraph_from_page(page), page)
     e.image_url = await page_picture(http, page, e.image_url)
+    e.related = outbound_related(page)   # the repository, app, paper or company the article is about
     return e
 
 
