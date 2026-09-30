@@ -61,6 +61,7 @@ class ItemPatch(BaseModel):
     note: str | None = None
     canonical_url: str | None = None
     tags: list[str] | None = None
+    confirmed: bool | None = None   # the user says this identification is right
 
 
 class ModelsRequest(BaseModel):
@@ -184,7 +185,8 @@ def create_app(
             problems.append({"level": "error", "key": None, "message": f"Analyzer not available: {rt.analyzer_error}"})
         levels = {p["level"] for p in problems}
         status = "error" if "error" in levels else "warning" if "warning" in levels else "ok"
-        return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer()}
+        return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer(),
+                "verified_confidence": settings.verified_confidence}
 
     @app.get("/api/health")
     def health():
@@ -380,6 +382,10 @@ def create_app(
         tags = fields.pop("tags", None)
         if tags is not None:
             db.set_tags(item_id, tags)
+        if fields.get("confirmed") is not None:
+            fields["confirmed"] = int(bool(fields["confirmed"]))
+        else:
+            fields.pop("confirmed", None)
         return db.update_item(item_id, **fields)
 
     @app.post("/api/items/{item_id}/reanalyze", status_code=202)
@@ -536,7 +542,7 @@ class _Runtime:
         self._last_attempt = time.monotonic()
         try:
             self.settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-            db = Database(self.settings.db_path)
+            db = Database(self.settings.db_path, verified_confidence=lambda: self.settings.verified_confidence)
         except Exception as e:
             self.db_error = (f"can't use the data directory {self.settings.data_dir} ({type(e).__name__}: {e}). "
                              "Check that it exists and that the server may write to it (MAGPIE_DATA_DIR).")

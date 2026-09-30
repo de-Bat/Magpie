@@ -677,3 +677,25 @@ async def test_github_prefers_the_maintainers_social_preview(settings):
     async with mock_http(routes) as http:
         [e] = await run_enrichers(analysis(), settings, http)
     assert e.image_url == "https://repository-images.githubusercontent.com/1/abc"
+
+
+def test_verified_threshold_is_configurable_and_items_can_be_confirmed(settings):
+    client, analyzer = make_client(settings, analysis(category="other", title="Maybe", canonical_url=None, details=blank_details(), confidence=75))
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        get = lambda: client.get(f"/api/items/{item_id}").json()
+        assert get()["verified"] is False                       # 75 < the default 90
+        assert client.get("/api/status").json()["verified_confidence"] == 90
+        # the user's own threshold applies at once, and can't go below 60
+        auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+        assert client.put("/api/settings", json={"changes": {"MAGPIE_VERIFIED_CONFIDENCE": "70"}}, headers=auth).status_code == 200
+        assert get()["verified"] is True
+        assert client.put("/api/settings", json={"changes": {"MAGPIE_VERIFIED_CONFIDENCE": "50"}}, headers=auth).status_code == 422
+        assert client.put("/api/settings", json={"changes": {"MAGPIE_VERIFIED_CONFIDENCE": None}}, headers=auth).status_code == 200
+        assert get()["verified"] is False
+        # "Verify": the user confirms the identification
+        assert client.patch(f"/api/items/{item_id}", json={"confirmed": True}).json()["verified"] is True
+        assert client.get("/api/items", params={"unverified": True}).json() == []
+        # a fresh analysis is a new identification: not confirmed any more
+        client.post(f"/api/items/{item_id}/reanalyze")
+        assert get()["confirmed"] is False and get()["verified"] is False
