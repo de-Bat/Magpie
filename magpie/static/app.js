@@ -1299,10 +1299,20 @@ function renderFilters() {
   $("#tag-btn").textContent = state.tags.length ? `# Tags · ${state.tags.length}` : "# Tags";
 }
 
-const initialsOf = (item) => {
-  const text = item.title || hostOf(item.source_url) || "";
-  return text.replace(/[^\p{L}\p{N} ]/gu, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "·";
-};
+// The title set on a generated cover, like a book jacket: repos show the owner small above the name.
+function coverTitleHtml(item) {
+  const text = item.title || hostOf(item.source_url) || cardTitle(item);
+  const repo = item.category === "github_repo" && /^[^/\s]+\/[^/\s]+$/.test(text) ? text.split("/") : null;
+  const main = repo ? repo[1] : text;
+  const len = main.length;
+  // Shorter titles are set bigger, but never so big that the longest word has to break (bold ≈ 0.72em a letter,
+  // 86% of the cover's width available).
+  const byLength = len <= 12 ? 17 : len <= 28 ? 12.5 : len <= 60 ? 9.5 : 7.5;
+  const longest = Math.max(...main.split(/[\s/_-]+/).map((w) => w.length), 1);
+  const size = Math.min(byLength, 86 / (0.72 * longest)).toFixed(1);
+  const lines = len <= 12 ? 3 : len <= 28 ? 4 : len <= 60 ? 5 : 6;
+  return `<span class="cover-title" style="--fs:${size}cqw;--lines:${lines}" aria-hidden="true">${repo ? `<small>${esc(repo[0])}/</small>${esc(repo[1])}` : esc(text)}</span>`;
+}
 
 // The picture area of a card: the real poster/cover/header when there is one, else a cover themed for the type.
 // Pictures that failed to load in this browser (hotlink protection, gone): shown as the themed cover instead.
@@ -1326,7 +1336,7 @@ function coverHtml(item, { chip = true } = {}) {
   const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
   return `<div class="cover t-${esc(item.category || "other")} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
-    `${typeIcon(item.category || "other", "glyph")}<span class="mono">${esc(initialsOf(item))}</span>`}${
+    `${typeIcon(item.category || "other", "glyph")}${coverTitleHtml(item)}`}${
     // no-referrer: many sites refuse images to pages on other sites but serve them without a Referer
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     chip ? `<span class="typechip">${typeIcon(item.category || "other")}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
