@@ -45,6 +45,11 @@
     <button id="tag-btn" class="pill-btn" type="button" aria-expanded="false" aria-controls="tag-pop"># Tags</button>
     <div id="active-filters" class="active-filters"></div>
     <span class="spacer"></span>
+    <div class="seg cols-seg" id="cols-ctl" role="group" aria-label="Columns">
+      <button type="button" data-cols="-1" aria-label="Fewer columns, bigger cards">−</button>
+      <span id="cols-label" class="cols-label" title="Columns">Auto</span>
+      <button type="button" data-cols="1" aria-label="More columns, smaller cards">+</button>
+    </div>
     <div class="seg" role="group" aria-label="Layout">
       <button type="button" data-layout="grid" aria-pressed="true" aria-label="Grid">▦</button>
       <button type="button" data-layout="list" aria-pressed="false" aria-label="List">☰</button>

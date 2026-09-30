@@ -67,7 +67,8 @@ const HIDDEN_META = new Set([
 ]);
 
 const state = {
-  q: "", tab: "all", show: "all", tags: [], layout: (() => { try { return localStorage.getItem("magpie.layout") === "list" ? "list" : "grid"; } catch { return "grid"; } })(),
+  q: "", tab: "all", show: "all", tags: [], cols: (() => { try { return Math.max(0, Math.min(8, parseInt(localStorage.getItem("magpie.columns"), 10) || 0)); } catch { return 0; } })(),
+  layout: (() => { try { return localStorage.getItem("magpie.layout") === "list" ? "list" : "grid"; } catch { return "grid"; } })(),
   items: new Map(),        // id -> item (mirror of the IndexedDB "items" store)
   ops: [],                 // queued changes, oldest first
   sync: "idle",            // idle | syncing | offline | auth | error
@@ -1314,7 +1315,7 @@ function coverHtml(item, { chip = true } = {}) {
   return `<div class="cover t-${esc(item.category || "other")} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
     pic ? `<span class="cover-img" style="background-image:url('${esc(pic)}')"></span>` : ""}${
     pic && !wide ? "" : `${typeIcon(item.category || "other", "glyph")}<span class="mono">${esc(initialsOf(item))}</span>`}${
-    chip ? `<span class="typechip">${typeIcon(item.category || "other")}${esc(label)}</span>` : ""}${flag}</div>`;
+    chip ? `<span class="typechip">${typeIcon(item.category || "other")}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
 }
 
 function cardMeta(item) {
@@ -1322,12 +1323,28 @@ function cardMeta(item) {
   return [typeName(item.category), ...cardFacts(item).slice(0, 2)].join(" · ");
 }
 
+// How many columns fit: up to 4 on a phone (a card needs room to be read), 8 on a wide screen.
+const maxColumns = () => (window.innerWidth < 760 ? 4 : 8);
+function currentColumns() {
+  return getComputedStyle($("#grid")).gridTemplateColumns.split(" ").filter(Boolean).length || 2;
+}
+function stepColumns(delta) {
+  const from = Math.min(state.cols || currentColumns(), maxColumns());
+  state.cols = Math.max(1, Math.min(maxColumns(), from + delta));
+  try { localStorage.setItem("magpie.columns", String(state.cols)); } catch {}
+}
+window.addEventListener("resize", () => { if (state.cols) renderGrid(); });
+
 function renderGrid() {
   const items = filteredItems();
   $("#empty").hidden = items.length > 0;
   const filtered = state.q || state.tab !== "all" || state.show !== "all" || state.tags.length;
   $("#empty").textContent = filtered ? "Nothing matches. Clear the search or switch tabs." : "Nothing here yet. Tap + Add, or paste a screenshot or link.";
-  $("#grid").className = `grid ${state.layout === "list" ? "list" : ""}`;
+  const cols = Math.min(state.cols, maxColumns());
+  $("#grid").className = `grid ${state.layout === "list" ? "list" : cols ? `cols${cols >= 6 ? " dense" : ""}` : ""}`;
+  $("#grid").style.setProperty("--cols", cols || "");
+  $("#cols-ctl").hidden = state.layout === "list";
+  $("#cols-label").textContent = cols ? `${cols} col${cols > 1 ? "s" : ""}` : "Auto";
   $("#grid").innerHTML = items.map((item) => `
     <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
@@ -1623,7 +1640,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-verify],[data-cols],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1642,7 +1659,9 @@ document.addEventListener("click", async (e) => {
     return field?.focus();
   }
   if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
-  if (t.dataset.tab !== undefined) {
+  if (t.dataset.cols !== undefined) {
+    stepColumns(Number(t.dataset.cols));
+  } else if (t.dataset.tab !== undefined) {
     state.tab = t.dataset.tab;
   } else if (t.dataset.show !== undefined) {
     state.show = t.dataset.show;
