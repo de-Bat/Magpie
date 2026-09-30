@@ -998,3 +998,84 @@ def test_refresh_metadata_adds_related_links_without_losing_the_old_ones(setting
         before = {r["url"] for r in client.get(f"/api/items/{item_id}").json()["related"]}
         after = {r["url"] for r in client.post(f"/api/items/{item_id}/refresh-metadata").json()["related"]}
     assert "https://github.com/astral-sh" in before | after and before <= after
+
+
+def _wait_bulk(client, timeout=10):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        st = client.get("/api/bulk").json()
+        if not st["running"]:
+            return st
+        time.sleep(0.05)
+    raise AssertionError("bulk job did not finish")
+
+
+def test_refresh_and_reanalyze_the_whole_library(settings):
+    stars = {"n": 100}
+    routes = {"https://api.github.com/repos/astral-sh/uv": lambda request: httpx.Response(200, json={**GITHUB_REPO, "stargazers_count": stars["n"]})}
+    client, analyzer = make_client(settings, analysis(), routes)
+    with client:
+        auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+        ids = [client.post("/api/items", files={"file": (f"{n}.png", png_bytes((40 + n, 60)), "image/png")}).json()["id"] for n in range(3)]
+        assert client.post("/api/bulk/refresh-metadata", json={"scope": "all"}).status_code == 403   # needs the setup code, like settings
+        assert client.post("/api/bulk/refresh-metadata", json={"scope": "bogus"}, headers=auth).status_code == 422
+
+        stars["n"] = 555
+        calls = len(analyzer.calls)
+        r = client.post("/api/bulk/refresh-metadata", json={"scope": "all"}, headers=auth)
+        assert r.status_code == 202 and r.json()["total"] == 3
+        done = _wait_bulk(client)
+        assert done["done"] == 3 and done["failed"] == 0 and not done["running"]
+        assert all(client.get(f"/api/items/{i}").json()["metadata"]["stars"] == 555 for i in ids)
+        assert len(analyzer.calls) == calls                     # no model was asked
+
+        # re-analyze: the model runs again, but what you corrected or confirmed can be left alone
+        client.patch(f"/api/items/{ids[0]}", json={"confirmed": True})
+        analyzer.result = analysis(title="astral-sh/uv (again)")
+        r = client.post("/api/bulk/reanalyze", json={"scope": "all", "skip_confirmed": True}, headers=auth)
+        assert r.json()["total"] == 2
+        done = _wait_bulk(client)
+        assert done["done"] == 2 and len(analyzer.calls) == calls + 2
+        assert client.get(f"/api/items/{ids[0]}").json()["title"] == "astral-sh/uv"
+        assert client.get(f"/api/items/{ids[1]}").json()["title"] == "astral-sh/uv (again)"
+
+
+def test_bulk_scopes_and_one_job_at_a_time(settings):
+    client, analyzer = make_client(settings, AnalysisError("declined"))
+    with client:
+        auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+        a = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        analyzer.result = analysis(confidence=95)
+        b = client.post("/api/items", files={"file": ("b.png", png_bytes((41, 60)), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{a}").json()["status"] == "error" and client.get(f"/api/items/{b}").json()["status"] == "ready"
+        totals = {}
+        for scope in ("all", "failed", "check"):
+            totals[scope] = client.post("/api/bulk/refresh-metadata", json={"scope": scope}, headers=auth).json()["total"]
+            _wait_bulk(client)
+        assert totals == {"all": 2, "failed": 1, "check": 1}     # to check = the failed one (b is sure and ready)
+
+
+async def test_only_one_bulk_job_runs_at_a_time():
+    import asyncio
+    from magpie.bulk import BulkBusy, BulkRunner
+    started = asyncio.Event()
+
+    class Slow:
+        async def refresh_metadata(self, item_id):
+            started.set()
+            await asyncio.sleep(0.2)
+            return {"id": item_id}
+
+    class Db:
+        def list_items(self, **kw):
+            return [{"id": "a", "status": "ready", "created_at": "1"}]
+
+    runner = BulkRunner(Db(), lambda: Slow())
+    runner.start("refresh", "all")
+    await started.wait()
+    with pytest.raises(BulkBusy):
+        runner.start("refresh", "all")
+    runner.cancel()
+    await runner._task
+    assert runner.snapshot()["running"] is False and runner.snapshot()["done"] == 1

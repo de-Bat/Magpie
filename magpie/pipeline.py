@@ -185,7 +185,7 @@ class Pipeline:
         kwargs: dict[str, Any] = {"note": item.get("note"), "correction": context}
         if isinstance(self.analyzer, AnalyzerRouter):
             # The user is waiting on corrections and re-analyses: never send those to a batch.
-            kwargs["interactive"] = purpose != "analyze"
+            kwargs["interactive"] = purpose not in ("analyze", "bulk")
 
         async def identify() -> dict:
             analysis = await self.analyzer.analyze(Path(path).read_bytes(), media_type, **kwargs)
@@ -220,7 +220,7 @@ class Pipeline:
                     context = {**correction, "previous_title": item.get("title"), "previous_category": item.get("category")}
                 readable = bool(article and article.word_count >= 150)
                 analysis = await router.analyze(
-                    None, None, note=item.get("note"), correction=context, interactive=purpose != "analyze",
+                    None, None, note=item.get("note"), correction=context, interactive=purpose not in ("analyze", "bulk"),
                     link_url=url, page_hints=links.page_context(url, page, article), web=not readable,
                 )
                 analysis["_analyzer"] = ["link", "readability"] + analysis.get("_analyzer", [])

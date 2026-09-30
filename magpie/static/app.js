@@ -986,7 +986,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
   const advanced = data.groups.filter((g) => ADVANCED_GROUPS.includes(g.name))
     .flatMap((g) => g.settings).filter((s) => !PROVIDER_ENVS.has(s.env));
   const others = data.groups.filter((g) => !ADVANCED_GROUPS.includes(g.name) && !HIDDEN_GROUPS.includes(g.name));
-  const names = ["AI provider", ...others.map((g) => g.name), "Appearance"];
+  const names = ["AI provider", ...others.map((g) => g.name), "Library", "Appearance"];
   if (!names.includes(settingsTab)) settingsTab = names[0];
   const hasLevel = (list) => list.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
     : list.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
@@ -1002,6 +1002,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
     <div class="settings-panel">
       <header class="settings-head">
         <h2>Settings</h2>
+        <label class="settings-search"><span aria-hidden="true">⌕</span><input id="settings-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false"></label>
         <button class="btn close" data-action="close" aria-label="Close">✕</button>
       </header>
       <form id="settings-form" autocomplete="off">
@@ -1019,7 +1020,9 @@ function settingsHtml(data, errors = {}, typed = {}) {
                 ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
             ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
+            ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
+            <p id="settings-none" class="setting-note" hidden></p>
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>
         </div>
@@ -1076,6 +1079,147 @@ function appearanceHtml() {
   }</div></div></div>`;
 }
 
+// ---- library-wide actions: refresh all metadata, re-analyze all -----------------------------
+
+const bulkScopes = () => {
+  const items = [...state.items.values()].filter((i) => i.status !== "processing" && !i.pending_upload && !i.batch_pending);
+  return { all: items.length, check: items.filter(needsCheck).length, failed: items.filter((i) => i.status === "error").length };
+};
+
+function libraryHtml() {
+  const n = bulkScopes();
+  return `
+    <p class="setting-help" style="margin-top:0">Run one of these on many items at once. Items that are being analyzed right now are left out.</p>
+    <div class="setting"><div class="setting-text"><label for="bulk-scope">Which items</label></div>
+      <div class="setting-control"><select id="bulk-scope">
+        <option value="all">All items (${n.all})</option>
+        <option value="check">Only items to check (${n.check})</option>
+        <option value="failed">Only failed (${n.failed})</option></select></div></div>
+    <div class="bulk-card">
+      <h4>Refresh all metadata</h4>
+      <p>Looks up posters, covers, ratings and related links again. No AI is asked, so it costs nothing, and nothing you edited or confirmed changes.</p>
+      <button class="btn" type="button" data-bulk="refresh">⟳ Refresh metadata</button>
+    </div>
+    <div class="bulk-card">
+      <h4>Re-analyze all</h4>
+      <p>Identifies the items again with your AI provider, which costs money (Claude runs in a batch at half price, so results take a while).</p>
+      <label class="check"><input type="checkbox" id="bulk-skip" checked> Leave out items I corrected or confirmed, because re-analyzing replaces them</label>
+      <button class="btn" type="button" data-bulk="reanalyze">↻ Re-analyze…</button>
+    </div>
+    <div id="bulk-progress" class="bulk-progress" hidden aria-live="polite"></div>`;
+}
+
+let bulkTimer = null;
+const BULK_LABEL = { refresh: "Refreshing metadata", reanalyze: "Re-analyzing" };
+
+async function pollBulk() {
+  clearTimeout(bulkTimer);
+  const box = $("#bulk-progress");
+  if (!box) return;   // the settings dialog was closed
+  let st;
+  try { st = await api("/api/bulk", { timeout: 8000 }); } catch { return; }
+  if (st.running) {
+    const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    box.hidden = false;
+    box.innerHTML = `<div class="row-between"><b>${BULK_LABEL[st.kind] || "Working"}: ${st.done} of ${st.total}${st.failed ? ` · ${st.failed} failed` : ""}</b>
+      <button class="btn small" type="button" data-bulk-cancel>Stop</button></div><div class="gauge"><i style="width:${pct}%"></i></div>`;
+    bulkTimer = setTimeout(pollBulk, 1500);
+  } else if (st.total && st.finished && Date.now() / 1000 - st.finished < 600) {
+    box.hidden = false;
+    box.innerHTML = `<b>${st.cancelled ? "Stopped" : "Done"}: ${st.done} of ${st.total} ${st.kind === "refresh" ? "refreshed" : "sent for analysis"}${st.failed ? `, ${st.failed} failed` : ""}.</b>
+      ${st.kind === "reanalyze" ? `<p class="meta-line" style="margin:4px 0 0">Claude batches can take up to an hour; the library updates by itself.</p>` : ""}`;
+    requestSync();
+    refreshCostPill(true);
+  } else {
+    box.hidden = true;
+  }
+}
+
+async function startBulk(kind) {
+  const scope = $("#bulk-scope").value, n = bulkScopes()[scope];
+  if (!n) return toast("Nothing to do for that choice.");
+  const skip = kind === "reanalyze" && $("#bulk-skip").checked;
+  const per = state.usage?.per_screenshot_usd;
+  const ok = kind === "refresh"
+    ? confirm(`Refresh metadata for ${n} item${n > 1 ? "s" : ""}? It looks things up again and doesn't use your AI provider.`)
+    : confirm(`Re-analyze ${n} item${n > 1 ? "s" : ""} with your AI provider?${per ? `\n\nThat costs about ${formatUsd(n * per)} at your average so far.` : "\n\nThis uses your AI provider and costs money."}${skip ? "\nItems you corrected or confirmed are skipped." : "\nItems you corrected or confirmed will be replaced."}`);
+  if (!ok) return;
+  const body = JSON.stringify({ scope, skip_confirmed: skip });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+      await api(`/api/bulk/${kind === "refresh" ? "refresh-metadata" : "reanalyze"}`, { method: "POST", headers, body });
+      return pollBulk();
+    } catch (e) {
+      let detail = {};
+      try { detail = JSON.parse(e.message); } catch {}
+      if (e instanceof HttpError && e.status === 403 && detail.code === "setup_code_required") {
+        const code = prompt(`${setupCode ? "That setup code didn't match. " : ""}${detail.message}\n\nSetup code:`);
+        if (!code) return toast("Not started.");
+        setupCode = code.trim();
+        continue;
+      }
+      return toast(e instanceof HttpError && e.status === 409 ? "A library job is already running." : `Couldn't start: ${errorMessage(e)}`);
+    }
+  }
+}
+
+async function cancelBulk() {
+  const headers = {};
+  if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+  try { await api("/api/bulk/cancel", { method: "POST", headers }); toast("Stopping after the items in progress…"); } catch (e) { toast(`Couldn't stop: ${errorMessage(e)}`); }
+}
+
+// ---- search in settings: type part of a name, in any order ("tmdb key", "budget", "escal conf") --------
+
+// A word matches a setting's name loosely (letters in order, close together: "mnthly bdget" finds "Monthly budget")
+// and its description only as written, so a long description doesn't match every short word.
+function settingMatches(query, name, help) {
+  const n = fold(name), h = fold(help);
+  return fold(query).split(/\s+/).filter(Boolean).every((token) => {
+    const m = fuzzyOne(token, n);
+    if (m) return token.length < 3 && !n.includes(token) ? false : (m.pos.at(-1) - m.pos[0] + 1) <= token.length * 2 + 1;
+    return h.includes(token);
+  });
+}
+
+function searchSettings(query) {
+  const root = $(".settings-content");
+  if (!root) return;
+  const q = query.trim();
+  const sections = [...root.querySelectorAll(".settings-section")];
+  root.querySelectorAll(".search-hit").forEach((el) => el.classList.remove("search-hit", "search-miss"));
+  root.querySelectorAll(".search-miss").forEach((el) => el.classList.remove("search-miss"));
+  $("#settings-none").hidden = true;
+  if (!q) {   // back to the normal, one-section view
+    root.classList.remove("searching");
+    selectSettingsTab(settingsTab);
+    return;
+  }
+  root.classList.add("searching");
+  document.querySelectorAll("[data-settings-tab]").forEach((b) => b.setAttribute("aria-selected", "false"));
+  let total = 0;
+  for (const sec of sections) {
+    sec.hidden = false;
+    let hits = 0;
+    for (const row of sec.querySelectorAll(".setting, .bulk-card")) {
+      const hidden = row.closest("[hidden]") !== sec && row.closest("[hidden]");   // e.g. the local-server block in non-hybrid mode
+      const env = (row.querySelector("[id^='set-']")?.id || row.querySelector("[name]")?.name || "").replace(/^set-/, "");
+      const name = `${row.querySelector("label, h4")?.textContent || ""} ${env} ${sec.dataset.section}`;
+      const hit = !hidden && settingMatches(q, name, row.querySelector(".setting-help, p")?.textContent || "");
+      row.classList.toggle("search-miss", !hit);
+      if (hit) { hits++; row.closest("details")?.setAttribute("open", ""); }
+    }
+    // notes and the section heading only matter where something matched
+    sec.classList.toggle("search-miss", !hits);
+    total += hits;
+  }
+  const none = $("#settings-none");
+  none.hidden = total > 0;
+  none.textContent = `No setting matches “${q}”.`;
+}
+
 let settingsData = null;
 
 async function showSettings(errors = {}, typed = {}) {
@@ -1098,6 +1242,7 @@ async function showSettings(errors = {}, typed = {}) {
   }
   dlg.innerHTML = settingsHtml(settingsData, errors, typed);
   if (!dlg.open) dlg.showModal();
+  pollBulk();   // a library job started earlier shows its progress
   if ($("#provider-form")) {
     const shown = settingsData.providers.find((x) => x.id === $("#ot-provider").value);
     $("#ot-provider").dataset.shown = shown.id;
@@ -1751,6 +1896,12 @@ $("#search").addEventListener("input", (e) => {
   searchTimer = setTimeout(() => { state.q = e.target.value.trim(); renderGrid(); }, 120);
 });
 $("#tag-filter").addEventListener("input", renderFilters);
+$("#detail").addEventListener("input", (e) => { if (e.target.id === "settings-search") searchSettings(e.target.value); });
+$("#detail").addEventListener("keydown", (e) => {
+  if (e.target.id !== "settings-search") return;
+  if (e.key === "Enter") e.preventDefault();   // not "save settings"
+  if (e.key === "Escape" && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ""; searchSettings(""); }
+});
 $("#cols-select").addEventListener("change", (e) => {
   state.cols = Number(e.target.value);
   try { localStorage.setItem("magpie.columns", String(state.cols)); } catch {}
@@ -1792,7 +1943,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-bulk],[data-bulk-cancel],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1811,6 +1962,8 @@ document.addEventListener("click", async (e) => {
     return field?.focus();
   }
   if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
+  if (t.dataset.bulk !== undefined) return startBulk(t.dataset.bulk);
+  if (t.dataset.bulkCancel !== undefined) return cancelBulk();
   if (t.dataset.tab !== undefined) {
     state.tab = t.dataset.tab;
   } else if (t.dataset.show !== undefined) {

@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
+from .bulk import BulkBusy, BulkRunner
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
@@ -64,6 +65,11 @@ class ItemPatch(BaseModel):
     confirmed: bool | None = None   # the user says this identification is right
 
 
+class BulkRequest(BaseModel):
+    scope: str = "all"                    # all | check (to check) | failed
+    skip_confirmed: bool = False          # leave out items you corrected or confirmed (re-analyze would overwrite them)
+
+
 class ModelsRequest(BaseModel):
     provider: str
     url: str | None = None   # local / self-hosted only
@@ -97,6 +103,7 @@ def create_app(
                     "(new on every start; not needed once MAGPIE_API_TOKEN is set)", rt.setup_code)
     db = rt.db  # a proxy: answers 503 with the reason while the database is unavailable
     state: dict = {}
+    bulk = BulkRunner(db, lambda: state["pipeline"])
 
     def build_analyzer(client: httpx.AsyncClient) -> Any:
         if analyzer is not None:
@@ -402,6 +409,35 @@ def create_app(
         No model is called, so it costs nothing and never changes the identification."""
         get_or_404(item_id)
         return await state["pipeline"].refresh_metadata(item_id)
+
+    @app.get("/api/bulk")
+    def bulk_status():
+        """Progress of the library-wide job (refresh all metadata / re-analyze all), if one is running."""
+        return bulk.snapshot()
+
+    def start_bulk(kind: str, req: BulkRequest, request: Request):
+        require_settings_access(request)   # re-analyzing the library spends money: same access rules as changing settings
+        try:
+            return bulk.start(kind, req.scope, req.skip_confirmed)
+        except BulkBusy as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @app.post("/api/bulk/refresh-metadata", status_code=202)
+    async def bulk_refresh(req: BulkRequest, request: Request):
+        """Look up posters, covers, ratings and links again for many items. No model is called."""
+        return start_bulk("refresh", req, request)
+
+    @app.post("/api/bulk/reanalyze", status_code=202)
+    async def bulk_reanalyze(req: BulkRequest, request: Request):
+        """Identify many items again with the configured analyzer (batched when Claude is used)."""
+        return start_bulk("reanalyze", req, request)
+
+    @app.post("/api/bulk/cancel")
+    def bulk_cancel(request: Request):
+        require_settings_access(request)
+        return bulk.cancel()
 
     @app.post("/api/items/{item_id}/correct", status_code=202)
     def correct(item_id: str, correction: Correction, background: BackgroundTasks):

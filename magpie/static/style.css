@@ -466,6 +466,8 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .setting-note { margin: 0; font-size: 12px; color: var(--muted); }
 .settings-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 24px; border-top: 1px solid var(--border); background: var(--surface); }
 @media (max-width: 760px) {
+  .settings-head { flex-wrap: wrap; gap: 8px; }
+  .settings-search { order: 3; flex-basis: 100%; max-width: none; margin: 0; }
   .settings-body { flex-direction: column; }
   .settings-nav { flex-direction: row; width: auto; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--border); padding: 8px 12px; }
   .settings-nav button { white-space: nowrap; }
@@ -484,6 +486,16 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .combo-sub { color: var(--muted); font-size: 13px; }
 .combo mark { background: none; color: var(--accent); font-weight: 700; }
 .setting-control .combo input { width: 100%; }
+
+.settings-search { flex: 1; max-width: 340px; margin: 0 12px; display: flex; align-items: center; gap: 8px; background: var(--surface-2); border-radius: 10px; padding: 6px 10px; color: var(--muted); }
+.settings-search input { all: unset; flex: 1; min-width: 0; color: var(--text); font-size: 14px; }
+.settings-content.searching .search-miss, .settings-content.searching > .status-summary, .settings-content.searching > .ok-line { display: none; }
+.settings-content.searching .settings-section:not(.search-miss) .setting-note { display: none; }
+.bulk-card { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; justify-items: start; }
+.bulk-card h4 { margin: 0; font-size: 15px; }
+.bulk-card p { margin: 0; color: var(--muted); font-size: 14px; }
+.bulk-card .check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.bulk-progress { border-radius: 12px; background: var(--surface-2); padding: 12px 14px; display: grid; gap: 8px; }
 
 /* ---- appearance picker ---- */
 .appearance { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
