@@ -105,7 +105,7 @@ MIGRATIONS = {
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
 # Metadata sources that confirm what an item is (as opposed to the model's say-so or a generic page card).
-VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe"}
+VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"}
 
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",

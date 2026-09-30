@@ -621,3 +621,56 @@ def test_unverified_items_are_flagged_and_filterable(settings):
         assert [i["id"] for i in client.get("/api/items", params={"unverified": True}).json()] == [odd]
         client.post(f"/api/items/{odd}/correct", json={"title": "Mystery Box"})
         assert client.get(f"/api/items/{odd}").json()["verified"] is True     # corrected by the user
+
+
+def _png(size):
+    import io as _io
+    buf = _io.BytesIO()
+    Image.new("RGB", size, "teal").save(buf, format="PNG")
+    return buf.getvalue()
+
+
+async def test_article_uses_the_first_real_page_image(settings):
+    import httpx
+    html = ('<html><head><meta property="og:image" content="/missing.png"><link rel="image_src" href="/lead.png">'
+            '<script type="application/ld+json">{"@type":"Article","image":["/lead.png"]}</script></head><body></body></html>')
+    routes = {"https://blog.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://blog.example/lead.png": httpx.Response(200, content=_png((900, 500)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://blog.example/lead.png"
+
+
+async def test_npm_package_gets_facts_and_the_repo_header(settings):
+    import httpx
+    registry = {"dist-tags": {"latest": "1.2.3"}, "description": "Tiny thing", "keywords": ["cli"], "maintainers": [{"name": "ann"}],
+                "time": {"1.2.3": "2026-01-01T00:00:00Z"}, "homepage": "https://github.com/acme/tiny#readme",
+                "repository": {"url": "git+https://github.com/acme/tiny.git"}, "versions": {"1.2.3": {"license": "MIT"}}}
+    routes = {
+        "https://registry.npmjs.org/tiny": httpx.Response(200, json=registry),
+        "https://api.npmjs.org/downloads/point/last-week/tiny": httpx.Response(200, json={"downloads": 12345}),
+        "https://api.github.com/repos/acme/tiny/readme": httpx.Response(200, text="<p align=center><img src=docs/logo.png></p>"),
+        "https://raw.githubusercontent.com/acme/tiny/HEAD/docs/logo.png": httpx.Response(200, content=_png((400, 200)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", title="tiny", canonical_url="https://www.npmjs.com/package/tiny", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    npm = next(e for e in results if e.source == "npm")
+    assert npm.image_url == "https://raw.githubusercontent.com/acme/tiny/HEAD/docs/logo.png"
+    assert npm.metadata["version"] == "1.2.3" and npm.metadata["weekly_downloads"] == 12345 and npm.metadata["license"] == "MIT"
+    assert {"npm", "Repository"} <= {l["label"] for l in npm.links}
+
+
+async def test_github_prefers_the_maintainers_social_preview(settings):
+    import httpx
+    page = '<html><head><meta property="og:image" content="https://repository-images.githubusercontent.com/1/abc"></head></html>'
+    routes = {
+        "https://api.github.com/repos/astral-sh/uv/readme": httpx.Response(200, text="![logo](docs/logo.png)"),
+        "https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO),
+        "https://github.com/astral-sh/uv": httpx.Response(200, text=page, headers={"content-type": "text/html"}),
+        "https://repository-images.githubusercontent.com/1/abc": httpx.Response(200, content=_png((1280, 640)), headers={"content-type": "image/png"}),
+    }
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(analysis(), settings, http)
+    assert e.image_url == "https://repository-images.githubusercontent.com/1/abc"
