@@ -1,6 +1,8 @@
 """HTTP API and web UI."""
 
 import asyncio
+import csv
+import io
 import hmac
 import logging
 import mimetypes
@@ -16,7 +18,7 @@ from urllib.parse import unquote
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -431,6 +433,21 @@ def create_app(
             "month_spent_usd": round(db.month_cost(), 4), "limits": LIMITS,
         }
         return report
+
+    @app.get("/api/usage.csv")
+    def usage_csv(days: int = Query(30, ge=1, le=366)):
+        """Every model call in the period (time, item, model, tokens, cost), for your own spreadsheet."""
+        rows = db.usage_rows(days)
+        out = io.StringIO()
+        cols = ["created_at", "item_id", "title", "purpose", "analyzer", "model", "mode", "input_tokens", "output_tokens",
+                "cache_read_tokens", "cache_write_tokens", "web_searches", "web_fetches", "requests", "duration_ms", "cost_usd", "ok"]
+        writer = csv.DictWriter(out, fieldnames=cols)
+        writer.writeheader()
+        for r in rows:
+            # a spreadsheet would run a title starting with = + - @ as a formula
+            writer.writerow({**r, "title": "'" + r["title"] if str(r.get("title") or "")[:1] in ("=", "+", "-", "@") else r.get("title")})
+        return Response(out.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f'attachment; filename="magpie-usage-{days}d.csv"'})
 
     @app.get("/api/tags")
     def tags():

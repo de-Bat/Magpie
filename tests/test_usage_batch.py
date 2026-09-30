@@ -167,6 +167,13 @@ async def test_unsure_local_answer_is_escalated_through_a_batch(tmp_path):
         assert report["claude_share"] == 1.0
         assert {r["analyzer"] for r in report["by_analyzer"]} == {"claude", "local", "ocr"}
         assert report["config"]["claude_batch"] is True
+        # the extended statistics behind the Usage & cost panel
+        assert report["paid_screenshots"] == 1 and report["by_category"][0]["category"] == "movie"
+        assert report["top_items"][0]["title"] == "Past Lives"
+        assert {r["mode"] for r in report["by_day_mode"]} == {"batch", "local"}
+        csv_text = client.get("/api/usage.csv?days=7")
+        assert csv_text.headers["content-type"].startswith("text/csv")
+        assert csv_text.text.splitlines()[0].startswith("created_at,item_id,title") and "claude" in csv_text.text
 
 
 async def test_failed_batch_request_falls_back_to_realtime(tmp_path):

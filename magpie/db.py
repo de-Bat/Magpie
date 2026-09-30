@@ -307,9 +307,20 @@ class Database:
                       FROM analysis_runs WHERE created_at >= ? GROUP BY day ORDER BY day""")
         escalated = q("""SELECT COUNT(DISTINCT item_id) AS n FROM analysis_runs
                          WHERE created_at >= ? AND mode IN ('realtime', 'batch', 'hosted')""")[0]["n"]
+        by_day_mode = q("""SELECT substr(created_at, 1, 10) AS day, mode, SUM(cost_usd) AS cost_usd
+                           FROM analysis_runs WHERE created_at >= ? GROUP BY day, mode ORDER BY day""")
+        by_category = q("""SELECT CASE WHEN i.id IS NULL THEN 'deleted' ELSE COALESCE(i.category, 'other') END AS category,
+                           SUM(r.cost_usd) AS cost_usd, COUNT(DISTINCT r.item_id) AS items
+                           FROM analysis_runs r LEFT JOIN items i ON i.id = r.item_id
+                           WHERE r.created_at >= ? GROUP BY category ORDER BY cost_usd DESC""")
+        top_items = q("""SELECT r.item_id, i.title, i.category, SUM(r.cost_usd) AS cost_usd, COUNT(*) AS runs
+                         FROM analysis_runs r LEFT JOIN items i ON i.id = r.item_id
+                         WHERE r.created_at >= ? GROUP BY r.item_id HAVING SUM(r.cost_usd) > 0 ORDER BY SUM(r.cost_usd) DESC LIMIT 5""")
         n = totals["screenshots"] or 0
         per = totals["cost_usd"] / n if n else 0.0
         active_days = len(by_day) or 1
+        paid_cost = sum(r["cost_usd"] or 0 for r in by_analyzer if r["mode"] in ("realtime", "batch", "hosted"))
+        saved = (n - escalated) * (paid_cost / escalated) if escalated else 0.0  # what answering locally kept out of the bill
         return {
             "period_days": days,
             "totals": {k: (round(v, 4) if isinstance(v, float) else v) for k, v in totals.items()},
@@ -319,7 +330,21 @@ class Database:
             "projected_30d_usd": round(totals["cost_usd"] / min(days, max(active_days, 1)) * 30, 2) if n else 0.0,
             "by_analyzer": [{k: (round(v, 4) if isinstance(v, float) else v) for k, v in r.items()} for r in by_analyzer],
             "by_day": [{**r, "cost_usd": round(r["cost_usd"], 4)} for r in by_day],
+            "by_day_mode": [{**r, "cost_usd": round(r["cost_usd"] or 0, 5)} for r in by_day_mode],
+            "by_category": [{**r, "cost_usd": round(r["cost_usd"] or 0, 4)} for r in by_category],
+            "top_items": [{**r, "cost_usd": round(r["cost_usd"] or 0, 4)} for r in top_items],
+            "paid_screenshots": escalated,
+            "saved_by_local_usd": round(saved, 2),
         }
+
+    def usage_rows(self, days: int = 30) -> list[dict]:
+        """One row per model call, for the CSV export."""
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="microseconds")
+        rows = self.conn.execute(
+            """SELECT r.created_at, r.item_id, i.title, r.purpose, r.analyzer, r.model, r.mode, r.input_tokens, r.output_tokens,
+                      r.cache_read_tokens, r.cache_write_tokens, r.web_searches, r.web_fetches, r.requests, r.duration_ms, r.cost_usd, r.ok
+               FROM analysis_runs r LEFT JOIN items i ON i.id = r.item_id WHERE r.created_at >= ? ORDER BY r.created_at""", (since,)).fetchall()
+        return [dict(r) for r in rows]
 
     # ---- batch jobs ----------------------------------------------------------
 
