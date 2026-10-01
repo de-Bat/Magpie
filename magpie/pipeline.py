@@ -17,7 +17,7 @@ from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import links, readability
 from .findlink import repair_link
-from .related import clean_related, drop_dead
+from .related import clean_related, drop_dead, same_site, text_related
 from .images import best_image
 from .enrich import fetch_page, link_is_gone
 from .config import Settings
@@ -50,6 +50,22 @@ def titles_match(a: str | None, b: str | None) -> bool:
     norm = lambda s: re.sub(r"[^0-9a-z]", "", s.lower())  # noqa: E731
     a, b = norm(a), norm(b)
     return bool(a) and (a == b or SequenceMatcher(None, a, b).ratio() >= 0.9)
+
+
+SOURCE_NAMES = {"github": "GitHub", "tmdb": "TMDB", "omdb": "OMDb", "tmdb+omdb": "TMDB", "openlibrary": "Open Library",
+                "npm": "npm", "huggingface": "Hugging Face", "schema.org/Recipe": "the recipe page",
+                "opengraph": "the page itself", "opengraph+readability": "the page itself"}
+
+
+def source_confirms(title: str | None, matched: str | None) -> bool:
+    """Does what a source found carry the name the model gave? Also when the model named a repository without its
+    owner ("uv" for astral-sh/uv), or a page title carries the site's name ("Headline | XDA")."""
+    if titles_match(title, matched):
+        return True
+    if matched and "/" in matched and titles_match((title or "").split("/")[-1], matched.split("/")[-1]):
+        return True
+    head = re.split(r"\s[|–—-]\s", matched or "")[0]
+    return bool(head) and head != matched and titles_match(title, head)
 
 
 def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
@@ -104,6 +120,9 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     metadata.pop("image_kind", None)
     if image_kind:
         metadata["image_kind"] = image_kind   # the card shows a logo whole on the themed cover instead of cropping it
+    # links written in the capture itself: the tool's site, its repository or package, a paper
+    written = text_related("\n".join(filter(None, [analysis.get("screenshot_text"), analysis.get("_ocr_text")])))
+    related += [r for r in written if not (r["kind"] == "site" and canonical_url and same_site(r["url"], canonical_url))]
     used = analysis.get("_analyzer") or ["claude"]
     metadata["sources"] = used + sources[1:]
     if analysis.get("_ocr_text"):
@@ -114,10 +133,10 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     # Claude verifies with web search itself; other analyzers get a second opinion from the
     # authoritative source the enrichers matched (GitHub, TMDB, Open Library, the recipe page).
     if "claude" not in used and confidence is not None and confidence < 90:
-        match = next((e for e in enrichments if e.matched_title and titles_match(analysis.get("title"), e.matched_title)), None)
+        match = next((e for e in enrichments if e.matched_title and source_confirms(analysis.get("title"), e.matched_title)), None)
         if match:
             confidence = max(confidence, 85)
-            confidence_reason = f"{confidence_reason or ''} Confirmed by {match.source}.".strip()
+            confidence_reason = f"{confidence_reason or ''} Confirmed by {SOURCE_NAMES.get(match.source, match.source)}.".strip()
 
     alternatives = [
         {k: a.get(k) for k in ("title", "category", "year", "canonical_url", "why")}

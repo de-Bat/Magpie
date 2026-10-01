@@ -1156,3 +1156,101 @@ async def test_only_one_bulk_job_runs_at_a_time():
     await runner._task
     assert runner.snapshot()["running"] is False and runner.snapshot()["done"] == 1
 
+
+
+# ---- finding the repository / article, and what else the capture points to -------------
+
+
+async def test_repo_named_without_owner_is_found_by_search(settings):
+    search = {"items": [
+        {"name": "uv-tools", "full_name": "someone/uv-tools", "stargazers_count": 9000, "owner": {"login": "someone"}},
+        {"name": "uv", "full_name": "fork-person/uv", "stargazers_count": 3, "fork": True, "owner": {"login": "fork-person"}},
+        {"name": "uv", "full_name": "astral-sh/uv", "stargazers_count": 70000, "owner": {"login": "astral-sh"}}]}
+    readme = ("# uv\n[![PyPI](https://img.shields.io/pypi/v/uv.svg)](https://pypi.org/project/uv/)\n"
+              "[Documentation](https://docs.astral.sh/uv) · [Discord](https://discord.gg/astral-sh) · [PyPI](https://pypi.org/project/uv/) "
+              "· [contributing](https://github.com/astral-sh/uv/blob/main/CONTRIBUTING.md) · [random](https://random.example/x)")
+    asked = []
+    def search_handler(request):
+        asked.append(request.url.params["q"])
+        return httpx.Response(200, json=search)
+    routes = {
+        "https://api.github.com/repos/wrong-owner/uv": httpx.Response(404),
+        "https://api.github.com/search/repositories": search_handler,
+        "https://api.github.com/repos/astral-sh/uv/readme": httpx.Response(200, text=readme),
+        "https://api.github.com/repos/astral-sh/uv/releases/latest": httpx.Response(200, json={"tag_name": "0.9.1", "published_at": "2026-09-20T10:00:00Z", "html_url": "https://github.com/astral-sh/uv/releases/tag/0.9.1"}),
+        "https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json={**GITHUB_REPO, "created_at": "2023-10-02T00:00:00Z", "subscribers_count": 120}),
+    }
+    # the model got the name right and the owner wrong
+    a = analysis(title="uv", canonical_url="https://github.com/wrong-owner/uv", details=blank_details(github_full_name="wrong-owner/uv"))
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.canonical_url == "https://github.com/astral-sh/uv" and e.metadata["github_full_name"] == "astral-sh/uv"
+    assert asked[0] == "uv in:name user:wrong-owner" and "found_by" in e.metadata
+    assert e.metadata["latest_release"] == "0.9.1" and e.metadata["released"] == "2026-09-20" and e.metadata["created"] == "2023-10-02"
+    assert e.metadata["watchers"] == 120 and any(l["label"] == "Release 0.9.1" for l in e.links)
+    readme_links = {r["url"]: r for r in e.related if r.get("why") == "linked from the README"}
+    # the homepage (docs.astral.sh/uv) is already a link; badges, the repo's own files and plain sites are left out
+    assert set(readme_links) == {"https://discord.gg/astral-sh", "https://pypi.org/project/uv/"}
+    assert readme_links["https://pypi.org/project/uv/"]["kind"] == "package"
+    # only a name, no owner at all ("uv: an extremely fast package manager")
+    asked.clear()
+    a = analysis(title="uv: an extremely fast Python package manager", canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.metadata["github_full_name"] == "astral-sh/uv" and asked == ["uv in:name"]
+
+
+async def test_repo_address_written_in_the_screenshot_is_used(settings):
+    from magpie.enrich import github_full_name
+    a = analysis(title="A great tool", canonical_url=None, details=blank_details(), screenshot_text="Try it: github.com/astral-sh/uv.")
+    assert github_full_name(a) == "astral-sh/uv"
+
+
+def test_links_written_in_the_capture_become_related():
+    from magpie.pipeline import merge
+    a = analysis(category="article", title="Why I switched to uv", canonical_url="https://www.xda-developers.com/uv/",
+                 details=blank_details(), screenshot_text="xda-developers.com\nWhy I switched to uv\ngithub.com/astral-sh/uv · docs.astral.sh/uv · @dana on x.com")
+    related = merge(a, [])["related"]
+    assert {r["url"] for r in related} == {"https://github.com/astral-sh/uv", "https://docs.astral.sh/uv"}
+    assert all(r["why"] == "mentioned in the capture" for r in related)
+
+
+async def test_article_search_starts_at_the_site_named_in_the_capture(settings):
+    from magpie.findlink import repair_link
+    asked = []
+    def ddg(request):
+        asked.append(request.url.params["q"])
+        return _ddg("https://www.xda-developers.com/salvaged-gpus-beat-new-card/")
+    routes = {"https://html.duckduckgo.com/html/": ddg,
+              "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": _article_page(TITLE)}
+    a = analysis(category="article", title=TITLE, canonical_url=None, details=blank_details(),
+                 screenshot_text=f"XDA · xda-developers.com\n{TITLE}\nfacebook.com/xda")
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    assert asked == [f'"{TITLE}" site:xda-developers.com']
+
+
+def test_models_without_web_search_get_their_own_instructions():
+    from magpie.analyzers import LOCAL_SYSTEM_PROMPT
+    assert "web search" not in LOCAL_SYSTEM_PROMPT.lower() and "search its headline" not in LOCAL_SYSTEM_PROMPT
+    assert "github_full_name" in LOCAL_SYSTEM_PROMPT and "details.publisher" in LOCAL_SYSTEM_PROMPT
+    assert "never guess an address" in LOCAL_SYSTEM_PROMPT and "save_analysis once" not in LOCAL_SYSTEM_PROMPT
+
+
+def test_lookups_confirm_answers_from_any_provider():
+    from magpie.enrich import Enrichment
+    from magpie.pipeline import merge
+    # a hosted model (no web search) named the repository without its owner; GitHub's search found it
+    a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["ocr", "gemini:gemini-2.5-flash"])
+    out = merge(a, [Enrichment(source="github", matched_title="astral-sh/uv", canonical_url="https://github.com/astral-sh/uv")])
+    assert out["confidence"] == 85 and "Confirmed by GitHub" in out["confidence_reason"]
+    assert out["canonical_url"] == "https://github.com/astral-sh/uv"
+    # a local model's article headline, confirmed by the page found for it ("Headline | Site")
+    a = analysis(category="article", title=TITLE, confidence=60, details=blank_details(), _analyzer=["local:qwen"])
+    out = merge(a, [Enrichment(source="opengraph+readability", matched_title=f"{TITLE} | XDA")])
+    assert out["confidence"] == 85 and "Confirmed by the page itself" in out["confidence_reason"]
+    # a different page doesn't confirm anything; Claude's own answer isn't re-scored
+    assert merge(a, [Enrichment(source="opengraph", matched_title="Something else entirely")])["confidence"] == 60
+    a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["claude"])
+    assert merge(a, [Enrichment(source="github", matched_title="astral-sh/uv")])["confidence"] == 70

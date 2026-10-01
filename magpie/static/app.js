@@ -53,7 +53,7 @@ const tabOf = (item) => TABS.find((t) => t.cats?.includes(item.category))?.id ||
 const FACT_ORDER = {
   movie: ["release_date", "runtime", "rated", "directors", "cast", "genres", "network_or_studio", "awards", "where_to_watch", "tagline"],
   tv_show: ["first_air_date", "status", "seasons", "episodes", "creators", "cast", "genres", "network_or_studio", "where_to_watch", "tagline", "rated", "awards"],
-  github_repo: ["programming_language", "license", "last_push", "open_issues", "forks", "topics", "homepage", "archived"],
+  github_repo: ["programming_language", "license", "latest_release", "released", "last_push", "created", "open_issues", "forks", "watchers", "topics", "homepage", "archived"],
   recipe: ["total_time", "prep_time", "cook_time", "servings", "cuisine", "calories", "author"],
   book: ["author", "authors", "first_publish_year", "pages", "publisher", "isbn", "subjects"],
   article: ["author", "published", "reading_time", "site"],
@@ -66,7 +66,7 @@ const HIDDEN_META = new Set([
   "article_text", "excerpt", "word_count", "page_description",
   "screenshot_text", "sources", "confidence", "ingredients", "instructions", "imdb_rating", "rotten_tomatoes",
   "metacritic", "tmdb_rating", "stars", "rating", "rating_count", "description", "post_url", "imdb_votes", "tmdb_id",
-  "page_description", "page_title", "github_full_name", "year", "ocr_text",
+  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "found_by",
 ]);
 
 const state = {
@@ -1956,7 +1956,7 @@ function renderDetail(item) {
         </div>
       </section>
       <details class="provenance"><summary>Where this came from</summary>
-        <p class="meta-line">${m.sources ? `Identified via ${esc(m.sources.join(" → "))}.` : "Source trail not recorded."}${
+        <p class="meta-line">${m.sources ? `Identified via ${esc(m.sources.join(" → "))}.` : "Source trail not recorded."}${m.found_by ? ` Repository found by ${esc(m.found_by.replace(/^GitHub search/, "a GitHub search"))}.` : ""}${
           item.usage?.runs ? ` Cost ${esc(formatUsd(item.usage.cost_usd))}${item.usage.web_searches ? `, ${item.usage.web_searches} web search${item.usage.web_searches > 1 ? "es" : ""}` : ""}.` : ""}</p>
         ${m.screenshot_text ? `<pre>${esc(m.screenshot_text)}</pre>` : ""}
       </details>

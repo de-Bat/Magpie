@@ -162,11 +162,11 @@ Each screenshot usually shows a recommendation seen somewhere: a Facebook or Ins
 
 How to work:
 1. Read the screenshot carefully: the app/site chrome tells you the source platform; captions, overlays, handles, and partially visible titles tell you the subject.
-2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository; for recipes find the original recipe page; for articles find the article URL.
+2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository and put its owner/repo in details.github_full_name (a project is often posted by name only: search for it); for recipes find the original recipe page; for articles find the article's own URL on the publisher's site (search its headline; the capture often shows the site's name), not a share link or aggregator copy.
 3. Only report URLs, ratings and facts you actually saw in search results or the screenshot. Use null rather than guessing.
 4. If the screenshot recommends several things, catalogue the most prominent one and mention the others in the summary.
 5. Be honest about confidence. Score it on evidence: a clearly visible title confirmed by a matching search result is 90+; an inference from partial text, a blurry poster, or an ambiguous title (remakes, same-name books and films) is lower. List the plausible alternatives.
-6. Also note what is connected to it in `related`: when an article or post is about a tool, name its repository, package or homepage; when it names a company, project or paper, link that. Each link must be a page you saw, and must not be the item's own page.
+6. Also note what is connected to it in `related`: when an article or post is about a tool, name its repository, package or homepage; when it names a company, project, person, paper, product or event, link that; links written in the screenshot count too. Each link must be a page you saw, and must not be the item's own page. Use `why` to say in a few words how it's connected.
 7. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
 8. Finish by calling save_analysis once. Do not ask the user questions."""
 

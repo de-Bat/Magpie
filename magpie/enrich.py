@@ -19,7 +19,7 @@ import httpx
 from . import readability
 from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
-from .related import outbound_related
+from .related import outbound_related, readme_related, same_site, text_related
 from .images import (best_image, manifest_icons, oembed_thumbnail, origin_icons, package_logos, page_image_candidates,
                      page_pictures, readme_images, site_logos, verify_image, youtube_thumbnails)
 
@@ -67,35 +67,100 @@ def github_full_name(analysis: dict) -> str | None:
             return f"{m.group(1)}/{m.group(2).removesuffix('.git')}"
         if re.fullmatch(r"[\w.-]+/[\w.-]+", c.strip()):
             return c.strip()
+    # a github.com address written in the screenshot itself
+    for text in (analysis.get("screenshot_text"), analysis.get("_ocr_text")):
+        m = GITHUB_RE.search(text or "")
+        if m and m.group(1).lower() not in ("features", "topics", "sponsors", "orgs", "login", "about", "marketplace"):
+            return f"{m.group(1)}/{m.group(2).removesuffix('.git').rstrip('.,;:)')}"
+    return None
+
+
+def _repo_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+
+def _repo_names(analysis: dict, guess: str | None) -> list[str]:
+    """Names to search GitHub for: the repo part of a wrong owner/repo, and the title (without an owner prefix
+    or a tagline after a colon or dash)."""
+    out: list[str] = []
+    title = (analysis.get("title") or "").strip()
+    for c in (guess.split("/")[-1] if guess else None, title.split("/")[-1] if "/" in title else None,
+              re.split(r"\s[-–—:|]\s|:\s", title)[0] if title else None):
+        c = (c or "").strip().strip(".")
+        if 2 <= len(c) <= 100 and len(c.split()) <= 4 and c not in out:
+            out.append(c)
+    return out
+
+
+async def find_repo(analysis: dict, guess: str | None, headers: dict, http: httpx.AsyncClient) -> str | None:
+    """The repository a capture is about when its owner/repo isn't known or doesn't exist (a model often gets the
+    name right and the owner wrong): GitHub's repository search by name. Only an exact name match is taken, the
+    named owner's first, else the most starred."""
+    owner = guess.split("/")[0] if guess and "/" in guess else None
+    for name in _repo_names(analysis, guess):
+        wanted = _repo_key(name)
+        queries = ([f"{name} in:name user:{owner}"] if owner else []) + [f"{name} in:name"]
+        for q in queries:
+            try:
+                r = await http.get("https://api.github.com/search/repositories", headers=headers,
+                                   params={"q": q, "per_page": 10}, timeout=10)
+                items = r.json().get("items") or [] if r.status_code == 200 else []
+            except (httpx.HTTPError, ValueError, AttributeError):
+                items = []
+            exact = [i for i in items if isinstance(i, dict) and _repo_key(i.get("name")) == wanted]
+            if exact:
+                exact.sort(key=lambda i: ((i.get("owner") or {}).get("login", "").lower() == (owner or "").lower(),
+                                          not i.get("fork"), i.get("stargazers_count") or 0), reverse=True)
+                return exact[0]["full_name"]
     return None
 
 
 async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
-    full_name = github_full_name(analysis)
-    if not full_name:
+    guess = github_full_name(analysis)
+    if not guess and analysis.get("category") != "github_repo":
         return None
     headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     if settings.github_token:
         headers["Authorization"] = f"Bearer {settings.github_token}"
-    r = await http.get(f"https://api.github.com/repos/{full_name}", headers=headers)
-    if r.status_code != 200:
-        log.info("GitHub lookup for %s failed: %s", full_name, r.status_code)
+    r = await http.get(f"https://api.github.com/repos/{guess}", headers=headers) if guess else None
+    found_by_search = False
+    if r is None or r.status_code == 404:
+        found = await find_repo(analysis, guess, headers, http)
+        if found:
+            r, found_by_search = await http.get(f"https://api.github.com/repos/{found}", headers=headers), True
+    if r is None or r.status_code != 200:
+        log.info("GitHub lookup for %s failed: %s", guess or analysis.get("title"), r.status_code if r is not None else "no repo name")
         return None
     repo = r.json()
-    hero = await github_image(full_name, headers, http)
+    full_name = repo["full_name"]
+    try:
+        rr = await http.get(f"https://api.github.com/repos/{full_name}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"})
+        readme = rr.text if rr.status_code == 200 else ""
+    except httpx.HTTPError:
+        readme = ""
+    hero = await github_image(full_name, headers, http, readme)
+    release = await _latest_release(full_name, headers, http)
     meta = {
-        "github_full_name": repo["full_name"],
+        "github_full_name": full_name,
         "stars": repo.get("stargazers_count"),
         "forks": repo.get("forks_count"),
+        "watchers": repo.get("subscribers_count"),
         "open_issues": repo.get("open_issues_count"),
         "programming_language": repo.get("language"),
         "topics": repo.get("topics") or [],
         "license": (repo.get("license") or {}).get("spdx_id"),
+        "latest_release": (release or {}).get("tag_name"),
+        "released": ((release or {}).get("published_at") or "")[:10] or None,
+        "created": (repo.get("created_at") or "")[:10] or None,
         "last_push": repo.get("pushed_at"),
         "archived": repo.get("archived"),
         "homepage": repo.get("homepage") or None,
     }
+    if found_by_search:
+        meta["found_by"] = "GitHub search" + (f" (the capture named {guess})" if guess else "")
     links = [{"label": "Homepage", "url": repo["homepage"]}] if repo.get("homepage") else []
+    if release and release.get("html_url"):
+        links.append({"label": f"Release {release.get('tag_name') or ''}".strip(), "url": release["html_url"]})
     tags = list((repo.get("topics") or [])[:6])
     if repo.get("language"):
         tags.append(repo["language"])
@@ -104,6 +169,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         related.append({"kind": "company", "label": f"{repo['owner']['login']} on GitHub", "url": repo["owner"]["html_url"]})
     if isinstance(repo.get("parent"), dict) and repo["parent"].get("html_url"):
         related.append({"kind": "repo", "label": f"{repo['parent']['full_name']} (forked from)", "url": repo["parent"]["html_url"]})
+    related += readme_related(readme, full_name, exclude=[repo.get("homepage")])   # its package, docs, paper, demo, community
     return Enrichment(
         metadata=meta, related=related,
         canonical_url=repo["html_url"],
@@ -112,8 +178,16 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         links=links,
         tags=tags,
         source="github",
-        matched_title=repo["full_name"],
+        matched_title=full_name,
     )
+
+
+async def _latest_release(full_name: str, headers: dict, http: httpx.AsyncClient) -> dict | None:
+    try:
+        r = await http.get(f"https://api.github.com/repos/{full_name}/releases/latest", headers=headers, timeout=8)
+        return r.json() if r.status_code == 200 and isinstance(r.json(), dict) else None
+    except (httpx.HTTPError, ValueError):
+        return None
 
 
 async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient, readme: str | None = None) -> str:
@@ -849,6 +923,7 @@ def opengraph_from_page(page: Page) -> Enrichment:
         canonical_url=canonical_link(page),
         image_url=_absolute(page.url, m.get("og:image") or m.get("twitter:image")),
         source="opengraph",
+        matched_title=meta["page_title"],   # the page's own headline: confirms an answer from a model without web search
     )
 
 
@@ -878,6 +953,9 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
     e = with_readability(opengraph_from_page(page), page)
     e.image_url, e.image_kind = await page_picture(http, page, e.image_url)
     e.related = outbound_related(page)   # the repository, app, paper or company the article is about
+    # ... and the ones it only names in its text ("github.com/owner/repo", "example.dev")
+    e.related += [r for r in text_related(e.metadata.get("article_text") or "", limit=4)
+                  if not (r["kind"] == "site" and same_site(r["url"], page.url))]
     return e
 
 
