@@ -424,6 +424,17 @@ class Settings:
             return "nim"
         return "openai"
 
+    def paid_models(self) -> list[tuple[str, str]]:
+        """The (provider, model) pairs the configured analyzer calls that have limits: Claude and hosted providers."""
+        mode, hosted = self.resolved_analyzer(), self.hosted_llm in HOSTED_LLMS
+        if mode == "claude":
+            return [("claude", self.model)]
+        if mode == "local":
+            return [(self.hosted_llm, self.llm_model)] if hosted else []
+        if mode == "hybrid":
+            return [(self.hosted_llm, self.llm_model)] if hosted else [("claude", self.model)]
+        return []
+
     def resolved_analyzer(self) -> str:
         """`auto` picks the best configured option: Claude, else the local LLM, else OCR rules."""
         if self.analyzer != "auto":

@@ -103,6 +103,7 @@ MIGRATIONS = {
     "source_url": "TEXT",
     "confirmed": "INTEGER NOT NULL DEFAULT 0",   # the user marked this identification as correct
     "related": "TEXT NOT NULL DEFAULT '[]'",     # worth-a-look links: [{kind, label, url, why?}]
+    "retry_at": "TEXT",                          # failed because a model hit its limit: retried automatically then
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -113,7 +114,7 @@ VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "sche
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related", "retry_at",
 }
 
 
@@ -185,6 +186,8 @@ class Database:
 
     def update_item(self, item_id: str, **fields: Any) -> dict | None:
         fields = {k: v for k, v in fields.items() if k in EDITABLE_COLUMNS}
+        if "status" in fields and "retry_at" not in fields:
+            fields["retry_at"] = None   # any new outcome replaces a pending automatic retry
         if fields:
             for col in JSON_COLUMNS:
                 if col in fields and not isinstance(fields[col], str) and fields[col] is not None:
@@ -195,6 +198,22 @@ class Database:
                 self.conn.execute(f"UPDATE items SET {assignments} WHERE id = ?", (*fields.values(), item_id))
             self._reindex(item_id)
         return self.get_item(item_id)
+
+    def due_retries(self, limit: int = 5) -> list[str]:
+        """Items that failed because a model hit its limit, whose retry time has come."""
+        rows = self.conn.execute(
+            "SELECT id FROM items WHERE status = 'error' AND retry_at IS NOT NULL AND retry_at <= ? ORDER BY retry_at LIMIT ?",
+            (now(), limit)).fetchall()
+        return [r["id"] for r in rows]
+
+    def waiting_for_limits(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM items WHERE status = 'error' AND retry_at IS NOT NULL").fetchone()[0]
+
+    def requests_since(self, analyzer: str, model: str, since: str) -> int:
+        """Requests made to one provider's model since a time (for providers that don't report their limits)."""
+        row = self.conn.execute("SELECT COALESCE(SUM(requests), 0) AS n FROM analysis_runs "
+                                "WHERE analyzer = ? AND model = ? AND created_at >= ?", (analyzer, model, since)).fetchone()
+        return int(row["n"])
 
     def get_item(self, item_id: str) -> dict | None:
         row = self.conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()

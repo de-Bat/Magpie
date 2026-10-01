@@ -433,6 +433,7 @@ async function sync() {
     } while (rerun);
     setSyncState("idle");
     refreshCostPill();
+    refreshLimits();
   } catch (e) {
     if (e instanceof HttpError && e.status === 401) setSyncState("auth");
     else if (e instanceof HttpError) setSyncState("error", e.message);
@@ -1058,7 +1059,19 @@ function applyTheme(theme) {
     const scheme = (m.media.match(/(light|dark)/) || [])[1] || "light";
     m.content = THEME_COLORS[theme === "light" || theme === "dark" ? theme : scheme];
   });
+  installIcons(theme);
 }
+
+// The icon an installed app gets is read when it is added to the home screen, from the manifest and the touch
+// icon, which can't adapt to the colour scheme by themselves: point them at the dark set when the app is dark.
+const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)");
+function installIcons(theme = getTheme()) {
+  const dark = theme === "dark" || (theme !== "light" && !!prefersDark?.matches);
+  const set = (selector, href) => { const el = document.querySelector(selector); if (el && el.getAttribute("href") !== href) el.setAttribute("href", href); };
+  set('link[rel="manifest"]', dark ? "/static/manifest-dark.webmanifest" : "/static/manifest.webmanifest");
+  set('link[rel="apple-touch-icon"]', dark ? "/static/icons/apple-touch-icon-dark.png" : "/static/icons/apple-touch-icon.png");
+}
+prefersDark?.addEventListener?.("change", () => installIcons());
 
 function setTheme(theme) {
   try {
@@ -1408,11 +1421,101 @@ function formatUsd(v) {
   return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 
+// ---- model limits --------------------------------------------------------------
+// What each provider/model in use has left, and a model that hit its limit with when it's back.
+
+const LIMIT_KINDS = [["requests", "Requests"], ["requests_minute", "Requests"], ["tokens", "Tokens"], ["input_tokens", "Input tokens"], ["output_tokens", "Output tokens"]];
+const REASON_TEXT = { "rate limit": "rate limit", "daily quota": "daily quota", credit: "credit or billing quota" };
+
+function clockTime(iso) {
+  const d = new Date(iso), today = new Date().toDateString() === d.toDateString();
+  return d.toLocaleString([], today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+// "in 40s", "in 12 min", "at 14:05", "at Thu 09:00"
+function untilText(iso) {
+  const secs = (Date.parse(iso) - Date.now()) / 1000;
+  if (!(secs > 0)) return "now";
+  if (secs < 90) return `in ${Math.ceil(secs)}s`;
+  if (secs < 3600) return `in ${Math.round(secs / 60)} min`;
+  return `at ${clockTime(iso)}`;
+}
+
+const modelLabel = (r) => `${PROVIDER_NAMES[r.provider] || r.provider}${r.model ? ` · ${r.model.replace(/^models\//, "")}` : ""}`;
+const isPaused = (r) => r.blocked_until && Date.parse(r.blocked_until) > Date.now();
+
+function lowestBucket(r) {
+  let best = null;
+  for (const [k, label] of LIMIT_KINDS) {
+    const b = r[k];
+    if (b && b.limit && b.remaining != null && (!best || b.remaining / b.limit < best.b.remaining / best.b.limit)) best = { k, label, b };
+  }
+  return best;
+}
+
+function bucketPer(k, b) { return b.per ? ` per ${b.per}` : k === "requests_minute" ? " per minute" : ""; }
+
+function limitRowHtml(r) {
+  const paused = isPaused(r);
+  const status = paused ? `<span class="pill bad" title="Paused until ${esc(clockTime(r.blocked_until))}">Limit reached · back ${esc(untilText(r.blocked_until))}</span>`
+    : r.low ? `<span class="pill warn">Running low</span>` : `<span class="pill ok">OK</span>`;
+  const bars = LIMIT_KINDS.filter(([k]) => r[k] && r[k].remaining != null).map(([k, label]) => {
+    const b = r[k], share = b.limit ? Math.max(0, Math.min(1, b.remaining / b.limit)) : null;
+    const n = (v) => Number(v).toLocaleString();
+    return `<div class="limit-bucket"><span>${esc(label + bucketPer(k, b))}</span>
+      ${share != null ? `<span class="bar2 ${share < 0.1 ? "low" : ""}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : "<span></span>"}
+      <b>${esc(n(b.remaining))}${b.limit ? ` of ${esc(n(b.limit))}` : ""} left</b>
+      <small>${b.reset_at ? `resets ${esc(untilText(b.reset_at))}` : ""}</small></div>`;
+  }).join("");
+  const credit = r.credit && r.credit.remaining != null ? `<div class="meta-line">$${Number(r.credit.remaining).toFixed(2)} credit left${r.credit.limit ? ` of $${Number(r.credit.limit).toFixed(2)}` : ""}</div>` : "";
+  const note = paused ? `<div class="meta-line">Hit its ${esc(REASON_TEXT[r.blocked_reason] || r.blocked_reason)}. Magpie doesn't call it until ${esc(clockTime(r.blocked_until))}; screenshots saved meanwhile are retried automatically then.</div>`
+    : r.estimated ? `<div class="meta-line">Estimated from the provider's published free-tier limits and the requests Magpie made. On a paid tier? Set yours with MAGPIE_RATE_LIMITS.</div>` : "";
+  return `<div class="limit-row ${paused ? "paused" : r.low ? "low" : ""}"><div class="limit-head"><b>${esc(modelLabel(r))}</b>${r.current ? ' <span class="pill">in use</span>' : ""} ${status}</div>
+    ${bars || (credit ? "" : `<div class="meta-line">Nothing reported yet: it appears after the next analysis or a key test.</div>`)}${credit}${note}</div>`;
+}
+
 function limitsPanel(c) {
-  const rows = Object.entries(c.limits || {}).map(([id, l]) => `<div><span>${esc(PROVIDER_NAMES[id] || id)}</span><b>${esc(limitsText(l) || "—")}</b></div>`).join("");
-  return `<h3>What's left</h3>${rows ? `<div class="funnel">${rows}</div>`
+  const rows = Array.isArray(c.limits) ? c.limits : [];
+  return `<h3>What's left</h3>${rows.length ? `<div class="limit-list">${rows.map(limitRowHtml).join("")}</div>`
     : `<p class="meta-line">Providers report their remaining rate limits (and, for OpenRouter, credit) with each answer. Nothing seen yet: it appears after the next analysis or a key test. Billing balances aren't available from any provider's API.</p>`}`;
 }
+
+// The header warning: a model in use that hit its limit (and when it's back), or is about to.
+function renderLimitPill() {
+  const b = $("#limit-pill");
+  if (!b) return;
+  const rows = (state.limits?.models || []).filter((r) => r.current);
+  const paused = rows.find(isPaused);
+  const low = !paused && rows.find((r) => r.low);
+  if (!paused && !low) { b.hidden = true; return; }
+  const waiting = state.limits?.waiting || 0;
+  if (paused) {
+    b.className = "pill-btn limit-pill paused";
+    b.innerHTML = `<span aria-hidden="true">⏳</span><span class="lp-text">${esc(PROVIDER_NAMES[paused.provider] || paused.provider)}<span class="lp-mid"> limit · back</span> ${esc(untilText(paused.blocked_until))}</span>`;
+    b.title = `${modelLabel(paused)} reached its ${REASON_TEXT[paused.blocked_reason] || paused.blocked_reason}. Available again ${untilText(paused.blocked_until)} (${clockTime(paused.blocked_until)}).`
+      + (waiting ? ` ${waiting} item${waiting > 1 ? "s" : ""} will be retried automatically then.` : "") + " Click for details.";
+  } else {
+    const lb = lowestBucket(low);
+    b.className = "pill-btn limit-pill low";
+    b.innerHTML = `<span aria-hidden="true">⚠</span><span class="lp-text">${esc(PROVIDER_NAMES[low.provider] || low.provider)}: ${esc(Number(lb.b.remaining).toLocaleString())} ${esc(lb.label.toLowerCase())} left</span>`;
+    b.title = `${modelLabel(low)} is close to its limit: ${lb.b.remaining} of ${lb.b.limit} ${lb.label.toLowerCase()}${bucketPer(lb.k, lb.b)} left${lb.b.reset_at ? `, resets ${untilText(lb.b.reset_at)}` : ""}. Click for details.`;
+  }
+  b.hidden = false;
+}
+
+let limitsAt = 0;
+async function refreshLimits(force = false) {
+  if (!force && Date.now() - limitsAt < 30000) return;
+  limitsAt = Date.now();
+  try { state.limits = await api("/api/limits", { timeout: 8000 }); } catch { return; }   // older server, or offline
+  renderLimitPill();
+}
+// Keep the countdown current, and look again once a pause should be over.
+setInterval(() => {
+  renderLimitPill();
+  const due = (state.limits?.models || []).some((r) => r.blocked_until && Date.parse(r.blocked_until) <= Date.now());
+  if (due) refreshLimits(true);
+}, 15000);
 
 const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI", gemini: "Gemini", openrouter: "OpenRouter", groq: "Groq" };
 const providerName = (c) => PROVIDER_NAMES[c.provider] || "Claude";
@@ -1522,6 +1625,7 @@ async function showUsage(days = 30) {
 function cardTitle(item) {
   if (item.title) return item.title;
   if (item.batch_pending) return "Queued for analysis (batch)";
+  if (item.status === "error" && item.retry_at) return "Waiting for the AI model's limit";
   return { queued: "Waiting to upload", processing: "Analyzing screenshot…", error: "Couldn't identify — open to retry" }[item.status] || "Untitled";
 }
 
@@ -1591,10 +1695,11 @@ function coverHtml(item, { chip = true } = {}) {
   const logo = !!pic && item.metadata?.image_kind === "logo";
   const wide = !!pic && !logo && WIDE_CATEGORIES.has(item.category);
   const busy = ["queued", "processing"].includes(item.status) || item.batch_pending || item.pending_upload;
-  const flag = item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
+  const flag = item.status === "error" && item.retry_at ? `<span class="flag warn" title="The AI model hit its limit; retried automatically ${esc(untilText(item.retry_at))}">⏳</span>`
+    : item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
-  const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
+  const label = item.status === "error" ? (item.retry_at ? "Waiting" : "Failed") : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
   return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
     `${typeIcon(themeOf(item.category), "glyph")}${coverTitleHtml(item)}`}${
@@ -1604,6 +1709,7 @@ function coverHtml(item, { chip = true } = {}) {
 }
 
 function cardMeta(item) {
+  if (item.status === "error" && item.retry_at) return `Waiting for limit · retry ${untilText(item.retry_at)}`;
   if (item.status !== "ready") return item.status === "error" ? "Open to retry" : item.pending_upload ? "Saved on this device" : "Working on it…";
   return [typeName(item.category), ...cardFacts(item).slice(0, 2)].join(" · ");
 }
@@ -1697,6 +1803,7 @@ function scoresHtml(m) {
 }
 
 function statusHtml(item) {
+  if (item.status === "error" && item.retry_at) return `<div class="error-box waiting">⏳ ${esc(item.error)} Next try ${esc(untilText(item.retry_at))}.</div>`;
   if (item.status === "error") return `<div class="error-box">Analysis failed: ${esc(item.error)}</div>`;
   if (item.pending_upload) return `<div class="meta-line">⏳ Saved on this device. It will be ${item.kind === "url" ? "looked up" : "uploaded and identified"} when the server is reachable.</div>`;
   if (item.batch_pending) return `<div class="meta-line">⏳ Queued for Claude batch processing (half price). Usually done within minutes to an hour, at most 24 h.</div>`;
@@ -2100,6 +2207,7 @@ async function boot() {
   if (new URLSearchParams(location.search).has("shared")) history.replaceState(null, "", "/");
   requestSync();
   refreshCostPill(true);
+  refreshLimits(true);
 }
 
 boot().catch((e) => { console.error(e); toast(`Couldn't open the offline library: ${e.message}`); });

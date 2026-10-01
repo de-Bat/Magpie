@@ -19,10 +19,11 @@ from typing import Any
 
 import httpx
 
-from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, ScreenshotAnalyzer, correction_prompt, prepare_image
+from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, RateLimited, ScreenshotAnalyzer, correction_prompt, prepare_image
 from .config import HOSTED_LLMS, Settings
 from .related import clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
+from . import limits
 from .usage import Run, local_cost, record_limits, token_cost
 
 log = logging.getLogger(__name__)
@@ -210,7 +211,8 @@ class LocalLLMAnalyzer:
             result = normalize(parse_json(text))
         except AnalysisError as e:
             run.ok = False
-            e.runs = [self._finish_run(run, started, {})]
+            # paused before anything was sent: no request to account for
+            e.runs = [] if getattr(e, "unsent", False) else [self._finish_run(run, started, {})]
             raise
         result["_runs"] = [self._finish_run(run, started, usage)]
         return result
@@ -257,14 +259,29 @@ class LocalLLMAnalyzer:
 
     async def _post(self, req: dict) -> httpx.Response:
         """POST with retries on rate limits and temporary unavailability (the hosted NVIDIA API
-        allows ~40 requests/minute; a self-hosted NIM answers 503 while the model loads)."""
+        allows ~40 requests/minute; a self-hosted NIM answers 503 while the model loads). A hosted model that
+        hit its limit is paused: short waits are waited out, longer ones fail fast with the time it's back."""
         for attempt in range(self.MAX_RETRIES + 1):
+            if self.hosted:
+                hit = limits.blocked(self.name, self.model)
+                if hit and limits.wait_seconds(hit[0]) > limits.WAIT_AT_MOST:
+                    e = RateLimited(self.name, self.model, hit[0], hit[1])
+                    e.unsent = attempt == 0
+                    raise e
+                if hit:
+                    await self._sleep(limits.wait_seconds(hit[0]))
             try:
                 r = await self.http.post(self.url, json=req, headers=self.headers, timeout=self.timeout)
             except httpx.HTTPError as e:
                 raise AnalysisError(f"Can't reach the local LLM at {self.url}: {e!r}") from e
             if self.hosted:
-                record_limits(self.name, r.headers)
+                record_limits(self.name, r.headers, model=self.model, status=r.status_code)
+                if r.status_code in (402, 429):
+                    entry = limits.mark_limited(self.name, self.model, r.headers, r.text, r.status_code)
+                    until = limits._parse_iso(entry["blocked_until"])
+                    if entry["blocked_reason"] == "credit" or limits.wait_seconds(until) > limits.WAIT_AT_MOST or attempt == self.MAX_RETRIES:
+                        raise RateLimited(self.name, self.model, until, entry["blocked_reason"])
+                    continue   # the pause is short: the check above waits it out
             if r.status_code not in self.RETRY_STATUSES or attempt == self.MAX_RETRIES:
                 return r
             try:
@@ -434,10 +451,18 @@ class AnalyzerRouter:
                 if result is not None and self.over_budget():
                     log.info("Monthly budget reached: keeping the local answer")  # nothing paid is called
                 else:
+                    local = result
                     if result is not None:
                         context["runs"] += result.pop("_runs", [])
                         context["local_result"] = {k: v for k, v in result.items() if not k.startswith("_")}
-                    result = await fallback_step()
+                    try:
+                        result = await fallback_step()
+                    except RateLimited as e:
+                        if local is None:
+                            raise
+                        log.info("%s; keeping the local answer", e)   # a less sure answer beats none
+                        context["runs"] = e.runs
+                        result = local
         return self.finish(result, context)
 
     async def finish_batch(self, params: dict, message: Any, context: dict) -> dict:

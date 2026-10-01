@@ -145,3 +145,15 @@ After some real use, compare `by_analyzer[claude].input_tokens / runs` with the 
 
 - **Much higher than ~60k:** Claude is searching and fetching more than assumed. Lower `MAGPIE_FETCH_MAX_TOKENS`, or check whether one category (obscure recipes, say) drives it.
 - **`claude_share` above ~30% in hybrid mode:** the local model is often unsure. Try a larger local model (see [MODELS.md](MODELS.md)), or lower `MAGPIE_ESCALATE_BELOW` if its answers turn out right anyway (check how often you use **Fix it**).
+
+## Rate limits and quotas
+
+Every provider limits how much you can send, and they report it differently. Magpie tracks it **per provider and model**:
+
+- **Claude**: the `anthropic-ratelimit-*` headers (requests, tokens, input and output tokens) with their reset times.
+- **OpenAI, Groq, OpenRouter**: the `x-ratelimit-*` headers. Groq's request limit is per day and its token limit per minute. OpenRouter also reports the key's credit.
+- **Gemini** reports nothing, so Magpie estimates what's left from Google's published free-tier limits (requests per minute and per day; the day resets at midnight Pacific) and the requests it made. On a paid tier set your own with `MAGPIE_RATE_LIMITS`.
+
+When a model hits a limit (HTTP 429, Gemini's `RESOURCE_EXHAUSTED`, or OpenAI's `insufficient_quota`), Magpie pauses that model until the time the provider gives: `retry-after`, Gemini's `retryDelay`, the reset of the exhausted limit, or the next quota day. A pause of a few seconds is waited out. A longer one fails fast without calling the provider, and the screenshot is **retried automatically** when the model is available again. Out of credit doesn't reset by itself, so Magpie tries again every 15 minutes. In hybrid mode, a paused fallback model means the local model's answer is kept instead.
+
+The web app shows a red **⏳ Gemini limit · back in 25 min** pill in the header while a model in use is paused, and an amber one when less than 10% of a limit is left. **Usage & cost → What's left** shows each model's limits, with bars and reset times.
