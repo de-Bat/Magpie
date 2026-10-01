@@ -154,7 +154,7 @@ def retry_delay(headers=None, body: str = "") -> float | None:
     return float(m.group(1)) if m else None
 
 
-def mark_limited(provider: str, model: str | None, headers=None, body: str = "", status: int = 429) -> dict:
+def mark_limited(provider: str, model: str | None, headers=None, body: str = "", status: int = 429, default_delay: float = 60) -> dict:
     """The provider refused because a limit is reached: pause this model until it's available again."""
     now = _now()
     text = (body or "").lower()
@@ -173,7 +173,7 @@ def mark_limited(provider: str, model: str | None, headers=None, body: str = "",
         elif daily:
             until = _day_start(provider, now)[1]
         else:
-            until = now + timedelta(seconds=60)
+            until = now + timedelta(seconds=default_delay)   # the provider didn't say: the caller's backoff
         reason = "daily quota" if daily or (until - now) > timedelta(hours=1) else "rate limit"
     entry.update(blocked_until=_iso(until), blocked_reason=reason, updated=_iso(now))
     LIMITS[_key(provider, entry.get("model"))] = entry
@@ -220,12 +220,7 @@ def blocked(provider: str, model: str | None) -> tuple[datetime, str] | None:
         until = _parse_iso(entry.get("blocked_until"))
         if until and until > now:
             return until, entry.get("blocked_reason") or "rate limit"
-    est = estimate(provider, model)
-    if est and est["requests"]["remaining"] <= 0:
-        return _parse_iso(est["requests"]["reset_at"]), "daily quota"
-    if est and est["requests_minute"]["remaining"] <= 0:
-        return now + timedelta(seconds=30), "rate limit"
-    return None
+    return None   # an estimate (published free-tier limits) never blocks: only the provider saying no does
 
 
 def wait_seconds(until: datetime) -> float:
@@ -249,7 +244,7 @@ def report(current: list[tuple[str, str | None]] = ()) -> list[dict]:
         if not until or until <= now:
             row.pop("blocked_until", None)
             row.pop("blocked_reason", None)
-            hit = blocked(provider, model)   # a paused provider key (credit), or an estimated quota used up
+            hit = blocked(provider, model)   # a paused provider key (credit)
             if hit:
                 row["blocked_until"], row["blocked_reason"] = _iso(hit[0]), hit[1]
         shares = [v["remaining"] / v["limit"] for k, v in row.items()

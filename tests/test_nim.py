@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from magpie.analyzer import SAVE_TOOL, AnalysisError
-from magpie.analyzers import LocalLLMAnalyzer
+from magpie.analyzers import SCHEMA, LocalLLMAnalyzer
 from magpie.config import Settings
 
 HOSTED = "https://integrate.api.nvidia.com/v1"
@@ -90,7 +90,7 @@ async def test_nim_falls_back_to_guided_json(tmp_path):
     llm = nim(tmp_path, http)
     await llm.analyze(image("PNG"), "image/png")
     assert "response_format" in seen[0] and "nvext" not in seen[0]
-    assert seen[1]["nvext"] == {"guided_json": SAVE_TOOL["input_schema"]} and "response_format" not in seen[1]
+    assert seen[1]["nvext"] == {"guided_json": SCHEMA} and "response_format" not in seen[1]
     await llm.analyze(image("PNG"), "image/png")
     assert "nvext" in seen[2]                                               # remembered
 

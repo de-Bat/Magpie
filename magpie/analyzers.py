@@ -28,7 +28,10 @@ from .usage import Run, local_cost, record_limits, token_cost
 
 log = logging.getLogger(__name__)
 
-SCHEMA = SAVE_TOOL["input_schema"]
+# Models without web search can't find related links, and Magpie lists the ones written in the capture itself, so
+# they aren't asked for them: a shorter answer to fill in, and nothing to invent.
+SCHEMA = {**SAVE_TOOL["input_schema"], "properties": {k: v for k, v in SAVE_TOOL["input_schema"]["properties"].items() if k != "related"}}
+SCHEMA["required"] = [k for k in SAVE_TOOL["input_schema"]["required"] if k != "related"]
 DETAIL_KEYS = list(SCHEMA["properties"]["details"]["properties"])
 ARRAY_DETAILS = {k for k, v in SCHEMA["properties"]["details"]["properties"].items() if v.get("type") == "array"}
 
@@ -39,8 +42,9 @@ NO_WEB_STEP = (
     "2. You have no web access; Magpie looks things up after you answer. So name the thing exactly as it would be "
     "searched for: for code, the repository's name as the title, and owner/repo in details.github_full_name when it is "
     "visible or you are certain; for articles, the headline exactly as shown and the site or publisher in "
-    "details.publisher; for films, TV and books, the exact title and year. Give a canonical URL only if it is written "
-    "in the screenshot; never guess an address."
+    "details.publisher; for films, TV and books, the exact title and year. Give a canonical URL when it is written in the "
+    "screenshot or you are certain it exists (a repository, an IMDb page, the publisher's article); Magpie opens every "
+    "address, so an invented one is dropped, but do not leave it out when you know it."
 )
 LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^2\. Use web search.*$", lambda _: NO_WEB_STEP, SYSTEM_PROMPT).replace(
     "Finish by calling save_analysis once. Do not ask the user questions.",
@@ -48,11 +52,10 @@ LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^2\. Use web search.*$", lambda _: NO_WEB_STE
 ).replace(
     "Only report URLs, ratings and facts you actually saw in search results or the screenshot.",
     "Only report URLs, ratings and facts you saw in the screenshot or are certain of; ratings are looked up later.",
-).replace(
-    "Each link must be a page you saw, and must not be the item's own page.",
-    "Only include links written in the screenshot or the OCR text (never guessed addresses), and not the item's own page; "
-    "otherwise leave `related` empty.",
 )
+LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^6\. Also note what is connected.*\n", "", LOCAL_SYSTEM_PROMPT)   # no `related` field for them
+LOCAL_SYSTEM_PROMPT = LOCAL_SYSTEM_PROMPT.replace("7. If the user", "6. If the user").replace("8. Reply", "7. Reply")
+
 
 
 def blank_analysis() -> dict:
@@ -284,7 +287,7 @@ class LocalLLMAnalyzer:
             if self.hosted:
                 record_limits(self.name, r.headers, model=self.model, status=r.status_code)
                 if r.status_code in (402, 429):
-                    entry = limits.mark_limited(self.name, self.model, r.headers, r.text, r.status_code)
+                    entry = limits.mark_limited(self.name, self.model, r.headers, r.text, r.status_code, default_delay=4 * 2 ** attempt)
                     until = limits._parse_iso(entry["blocked_until"])
                     if entry["blocked_reason"] == "credit" or limits.wait_seconds(until) > limits.WAIT_AT_MOST or attempt == self.MAX_RETRIES:
                         raise RateLimited(self.name, self.model, until, entry["blocked_reason"])

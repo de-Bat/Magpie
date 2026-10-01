@@ -96,11 +96,10 @@ def test_gemini_estimate_from_published_limits(tmp_path):
     [row] = limits.report([("gemini", "gemini-2.5-flash")])
     assert row["estimated"] and row["requests"] == {**row["requests"], "remaining": 1, "limit": 250, "per": "day"} and row["low"]
     assert not limits.blocked("gemini", "gemini-2.5-flash")
-    made["day"] = 250
-    until, reason = limits.blocked("gemini", "gemini-2.5-flash")
-    assert reason == "daily quota" and until > datetime.now(timezone.utc)
+    made["day"] = 250   # at the free-tier estimate: shown, but never a reason to stop calling (you may be on a paid tier)
+    assert not limits.blocked("gemini", "gemini-2.5-flash")
     [row] = limits.report([("gemini", "gemini-2.5-flash")])
-    assert row["blocked_reason"] == "daily quota"
+    assert row["requests"]["remaining"] == 0 and row["low"] and "blocked_until" not in row
 
 
 def test_limits_override_for_paid_tiers(monkeypatch):

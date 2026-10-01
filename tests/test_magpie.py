@@ -1235,7 +1235,11 @@ def test_models_without_web_search_get_their_own_instructions():
     from magpie.analyzers import LOCAL_SYSTEM_PROMPT
     assert "web search" not in LOCAL_SYSTEM_PROMPT.lower() and "search its headline" not in LOCAL_SYSTEM_PROMPT
     assert "github_full_name" in LOCAL_SYSTEM_PROMPT and "details.publisher" in LOCAL_SYSTEM_PROMPT
-    assert "never guess an address" in LOCAL_SYSTEM_PROMPT and "save_analysis once" not in LOCAL_SYSTEM_PROMPT
+    assert "save_analysis once" not in LOCAL_SYSTEM_PROMPT
+    # they may give an address they are certain of (it's opened and checked), and aren't asked for related links
+    assert "certain it exists" in LOCAL_SYSTEM_PROMPT and "related" not in LOCAL_SYSTEM_PROMPT
+    from magpie.analyzers import SCHEMA
+    assert "related" not in SCHEMA["properties"] and "related" not in SCHEMA["required"]
 
 
 def test_lookups_confirm_answers_from_any_provider():
@@ -1254,3 +1258,45 @@ def test_lookups_confirm_answers_from_any_provider():
     assert merge(a, [Enrichment(source="opengraph", matched_title="Something else entirely")])["confidence"] == 60
     a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["claude"])
     assert merge(a, [Enrichment(source="github", matched_title="astral-sh/uv")])["confidence"] == 70
+
+
+# ---- regressions behind "results got worse with hosted models" -------------------------------
+
+
+async def test_a_live_link_whose_headline_differs_is_kept(settings):
+    from magpie.findlink import repair_link
+    page = httpx.Response(200, text="<html><head><title>Acme Pro 3000 | Acme Store</title></head></html>", headers={"content-type": "text/html"})
+    routes = {"https://shop.example/pro-3000": page, "https://html.duckduckgo.com/html/": httpx.Response(202), "https://www.bing.com/search": httpx.Response(200, text="")}
+    a = analysis(category="product", title="The best budget espresso machine", canonical_url="https://shop.example/pro-3000", details=blank_details())
+    async with mock_http(routes) as http:
+        assert (await repair_link(a, http))["canonical_url"] == "https://shop.example/pro-3000"   # opens: not invented
+    routes["https://shop.example/pro-3000"] = httpx.Response(404)
+    from magpie import enrich
+    enrich._PAGE_CACHE.clear()
+    async with mock_http(routes) as http:
+        assert (await repair_link(a, http))["canonical_url"] is None   # dead and nothing better found
+
+
+async def test_a_name_alone_does_not_pick_a_lookalike_repository(settings):
+    obscure = {"items": [{"name": "magpie", "full_name": "someone/magpie", "stargazers_count": 3, "owner": {"login": "someone"}}]}
+    routes = {"https://api.github.com/search/repositories": httpx.Response(200, json=obscure)}
+    a = analysis(title="magpie", canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        from magpie.enrich import enrich_github
+        assert await enrich_github(a, settings, http) is None   # 3 stars, no owner: not taken
+
+
+async def test_a_429_without_a_stated_delay_is_retried_like_before(tmp_path):
+    from magpie.analyzers import LocalLLMAnalyzer
+    from test_limits import GOOD, hosted, server
+    http, calls = server((429, {}, "Resource has been exhausted"), (200, {}, ""))
+    llm = LocalLLMAnalyzer(hosted(tmp_path, "gemini"), http)
+    waited = []
+
+    async def sleep(s):
+        waited.append(s)
+        from magpie import limits
+        limits.LIMITS[f"gemini:{llm.model}"]["blocked_until"] = None
+    llm._sleep = sleep
+    out = await llm.analyze(png_bytes(), "image/png")
+    assert out["title"] == GOOD["title"] and len(calls) == 2 and waited and waited[0] <= 4   # not "back in an hour"
