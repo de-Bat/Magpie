@@ -75,6 +75,9 @@ def github_full_name(analysis: dict) -> str | None:
     return None
 
 
+MIN_STARS_UNNAMED_OWNER = 100
+
+
 def _repo_key(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (name or "").lower())
 
@@ -108,6 +111,9 @@ async def find_repo(analysis: dict, guess: str | None, headers: dict, http: http
             except (httpx.HTTPError, ValueError, AttributeError):
                 items = []
             exact = [i for i in items if isinstance(i, dict) and _repo_key(i.get("name")) == wanted]
+            if not owner and "user:" not in q:
+                # no owner to go by: a lookalike name isn't enough, only a well-known repository is taken
+                exact = [i for i in exact if (i.get("stargazers_count") or 0) >= MIN_STARS_UNNAMED_OWNER]
             if exact:
                 exact.sort(key=lambda i: ((i.get("owner") or {}).get("login", "").lower() == (owner or "").lower(),
                                           not i.get("fork"), i.get("stargazers_count") or 0), reverse=True)
@@ -178,7 +184,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         links=links,
         tags=tags,
         source="github",
-        matched_title=full_name,
+        matched_title=None if found_by_search and not (guess and "/" in guess) else full_name,
     )
 
 

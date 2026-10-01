@@ -160,7 +160,14 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
         return analysis   # blocked, timing out or not a web page: we can't tell that it's wrong
     publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
     found = await find_article_url(title, url, http, publisher, capture_sites(analysis))
-    log.info("Link %s for %r didn't check out; using %s", url, title, found)
-    note = "" if found else " The link the model suggested doesn't work, so none is shown."
-    return {**analysis, "canonical_url": found,
+    if found:
+        log.info("Link %s for %r didn't match; using %s", url, title, found)
+        return {**analysis, "canonical_url": found}
+    if page is not None:
+        # The address opens, so it isn't made up: the page's headline just doesn't repeat the title (a product page, a
+        # place, a podcast, a model's paraphrase). Keep it rather than lose a working link; only a dead one is dropped.
+        return analysis
+    log.info("Link %s for %r is dead and no replacement was found", url, title)
+    note = " The link the model suggested doesn't work, so none is shown."
+    return {**analysis, "canonical_url": None,
             "confidence_reason": ((analysis.get("confidence_reason") or "") + note).strip()}
