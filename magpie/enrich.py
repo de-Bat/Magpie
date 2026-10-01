@@ -923,6 +923,7 @@ def opengraph_from_page(page: Page) -> Enrichment:
         canonical_url=canonical_link(page),
         image_url=_absolute(page.url, m.get("og:image") or m.get("twitter:image")),
         source="opengraph",
+        matched_title=meta["page_title"],   # the page's own headline: confirms an answer from a model without web search
     )
 
 

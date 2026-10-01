@@ -32,11 +32,17 @@ SCHEMA = SAVE_TOOL["input_schema"]
 DETAIL_KEYS = list(SCHEMA["properties"]["details"]["properties"])
 ARRAY_DETAILS = {k for k, v in SCHEMA["properties"]["details"]["properties"].items() if v.get("type") == "array"}
 
-LOCAL_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
-    "2. Use web search to confirm the identity and find the canonical source.",
-    "2. You have no web access. Use what you know plus the screenshot and OCR text to name the thing. Give a "
-    "canonical URL only if it is written in the screenshot; never guess an address.",
-).replace(
+# Models without web access (local servers, hosted OpenAI-compatible providers) get the same instructions,
+# except where Claude searches the web: Magpie looks things up after they answer (GitHub, TMDB, Open Library, the
+# article by its headline), so they should name the thing exactly as it would be searched for.
+NO_WEB_STEP = (
+    "2. You have no web access; Magpie looks things up after you answer. So name the thing exactly as it would be "
+    "searched for: for code, the repository's name as the title, and owner/repo in details.github_full_name when it is "
+    "visible or you are certain; for articles, the headline exactly as shown and the site or publisher in "
+    "details.publisher; for films, TV and books, the exact title and year. Give a canonical URL only if it is written "
+    "in the screenshot; never guess an address."
+)
+LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^2\. Use web search.*$", lambda _: NO_WEB_STEP, SYSTEM_PROMPT).replace(
     "Finish by calling save_analysis once. Do not ask the user questions.",
     "Reply with a single JSON object matching the requested schema. Do not ask the user questions.",
 ).replace(
@@ -44,7 +50,8 @@ LOCAL_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
     "Only report URLs, ratings and facts you saw in the screenshot or are certain of; ratings are looked up later.",
 ).replace(
     "Each link must be a page you saw, and must not be the item's own page.",
-    "Only include links written in the screenshot or the OCR text; otherwise leave `related` empty.",
+    "Only include links written in the screenshot or the OCR text (never guessed addresses), and not the item's own page; "
+    "otherwise leave `related` empty.",
 )
 
 

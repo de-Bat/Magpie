@@ -285,7 +285,7 @@ def test_ocr_mode_end_to_end_with_source_confirmation(tmp_path):
         assert client.get("/api/health").json()["analyzer"] == "ocr"
         found = client.get("/api/items", params={"q": "tool week"}).json()
     assert item["category"] == "github_repo" and item["title"] == "astral-sh/uv"
-    assert item["confidence"] == 85 and "Confirmed by github" in item["confidence_reason"]
+    assert item["confidence"] == 85 and "Confirmed by GitHub" in item["confidence_reason"]
     assert item["metadata"]["sources"] == ["ocr", "rules", "github"]
     assert [i["id"] for i in found] == [item_id]   # OCR text is searchable
 

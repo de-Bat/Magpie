@@ -52,6 +52,22 @@ def titles_match(a: str | None, b: str | None) -> bool:
     return bool(a) and (a == b or SequenceMatcher(None, a, b).ratio() >= 0.9)
 
 
+SOURCE_NAMES = {"github": "GitHub", "tmdb": "TMDB", "omdb": "OMDb", "tmdb+omdb": "TMDB", "openlibrary": "Open Library",
+                "npm": "npm", "huggingface": "Hugging Face", "schema.org/Recipe": "the recipe page",
+                "opengraph": "the page itself", "opengraph+readability": "the page itself"}
+
+
+def source_confirms(title: str | None, matched: str | None) -> bool:
+    """Does what a source found carry the name the model gave? Also when the model named a repository without its
+    owner ("uv" for astral-sh/uv), or a page title carries the site's name ("Headline | XDA")."""
+    if titles_match(title, matched):
+        return True
+    if matched and "/" in matched and titles_match((title or "").split("/")[-1], matched.split("/")[-1]):
+        return True
+    head = re.split(r"\s[|–—-]\s", matched or "")[0]
+    return bool(head) and head != matched and titles_match(title, head)
+
+
 def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     """Combine Claude's identification with enrichment results into item fields.
 
@@ -117,10 +133,10 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     # Claude verifies with web search itself; other analyzers get a second opinion from the
     # authoritative source the enrichers matched (GitHub, TMDB, Open Library, the recipe page).
     if "claude" not in used and confidence is not None and confidence < 90:
-        match = next((e for e in enrichments if e.matched_title and titles_match(analysis.get("title"), e.matched_title)), None)
+        match = next((e for e in enrichments if e.matched_title and source_confirms(analysis.get("title"), e.matched_title)), None)
         if match:
             confidence = max(confidence, 85)
-            confidence_reason = f"{confidence_reason or ''} Confirmed by {match.source}.".strip()
+            confidence_reason = f"{confidence_reason or ''} Confirmed by {SOURCE_NAMES.get(match.source, match.source)}.".strip()
 
     alternatives = [
         {k: a.get(k) for k in ("title", "category", "year", "canonical_url", "why")}

@@ -1229,3 +1229,28 @@ async def test_article_search_starts_at_the_site_named_in_the_capture(settings):
         fixed = await repair_link(a, http)
     assert fixed["canonical_url"] == "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
     assert asked == [f'"{TITLE}" site:xda-developers.com']
+
+
+def test_models_without_web_search_get_their_own_instructions():
+    from magpie.analyzers import LOCAL_SYSTEM_PROMPT
+    assert "web search" not in LOCAL_SYSTEM_PROMPT.lower() and "search its headline" not in LOCAL_SYSTEM_PROMPT
+    assert "github_full_name" in LOCAL_SYSTEM_PROMPT and "details.publisher" in LOCAL_SYSTEM_PROMPT
+    assert "never guess an address" in LOCAL_SYSTEM_PROMPT and "save_analysis once" not in LOCAL_SYSTEM_PROMPT
+
+
+def test_lookups_confirm_answers_from_any_provider():
+    from magpie.enrich import Enrichment
+    from magpie.pipeline import merge
+    # a hosted model (no web search) named the repository without its owner; GitHub's search found it
+    a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["ocr", "gemini:gemini-2.5-flash"])
+    out = merge(a, [Enrichment(source="github", matched_title="astral-sh/uv", canonical_url="https://github.com/astral-sh/uv")])
+    assert out["confidence"] == 85 and "Confirmed by GitHub" in out["confidence_reason"]
+    assert out["canonical_url"] == "https://github.com/astral-sh/uv"
+    # a local model's article headline, confirmed by the page found for it ("Headline | Site")
+    a = analysis(category="article", title=TITLE, confidence=60, details=blank_details(), _analyzer=["local:qwen"])
+    out = merge(a, [Enrichment(source="opengraph+readability", matched_title=f"{TITLE} | XDA")])
+    assert out["confidence"] == 85 and "Confirmed by the page itself" in out["confidence_reason"]
+    # a different page doesn't confirm anything; Claude's own answer isn't re-scored
+    assert merge(a, [Enrichment(source="opengraph", matched_title="Something else entirely")])["confidence"] == 60
+    a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["claude"])
+    assert merge(a, [Enrichment(source="github", matched_title="astral-sh/uv")])["confidence"] == 70
