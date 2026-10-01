@@ -108,12 +108,33 @@ async def ddg_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> li
     return found
 
 
-async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncClient, publisher: str | None = None) -> str | None:
-    """The address of the page titled `title`, looked for on the same site (or at the named publisher) first."""
+def capture_sites(analysis: dict) -> list[str]:
+    """Sites named in the capture ("xda-developers.com" under a shared headline): where to look for the article first."""
+    from .related import NOISE_HOSTS, _TEXT_URL, _host
+    text = "\n".join(filter(None, [analysis.get("screenshot_text"), analysis.get("_ocr_text")]))
+    out: list[str] = []
+    for m in _TEXT_URL.finditer(text):
+        host = _host("https://" + m.group(1).split("/")[0])
+        if host and host not in out and not any(host == h or host.endswith("." + h) for h in NOISE_HOSTS):
+            out.append(host)
+    return out[:2]
+
+
+async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncClient, publisher: str | None = None,
+                           sites: list[str] = ()) -> str | None:
+    """The address of the page titled `title`: looked for on the same site (or a site named in the capture, or at the
+    named publisher) first, then anywhere, then with the headline's first words unquoted (a capture often cuts it)."""
     host = (urlsplit(wrong_url or "").hostname or "").removeprefix("www.")
-    queries = ([f'"{title}" site:{host}'] if host else []) + ([f'"{title}" {publisher}'] if publisher else []) + [f'"{title}"']
+    hosts = [h for h in [host, *sites] if h]
+    words = title.split()
+    queries = ([f'"{title}" site:{h}' for h in dict.fromkeys(hosts)] + ([f'"{title}" {publisher}'] if publisher else [])
+               + [f'"{title}"'] + ([" ".join(words[:10]) + (f" {publisher}" if publisher else "")] if len(words) > 4 else []))
+    tried: set[str] = set()
     for query in queries:
         for url in await search_results(query, http):
+            if url in tried:
+                continue
+            tried.add(url)
             page = await fetch_page(url, http)
             if page and page_matches(title, page):
                 return canonical_link(page)
@@ -127,7 +148,7 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
     if not url and title and analysis.get("category") == "article" and "link" not in (analysis.get("_analyzer") or []):
         # the model named the article but found no address for it: look it up
         publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
-        found = await find_article_url(title, None, http, publisher)
+        found = await find_article_url(title, None, http, publisher, capture_sites(analysis))
         return {**analysis, "canonical_url": found} if found else analysis
     if (not url or not title or analysis.get("category") not in REPAIRABLE or not url.startswith("http")
             or "link" in (analysis.get("_analyzer") or [])):
@@ -137,7 +158,8 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
         return analysis
     if page is None and not link_is_gone(url):
         return analysis   # blocked, timing out or not a web page: we can't tell that it's wrong
-    found = await find_article_url(title, url, http)
+    publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
+    found = await find_article_url(title, url, http, publisher, capture_sites(analysis))
     log.info("Link %s for %r didn't check out; using %s", url, title, found)
     note = "" if found else " The link the model suggested doesn't work, so none is shown."
     return {**analysis, "canonical_url": found,

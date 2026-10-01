@@ -17,7 +17,7 @@ from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import links, readability
 from .findlink import repair_link
-from .related import clean_related, drop_dead
+from .related import clean_related, drop_dead, same_site, text_related
 from .images import best_image
 from .enrich import fetch_page, link_is_gone
 from .config import Settings
@@ -104,6 +104,9 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     metadata.pop("image_kind", None)
     if image_kind:
         metadata["image_kind"] = image_kind   # the card shows a logo whole on the themed cover instead of cropping it
+    # links written in the capture itself: the tool's site, its repository or package, a paper
+    written = text_related("\n".join(filter(None, [analysis.get("screenshot_text"), analysis.get("_ocr_text")])))
+    related += [r for r in written if not (r["kind"] == "site" and canonical_url and same_site(r["url"], canonical_url))]
     used = analysis.get("_analyzer") or ["claude"]
     metadata["sources"] = used + sources[1:]
     if analysis.get("_ocr_text"):

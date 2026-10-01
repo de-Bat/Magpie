@@ -32,6 +32,9 @@ def _same_site(a: str, b: str) -> bool:
     return ha[-2:] == hb[-2:]
 
 
+same_site = _same_site
+
+
 def norm_url(url: str) -> str:
     parts = urlsplit(url.strip())
     return f"{parts.scheme}://{parts.netloc.lower().removeprefix('www.')}{parts.path.rstrip('/')}"
@@ -124,3 +127,63 @@ async def drop_dead(items: list[dict], http, fetch_page, link_is_gone) -> list[d
         return bool(page) or not link_is_gone(it["url"])
     verdicts = await asyncio.gather(*(alive(it) for it in items[:MAX_RELATED + 4]), return_exceptions=True)
     return [it for it, ok in zip(items, verdicts) if ok is True]
+
+
+_MD_LINK = re.compile(r"(?<!!)\[([^\]]{1,80})\]\(\s*<?(https?://[^)\s>]+)")
+_HTML_LINK = re.compile(r"<a\b[^>]*?\bhref=[\"'](https?://[^\"']+)[\"'][^>]*>(.*?)</a>", re.I | re.S)
+# README links worth listing even though they're plain sites: what the project points you to
+_README_SITE_WORDS = re.compile(r"\b(website|homepage|home page|docs|documentation|demo|playground|try it|blog|discord|community|"
+                                r"forum|paper|tutorial|guide|examples?|showcase|changelog|roadmap|app|download)\b", re.I)
+_BADGE = re.compile(r"shields\.io|badge|/workflows/|codecov|travis-ci|circleci|coveralls|img\.|star-history|contrib\.rocks", re.I)
+
+
+def readme_related(markdown: str, full_name: str, exclude: list[str | None] = (), limit: int = 6) -> list[dict]:
+    """What a repository's README points to: its package (npm, PyPI, crates), docs and demo, the paper, the app
+    in the stores, the community. Badges, the repo's own pages and its contributors are left out."""
+    if not markdown:
+        return []
+    own = f"github.com/{full_name}".lower()
+    pairs = [(u, t) for t, u in _MD_LINK.findall(markdown)] + [(u, _TAG.sub("", t)) for u, t in _HTML_LINK.findall(markdown)]
+    skip = {norm_url(u) for u in exclude if u}
+    found: list[dict] = []
+    for url, text in pairs:
+        url, text = url.strip().rstrip(".,;"), re.sub(r"\s+", " ", text).strip()
+        if _BADGE.search(url) or own in url.lower() or norm_url(url) in skip:
+            continue
+        item = classify_url(url, text)
+        if not item:
+            continue
+        if item["kind"] == "repo" and _host(url) == "github.com":
+            continue   # other repositories a README lists are usually dependencies or "see also"; too noisy
+        if item["kind"] == "site" and not _README_SITE_WORDS.search(text):
+            continue
+        skip.add(norm_url(item["url"]))
+        found.append({**item, "why": "linked from the README"})
+        if len(found) >= limit:
+            break
+    return found
+
+
+_TEXT_URL = re.compile(r"(?:https?://)?(?:www\.)?((?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|ai|app|co|so|sh|me|news|blog|tech|xyz|"
+                       r"gg|tv|fm|info|edu|gov|uk|de|fr|il|ca|au|in|us)(?:/[^\s<>\"')\]]*)?)", re.I)
+
+
+def text_related(text: str, limit: int = 6) -> list[dict]:
+    """Links written in a screenshot (or a shared post): addresses, bare domains and github.com/owner/repo, each as a
+    related link with what kind of thing it is. Social sites and the like are left out (classify_url)."""
+    found: list[dict] = []
+    seen: set[str] = set()
+    for m in _TEXT_URL.finditer(text or ""):
+        raw = m.group(0)
+        url = raw if raw.lower().startswith("http") else "https://" + m.group(1)
+        url = url.rstrip(".,;:!?")
+        item = classify_url(url, "")
+        if not item or norm_url(item["url"]) in seen:
+            continue
+        if item["kind"] == "site":
+            item = {**item, "label": _host(url) + (urlsplit(url).path.rstrip("/") if len(urlsplit(url).path) > 1 else "")}
+        seen.add(norm_url(item["url"]))
+        found.append({**item, "why": "mentioned in the capture"})
+        if len(found) >= limit:
+            break
+    return found
