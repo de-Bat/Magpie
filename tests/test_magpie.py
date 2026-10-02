@@ -891,6 +891,12 @@ def _ddg(*urls):
     return httpx.Response(200, text=f"<html><body>{body}</body></html>", headers={"content-type": "text/html"})
 
 
+def _ddg_titled(*pairs):
+    from urllib.parse import quote
+    body = "".join(f'<a class="result__a" href="//duckduckgo.com/l/?uddg={quote(u, safe="")}&amp;rut=x">{t}</a>' for u, t in pairs)
+    return httpx.Response(200, text=f"<html><body>{body}</body></html>", headers={"content-type": "text/html"})
+
+
 def _article_page(title):
     return httpx.Response(200, text=f'<html><head><title>{title} | XDA</title><meta property="og:title" content="{title}"></head></html>',
                           headers={"content-type": "text/html"})
@@ -1300,3 +1306,60 @@ async def test_a_429_without_a_stated_delay_is_retried_like_before(tmp_path):
     llm._sleep = sleep
     out = await llm.analyze(png_bytes(), "image/png")
     assert out["title"] == GOOD["title"] and len(calls) == 2 and waited and waited[0] <= 4   # not "back in an hour"
+
+
+async def test_a_walled_article_is_found_from_the_search_result_title(settings):
+    # XDA-style bot wall: the right page is in the results but can't be opened, so its title and address stand in
+    from magpie.findlink import repair_link
+    good = "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    routes = {"https://html.duckduckgo.com/html/": _ddg_titled(("https://reddit.example/r/x/salvaged-gpus", "Two old GPUs I salvaged ... - reddit"),
+                                                                  (good + "?utm_source=x", TITLE + " - XDA")),
+              "https://www.xda-developers.com/": httpx.Response(403)}
+    a = analysis(category="article", title=TITLE, canonical_url="https://www.xda-developers.com/two-old-gpus", details=blank_details())
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == good   # tracking parameters dropped
+
+
+async def test_a_walled_page_on_another_site_with_a_loose_title_is_not_taken(settings):
+    from magpie.findlink import repair_link
+    routes = {"https://html.duckduckgo.com/html/": _ddg_titled(("https://copycat.example/post", "Old GPUs are great")),
+              "https://copycat.example/": httpx.Response(403), "https://www.xda-developers.com/": httpx.Response(403)}
+    a = analysis(category="article", title=TITLE, canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        assert (await repair_link(a, http))["canonical_url"] is None
+
+
+async def test_pages_found_by_the_models_own_search_are_tried_first(settings):
+    from magpie.findlink import repair_link
+    good = "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    asked = []
+
+    def handler(request):
+        asked.append(str(request.url))
+        if request.url.host == "www.xda-developers.com":
+            return _article_page(TITLE)
+        return httpx.Response(404)
+    a = analysis(category="article", title=TITLE, canonical_url=None, details={**blank_details(), "publisher": "xda-developers.com"},
+                 _sources=["https://other.example/roundup", good])
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == good
+    assert not any("duckduckgo" in u for u in asked) and asked[0] == good   # the site we're after first, no scraping needed
+
+
+async def test_the_link_search_is_logged_with_why_each_page_was_taken_or_refused(settings):
+    from magpie import convlog
+    from magpie.findlink import repair_link
+    convlog.configure(Settings(data_dir=settings.data_dir, log_conversations=True))
+    routes = {"https://html.duckduckgo.com/html/": httpx.Response(403),
+              "https://www.bing.com/": httpx.Response(200, text="<html></html>")}
+    a = analysis(category="article", title=TITLE, canonical_url=None, details=blank_details(), _sources=["https://x.example/a"])
+    with convlog.session("analyze", "abc12345"):
+        async with mock_http({**routes, "https://x.example/": _article_page("Something else")}) as http:
+            await repair_link(a, http)
+    [row] = convlog.list_sessions()["sessions"]
+    ev = next(e for e in convlog.read_session(row["id"])["events"] if e["event"] == "link_search")
+    assert ev["found"] is None and ev["checked"][0]["verdict"] == "different page" and ev["checked"][0]["from"] == "the model's web search"
+    assert ev["queries"][0]["engines"]["duckduckgo"] == "refused (HTTP 403)" and ev["queries"][0]["engines"]["bing"].startswith("no results")
+    convlog.configure(None)

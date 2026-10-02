@@ -1228,6 +1228,17 @@ function logEventHtml(e) {
     title = `decision · ${(e.what || "").replace(/_/g, " ")}`;
     body = pre(rest(["what"]));
     open = true;
+  } else if (e.event === "web_search") {
+    title = `web search · ${(e.queries || []).length} quer${(e.queries || []).length === 1 ? "y" : "ies"} · ${(e.sources || []).length} page${(e.sources || []).length === 1 ? "" : "s"} read`;
+    body = `${(e.queries || []).map((q) => `<p>🔎 ${esc(q)}</p>`).join("")}${(e.sources || []).map((u) => `<p class="meta-line"><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a></p>`).join("")}`;
+    open = true;
+  } else if (e.event === "link_search") {
+    title = e.found ? `looking for the article's address · found it` : `looking for the article's address · not found`;
+    const how = (q) => Object.entries(q.engines || {}).map(([k, v]) => `${k}: ${v}`).join(" · ");
+    body = `<p>${e.found ? `Using <a href="${esc(e.found)}" target="_blank" rel="noopener noreferrer">${esc(e.found)}</a>` : "No page checked out, so no link is shown."}</p>
+      ${(e.queries || []).length ? `<h5>Searches</h5>${e.queries.map((q) => `<p class="meta-line">${esc(q.query)}<br>${esc(how(q))} · ${q.results} result${q.results === 1 ? "" : "s"}</p>`).join("")}` : ""}
+      ${(e.checked || []).length ? `<h5>Pages checked</h5>${e.checked.map((c) => `<p class="meta-line"><a href="${esc(c.url)}" target="_blank" rel="noopener noreferrer">${esc(c.title || c.url)}</a><br>${esc(c.verdict)} · from ${esc(c.from)}</p>`).join("")}` : `<p class="meta-line">No candidate pages were found at all: the search engines gave nothing (see above).</p>`}`;
+    open = !e.found;
   } else if (e.event === "session_start" || e.event === "session_end") {
     title = e.event === "session_end" ? `end · ${e.outcome}${e.error ? ` · ${e.error}` : ""}` : "start";
     body = pre(rest([]));

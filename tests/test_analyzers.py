@@ -432,3 +432,19 @@ def test_gemini_search_can_be_turned_off(tmp_path):
     s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None, gemini_web_search=False)
     asyncio.run(LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler))).analyze(png(), "image/png"))
     assert seen == ["/v1beta/openai/chat/completions"]
+
+
+def test_gemini_search_sources_are_resolved_to_the_real_addresses(tmp_path):
+    redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC"
+
+    def handler(request):
+        if request.url.host == "vertexaisearch.cloud.google.com":
+            return httpx.Response(302, headers={"location": "https://www.xda-developers.com/real-article/"})
+        reply = {"candidates": [{"content": {"parts": [{"text": json.dumps(GOOD)}]},
+                                 "groundingMetadata": {"webSearchQueries": ["q"], "groundingChunks": [
+                                     {"web": {"uri": redirect, "title": "xda-developers.com"}}, {"web": {"uri": "https://plain.example/a"}}]}}]}
+        return httpx.Response(200, json=reply)
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None)
+    result = asyncio.run(LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler))).analyze(png(), "image/png"))
+    assert result["_sources"] == ["https://www.xda-developers.com/real-article/", "https://plain.example/a"]
