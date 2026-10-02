@@ -65,6 +65,15 @@ def normalize_url(url: str) -> str:
     return urlunsplit((parts.scheme.lower(), netloc, path, query, ""))
 
 
+def github_repo_of(url: str | None) -> str | None:
+    """owner/repo when the address is a GitHub repository (or a page inside one), else None."""
+    parts = urlsplit(url or "")
+    segments = [x for x in parts.path.split("/") if x]
+    if (parts.hostname or "").lower().removeprefix("www.") == "github.com" and len(segments) >= 2 and segments[0].lower() not in GITHUB_RESERVED:
+        return f"{segments[0]}/{segments[1].removesuffix('.git')}"
+    return None
+
+
 def platform_of(url: str) -> str:
     host = (urlsplit(url).hostname or "").lower().removeprefix("www.").removeprefix("m.")
     for domain, platform in PLATFORM_HOSTS.items():
