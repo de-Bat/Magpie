@@ -1363,3 +1363,31 @@ async def test_the_link_search_is_logged_with_why_each_page_was_taken_or_refused
     assert ev["found"] is None and ev["checked"][0]["verdict"] == "different page" and ev["checked"][0]["from"] == "the model's web search"
     assert ev["queries"][0]["engines"]["duckduckgo"] == "refused (HTTP 403)" and ev["queries"][0]["engines"]["bing"].startswith("no results")
     convlog.configure(None)
+
+
+def test_an_item_whose_own_link_is_a_github_repo_is_one_whatever_the_model_said(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)}
+    for filed_as in ("other", "article", "app"):
+        client, _ = make_client(settings, analysis(category=filed_as), routes)
+        with client:
+            item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+            item = client.get(f"/api/items/{item_id}").json()
+            assert item["category"] == "github_repo" and item["metadata"]["stars"] == 70000, filed_as
+
+
+def test_a_repo_named_without_an_address_gets_one_and_other_links_stay_as_filed(settings):
+    from magpie.pipeline import reclassify
+    named = reclassify(analysis(category="other", canonical_url=None, details={**blank_details(), "github_full_name": "astral-sh/uv"}))
+    assert named["category"] == "github_repo" and named["canonical_url"] == "https://github.com/astral-sh/uv"
+    assert reclassify(analysis(category="article", canonical_url="https://blog.example/uv-review"))["category"] == "article"
+    assert reclassify(analysis(category="article", canonical_url="https://github.com/features/copilot"))["category"] == "article"   # not a repo
+    assert reclassify(analysis(category="movie", canonical_url="https://github.com/astral-sh/uv"))["category"] == "movie"   # a specific type stays
+
+
+def test_a_category_you_corrected_is_not_overridden_by_the_link(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)}
+    client, _ = make_client(settings, analysis(category="github_repo"), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        client.post(f"/api/items/{item_id}/correct", json={"category": "article", "title": "My review of uv"})
+        assert client.get(f"/api/items/{item_id}").json()["category"] == "article"

@@ -27,6 +27,25 @@ from .enrich import Enrichment, run_enrichers
 log = logging.getLogger(__name__)
 
 
+LOOSE_CATEGORIES = {None, "", "other", "article", "app", "product"}
+
+
+def reclassify(analysis: dict) -> dict:
+    """The item's own address is a GitHub repository, so it is one, whatever the model filed it under ("other", an
+    "article" about it, an "app"). The category decides which lookups run and how the card looks."""
+    repo = links.github_repo_of(analysis.get("canonical_url"))
+    if analysis.get("category") not in LOOSE_CATEGORIES:
+        return analysis
+    named = (analysis.get("details") or {}).get("github_full_name")
+    if not repo and named and re.fullmatch(r"[\w.-]+/[\w.-]+", named) and not analysis.get("canonical_url"):
+        repo, analysis = named, {**analysis, "canonical_url": f"https://github.com/{named}"}   # named a repository, gave no address
+    if not repo:
+        return analysis
+    convlog.event("decision", what="category_from_link", was=analysis.get("category"), now="github_repo", repo=repo)
+    details = {**(analysis.get("details") or {}), "github_full_name": (analysis.get("details") or {}).get("github_full_name") or repo}
+    return {**analysis, "category": "github_repo", "details": details}
+
+
 def card_snapshot(item: dict) -> dict:
     """The card as it came out: everything the app shows for it, without the bulky raw fields."""
     heavy = {"analysis", "image_file"}
@@ -371,6 +390,8 @@ class Pipeline:
         return run.to_dict()
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
+        if not corrected:   # what you set yourself is never second-guessed
+            analysis = reclassify(analysis)
         if self.settings.enrich:
             before = analysis.get("canonical_url")
             analysis = await repair_link(analysis, self.http)   # a made-up address becomes the real article's, or none
