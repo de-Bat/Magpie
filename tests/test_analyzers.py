@@ -285,7 +285,7 @@ def test_ocr_mode_end_to_end_with_source_confirmation(tmp_path):
         assert client.get("/api/health").json()["analyzer"] == "ocr"
         found = client.get("/api/items", params={"q": "tool week"}).json()
     assert item["category"] == "github_repo" and item["title"] == "astral-sh/uv"
-    assert item["confidence"] == 85 and "Confirmed by github" in item["confidence_reason"]
+    assert item["confidence"] == 85 and "Confirmed by GitHub" in item["confidence_reason"]
     assert item["metadata"]["sources"] == ["ocr", "rules", "github"]
     assert [i["id"] for i in found] == [item_id]   # OCR text is searchable
 
@@ -362,9 +362,10 @@ def test_rate_limit_headers_are_normalized_and_key_check_reports_them(tmp_path):
     from magpie.models import check_key
     from magpie.usage import LIMITS, parse_limits
 
-    assert parse_limits({"x-ratelimit-remaining-requests": "59", "x-ratelimit-limit-requests": "60",
-                         "x-ratelimit-remaining-tokens": "5000", "x-ratelimit-reset-tokens": "1s"}) == {
-        "requests": {"remaining": 59, "limit": 60, "reset": None}, "tokens": {"remaining": 5000, "limit": None, "reset": "1s"}}
+    parsed = parse_limits({"x-ratelimit-remaining-requests": "59", "x-ratelimit-limit-requests": "60",
+                           "x-ratelimit-remaining-tokens": "5000", "x-ratelimit-reset-tokens": "1s"})
+    assert parsed["requests"] == {"remaining": 59, "limit": 60, "reset": None, "reset_at": None}
+    assert parsed["tokens"]["remaining"] == 5000 and parsed["tokens"]["reset"] == "1s" and parsed["tokens"]["reset_at"]
     assert parse_limits({"anthropic-ratelimit-tokens-remaining": "900", "anthropic-ratelimit-tokens-limit": "1000"})["tokens"]["limit"] == 1000
     assert parse_limits({"content-type": "x"}) is None
 

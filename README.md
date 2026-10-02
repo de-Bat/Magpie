@@ -122,7 +122,8 @@ These cost controls are on by default:
 ## Confidence & corrections
 
 - **Confidence (0–100).** Claude scores its identification based on the evidence: a legible title confirmed by a matching source scores 90+, while a guess from a blurry poster or an ambiguous title (remakes, a book and its film) scores lower. The score comes with a one-line reason.
-- **To check.** Anything under 60% gets a "!" marker, and anything no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
+- **Related.** Each item lists things connected to it that are worth a look: the repository, package or app an article is about, the paper behind a model, the company or project it names. They come from the model, from the article's own links and from the sources Magpie looks up, and dead or made-up addresses are dropped.
+- **To check.** Anything under 60% gets a "!" marker, and anything below 90% that no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
 - **Did you mean…** Claude lists up to 3 alternatives. Tap one to switch to it.
 - **Fix it.** Open an item → **Wrong? Fix it**:
   - Change the **title, type, year or link**. Magpie keeps the facts about the post itself (who shared it, where, the screenshot text), throws away the wrong item's poster, scores and details, and looks up the right ones. The model isn't called again.
@@ -153,7 +154,7 @@ uvicorn magpie.main:create_app --factory --host 0.0.0.0 --port 8000
 
 ### Settings in the web UI, and the status indicator
 
-Every setting below except `MAGPIE_DATA_DIR`, `MAGPIE_REGION`, `MAGPIE_PRICING` and `MAGPIE_ALLOW_PRIVATE_URLS` can also be changed from **⚙ Settings** in the web app. Changes apply immediately, without a restart. While the server has **no access token**, saving asks for a **setup code** that the server prints in its log at every start (`docker compose logs magpie`), so nobody else on the network can reconfigure it; once `MAGPIE_API_TOKEN` is set, the token is what's required. A saved local LLM API key is removed if `LOCAL_LLM_URL` is changed to a different server in the same save, so the key can't be redirected. They are saved to `settings.json` in the data directory (readable only by the server's user) and take precedence over the environment; **Reset** on a field goes back to the environment/default value. API keys are never sent back to the browser, only their last four characters.
+Every setting below except `MAGPIE_DATA_DIR`, `MAGPIE_REGION`, `MAGPIE_PRICING`, `MAGPIE_RATE_LIMITS` and `MAGPIE_ALLOW_PRIVATE_URLS` can also be changed from **⚙ Settings** in the web app. Changes apply immediately, without a restart. While the server has **no access token**, saving asks for a **setup code** that the server prints in its log at every start (`docker compose logs magpie`), so nobody else on the network can reconfigure it; once `MAGPIE_API_TOKEN` is set, the token is what's required. A saved local LLM API key is removed if `LOCAL_LLM_URL` is changed to a different server in the same save, so the key can't be redirected. They are saved to `settings.json` in the data directory (readable only by the server's user) and take precedence over the environment; **Reset** on a field goes back to the environment/default value. API keys are never sent back to the browser, only their last four characters.
 
 The server always starts, even when something is misconfigured: an invalid value (say `MAGPIE_ESCALATE_BELOW=high`) falls back to its default, and an unusable data directory makes the library unavailable (`503`) but leaves the status and settings pages working. What's wrong shows up in the app:
 
@@ -181,6 +182,8 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `MAGPIE_EFFORT`, `MAGPIE_FETCH_MAX_TOKENS` | optional | Claude-only options (defaults `medium`, `8000`) |
 | `MAGPIE_MONTHLY_BUDGET_USD`, `MAGPIE_MAX_OUTPUT_TOKENS`, `MAGPIE_MAX_IMAGE_EDGE` | optional | Cost controls for every provider: monthly spend limit (0 = none), reply cap (0 = default), image size (default `2000`) |
 | `MAGPIE_LOCAL_COST_PER_HOUR`, `MAGPIE_PRICING` | optional | For the usage report: your local box's running cost; price overrides |
+| `MAGPIE_DEBUG`, `MAGPIE_LOG_CONVERSATIONS`, `MAGPIE_LOG_IMAGES`, `MAGPIE_LOG_RETENTION_DAYS` | optional | Debug mode (a Debug view in the app: input, conversation, output card, model used), or just save what is sent to each AI model and what comes back, one file per operation under `<data dir>/logs/` (default off, kept 30 days). See [docs/LOGS.md](docs/LOGS.md) |
+| `MAGPIE_RATE_LIMITS` | optional | Requests per minute and per day for models whose provider doesn't report its limits (Gemini), e.g. `{"gemini-2.5-flash": [1000, 10000]}` on a paid tier. Defaults to the published free-tier limits |
 | `MAGPIE_API_TOKEN` | recommended | Shared secret for all API and media requests. To give each device or client its own token, list several separated by commas (`tok1,tok2`); any one is accepted, and removing one revokes it. Set it whenever the server can be reached from outside localhost. Generate one with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `TMDB_API_KEY` | optional | Posters, overview, cast, genres, streaming providers (v3 key or v4 read token) |
 | `OMDB_API_KEY` | optional | IMDb rating, Rotten Tomatoes, Metacritic |

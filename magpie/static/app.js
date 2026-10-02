@@ -24,7 +24,7 @@ const TABS = [
   { id: "music", label: "Music & podcasts", cats: ["music", "podcast"] },
   { id: "read", label: "Articles & videos", cats: ["article", "video"] },
   { id: "place", label: "Places & events", cats: ["place", "event"] },
-  { id: "other", label: "Other", cats: ["product", "app", "course", "other"] },
+  { id: "other", label: "Other", cats: ["other", "product", "app", "course"] },
 ];
 // One icon per type, drawn with the same stroke so they read as a set. Shown on every card, whether or not it has a picture.
 const TYPE_ICON_PATHS = {
@@ -45,12 +45,15 @@ const TYPE_ICON_PATHS = {
   other: '<path d="M4 4h8l8 8-8 8-8-8z"/><circle cx="8.5" cy="8.5" r="1.2"/>',
 };
 const typeIcon = (c, cls = "ticon") => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${TYPE_ICON_PATHS[c] || TYPE_ICON_PATHS.other}</svg>`;
+// A tab groups related types and gives them one icon and color (its first type), so a card, its tab and the
+// detail sheet always match. The chip on the card still names the exact type ("TV show", "Podcast").
+const themeOf = (category) => TABS.find((t) => t.cats?.includes(category))?.cats[0] || "other";
 const tabOf = (item) => TABS.find((t) => t.cats?.includes(item.category))?.id || "other";
 // What each type's detail sheet lists first (anything else Magpie found follows).
 const FACT_ORDER = {
   movie: ["release_date", "runtime", "rated", "directors", "cast", "genres", "network_or_studio", "awards", "where_to_watch", "tagline"],
   tv_show: ["first_air_date", "status", "seasons", "episodes", "creators", "cast", "genres", "network_or_studio", "where_to_watch", "tagline", "rated", "awards"],
-  github_repo: ["programming_language", "license", "last_push", "open_issues", "forks", "topics", "homepage", "archived"],
+  github_repo: ["programming_language", "license", "latest_release", "released", "last_push", "created", "open_issues", "forks", "watchers", "topics", "homepage", "archived"],
   recipe: ["total_time", "prep_time", "cook_time", "servings", "cuisine", "calories", "author"],
   book: ["author", "authors", "first_publish_year", "pages", "publisher", "isbn", "subjects"],
   article: ["author", "published", "reading_time", "site"],
@@ -63,11 +66,12 @@ const HIDDEN_META = new Set([
   "article_text", "excerpt", "word_count", "page_description",
   "screenshot_text", "sources", "confidence", "ingredients", "instructions", "imdb_rating", "rotten_tomatoes",
   "metacritic", "tmdb_rating", "stars", "rating", "rating_count", "description", "post_url", "imdb_votes", "tmdb_id",
-  "page_description", "page_title", "github_full_name", "year", "ocr_text",
+  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "found_by",
 ]);
 
 const state = {
-  q: "", tab: "all", show: "all", tags: [], layout: (() => { try { return localStorage.getItem("magpie.layout") === "list" ? "list" : "grid"; } catch { return "grid"; } })(),
+  q: "", tab: "all", show: "all", tags: [], cols: (() => { try { return Math.max(0, Math.min(8, parseInt(localStorage.getItem("magpie.columns"), 10) || 0)); } catch { return 0; } })(),
+  layout: (() => { try { return localStorage.getItem("magpie.layout") === "list" ? "list" : "grid"; } catch { return "grid"; } })(),
   items: new Map(),        // id -> item (mirror of the IndexedDB "items" store)
   ops: [],                 // queued changes, oldest first
   sync: "idle",            // idle | syncing | offline | auth | error
@@ -285,6 +289,12 @@ function looksLikeUrl(text) {
   return /^(https?:\/\/)?[\w-]+(\.[\w-]+)+(\/\S*)?$/i.test((text || "").trim());
 }
 
+// The user confirms an identification Magpie couldn't check itself.
+async function verifyItem(id) {
+  await editItem(id, { confirmed: true });
+  toast("Marked as correct.");
+}
+
 async function editItem(id, patch) {
   const item = state.items.get(id);
   if (!item) return;
@@ -423,6 +433,7 @@ async function sync() {
     } while (rerun);
     setSyncState("idle");
     refreshCostPill();
+    refreshLimits();
   } catch (e) {
     if (e instanceof HttpError && e.status === 401) setSyncState("auth");
     else if (e instanceof HttpError) setSyncState("error", e.message);
@@ -533,6 +544,7 @@ function renderServerStatus() {
   dot.hidden = !level;
   dot.className = `status-dot ${level || ""}`;
   const counts = s ? s.problems.filter((p) => p.level !== "info").length : 0;
+  $("#debug-btn").hidden = !(s && s.debug);   // the server is in debug mode: there is a history of conversations to browse
   $("#settings-btn").title = level ? `Settings — ${counts} problem${counts === 1 ? "" : "s"} with the server setup` : "Settings";
 }
 
@@ -744,18 +756,129 @@ function providerSwitch(sel) {
 // ---- model picker: the provider's own model list, fetched by the server ----------
 const modelLists = {};   // provider id -> [{id, label}]
 
+// ---- fuzzy search over a provider's models --------------------------------------
+// "gpt4omini" finds "gpt-4o-mini", "opus5" finds "claude-opus-5": every typed word must appear in order (not
+// necessarily side by side); exact runs, word starts and tight matches rank first.
+function fuzzyOne(token, text) {
+  const at = text.indexOf(token);
+  if (at >= 0) {
+    const boundary = at === 0 || /[^a-z0-9]/.test(text[at - 1]);
+    return { score: 1000 - at + (boundary ? 200 : 0) + token.length * 3, pos: Array.from({ length: token.length }, (_, i) => at + i) };
+  }
+  let from = 0, prev = -2, score = 0;
+  const pos = [];
+  for (const c of token) {
+    const i = text.indexOf(c, from);
+    if (i < 0) return null;
+    score += (i === prev + 1 ? 18 : 0) + (i === 0 || /[^a-z0-9]/.test(text[i - 1]) ? 12 : 0) - Math.min(i - from, 12);
+    pos.push(i);
+    prev = i; from = i + 1;
+  }
+  return { score, pos };
+}
+
+function fuzzyMatch(query, text) {
+  const t = fold(text), tokens = fold(query).split(/\s+/).filter(Boolean);
+  if (!tokens.length) return { score: 0, pos: new Set() };
+  let score = 0;
+  const pos = new Set();
+  for (const token of tokens) {
+    const m = fuzzyOne(token, t);
+    if (!m) return null;
+    score += m.score;
+    m.pos.forEach((i) => pos.add(i));
+  }
+  return { score: score - t.length * 0.2, pos };
+}
+
+function highlight(text, pos) {
+  return [...text].map((ch, i) => (pos.has(i) ? `<mark>${esc(ch)}</mark>` : esc(ch))).join("");
+}
+
 function modelControlHtml(prefix, p, value, defaultModel) {
   const list = modelLists[p.id];
   const refresh = `<button class="link-btn" type="button" data-load-models="${prefix}" title="Fetch the models this provider offers">${list ? "Refresh" : "Load models"}</button>`;
-  if (!list) {
-    return `<input id="${prefix}-model" name="${prefix}_model" type="text" value="${esc(value)}" placeholder="${esc(defaultModel)}" spellcheck="false" autocapitalize="off">${refresh}`;
-  }
-  const ids = list.map((m) => m.id);
-  const options = [`<option value="" ${value === "" ? "selected" : ""}>Default${defaultModel ? ` (${esc(defaultModel)})` : ""}</option>`]
-    .concat(value && !ids.includes(value) ? [`<option value="${esc(value)}" selected>${esc(value)}</option>`] : [])
-    .concat(list.map((m) => `<option value="${esc(m.id)}" ${m.id === value ? "selected" : ""}>${esc(m.label === m.id ? m.id : `${m.label} (${m.id})`)}</option>`));
-  return `<select id="${prefix}-model" name="${prefix}_model">${options.join("")}</select>${refresh}`;
+  return `<div class="combo" data-provider="${esc(p.id)}">
+    <input id="${prefix}-model" name="${prefix}_model" class="combo-input" type="text" value="${esc(value)}" placeholder="${esc(defaultModel)}"
+      role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="${prefix}-model-list" data-default="${esc(defaultModel)}"
+      autocomplete="off" spellcheck="false" autocapitalize="off" ${list ? `title="Type to search ${list.length} models"` : ""}>
+    <ul class="combo-list" id="${prefix}-model-list" role="listbox" hidden></ul></div>${refresh}`;
 }
+
+// The list under a model box: the provider's models that fit what was typed, best first.
+function renderComboList(input, query) {
+  const box = input.closest(".combo"), ul = box.querySelector(".combo-list");
+  const models = modelLists[box.dataset.provider];
+  if (!models) { ul.hidden = true; input.setAttribute("aria-expanded", "false"); return; }
+  const rows = [];
+  for (const m of models) {
+    const shown = m.label === m.id ? m.id : `${m.label} (${m.id})`;
+    const hit = fuzzyMatch(query, shown);
+    if (hit) rows.push({ id: m.id, shown, hit });
+  }
+  if (query.trim()) rows.sort((a, b) => b.hit.score - a.hit.score);
+  const def = input.dataset.default;
+  const items = [...(!query.trim() ? [{ id: "", html: `<b>Default</b>${def ? ` <span class="combo-sub">${esc(def)}</span>` : ""}` }] : []),
+    ...rows.slice(0, 60).map((r) => ({ id: r.id, html: highlight(r.shown, r.hit.pos) }))];
+  ul.innerHTML = items.length
+    ? items.map((it, i) => `<li role="option" class="combo-opt${i === 0 ? " active" : ""}" data-value="${esc(it.id)}" id="${ul.id}-${i}">${it.html}</li>`).join("")
+    : `<li class="combo-empty">No model matches “${esc(query)}”. You can still use it as typed.</li>`;
+  ul.hidden = false;
+  input.setAttribute("aria-expanded", "true");
+  if (!items.length) input.removeAttribute("aria-activedescendant"); else input.setAttribute("aria-activedescendant", `${ul.id}-0`);
+  ul.scrollTop = 0;
+  // a box at the bottom of the scrolling settings pane: scroll so the whole list is in view
+  requestAnimationFrame(() => { if (!ul.hidden) ul.scrollIntoView({ block: "nearest" }); });
+}
+
+function closeCombo(input) {
+  input.closest(".combo")?.querySelector(".combo-list")?.setAttribute("hidden", "");
+  input.setAttribute("aria-expanded", "false");
+  input.removeAttribute("aria-activedescendant");
+}
+
+function moveCombo(input, delta) {
+  const ul = input.closest(".combo").querySelector(".combo-list");
+  const opts = [...ul.querySelectorAll(".combo-opt")];
+  if (!opts.length) return;
+  const at = Math.max(0, opts.findIndex((o) => o.classList.contains("active")));
+  const next = opts[(at + delta + opts.length) % opts.length];
+  opts.forEach((o) => o.classList.toggle("active", o === next));
+  input.setAttribute("aria-activedescendant", next.id);
+  next.scrollIntoView({ block: "nearest" });
+}
+
+function pickCombo(input, value) {
+  input.value = value;
+  closeCombo(input);
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+document.addEventListener("focusin", (e) => { if (e.target.matches?.(".combo-input")) renderComboList(e.target, ""); });
+document.addEventListener("input", (e) => { if (e.target.matches?.(".combo-input")) renderComboList(e.target, e.target.value); });
+document.addEventListener("focusout", (e) => { if (e.target.matches?.(".combo-input")) setTimeout(() => closeCombo(e.target), 120); });
+document.addEventListener("mousedown", (e) => {
+  const opt = e.target.closest?.(".combo-opt");
+  if (!opt) return;
+  e.preventDefault();   // keep the box focused; the pick below closes the list
+  pickCombo(opt.closest(".combo").querySelector(".combo-input"), opt.dataset.value);
+});
+document.addEventListener("keydown", (e) => {
+  const input = e.target.matches?.(".combo-input") ? e.target : null;
+  if (!input) return;
+  const open = !input.closest(".combo").querySelector(".combo-list").hidden;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!open) renderComboList(input, ""); else moveCombo(input, e.key === "ArrowDown" ? 1 : -1);
+  } else if (e.key === "Enter" && open) {
+    e.preventDefault();   // choose, don't save the whole form
+    const active = input.closest(".combo").querySelector(".combo-opt.active");
+    if (active) pickCombo(input, active.dataset.value); else closeCombo(input);
+  } else if (e.key === "Escape" && open) {
+    e.preventDefault(); e.stopPropagation();   // closes the list, not the settings dialog
+    closeCombo(input);
+  }
+}, true);
 
 function renderModelControl(prefix, p, value, defaultModel) {
   const control = $(`#${prefix}-model`)?.closest(".setting-control");
@@ -865,7 +988,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
   const advanced = data.groups.filter((g) => ADVANCED_GROUPS.includes(g.name))
     .flatMap((g) => g.settings).filter((s) => !PROVIDER_ENVS.has(s.env));
   const others = data.groups.filter((g) => !ADVANCED_GROUPS.includes(g.name) && !HIDDEN_GROUPS.includes(g.name));
-  const names = ["AI provider", ...others.map((g) => g.name), "Appearance"];
+  const names = ["AI provider", ...others.map((g) => g.name), "Library", "Appearance"];
   if (!names.includes(settingsTab)) settingsTab = names[0];
   const hasLevel = (list) => list.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
     : list.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
@@ -881,6 +1004,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
     <div class="settings-panel">
       <header class="settings-head">
         <h2>Settings</h2>
+        <label class="settings-search"><span aria-hidden="true">⌕</span><input id="settings-search" type="search" placeholder="Search settings" aria-label="Search settings" autocomplete="off" spellcheck="false"></label>
         <button class="btn close" data-action="close" aria-label="Close">✕</button>
       </header>
       <form id="settings-form" autocomplete="off">
@@ -897,8 +1021,11 @@ function settingsHtml(data, errors = {}, typed = {}) {
               <details class="advanced" ${hasLevel(advanced) ? "open" : ""}><summary>Advanced</summary>
                 ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
             ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
+              ${g.name === "Logging" ? logsHtml() : ""}
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
+            ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
+            <p id="settings-none" class="setting-note" hidden></p>
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>
         </div>
@@ -912,6 +1039,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
 
 function selectSettingsTab(name) {
   settingsTab = name;
+  if (name === "Logging") loadLogs();
   document.querySelectorAll("[data-settings-tab],[data-load-models]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.settingsTab === name)));
   document.querySelectorAll(".settings-section").forEach((s) => { s.hidden = s.dataset.section !== name; });
   $(".settings-content")?.scrollTo({ top: 0 });
@@ -934,7 +1062,19 @@ function applyTheme(theme) {
     const scheme = (m.media.match(/(light|dark)/) || [])[1] || "light";
     m.content = THEME_COLORS[theme === "light" || theme === "dark" ? theme : scheme];
   });
+  installIcons(theme);
 }
+
+// The icon an installed app gets is read when it is added to the home screen, from the manifest and the touch
+// icon, which can't adapt to the colour scheme by themselves: point them at the dark set when the app is dark.
+const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)");
+function installIcons(theme = getTheme()) {
+  const dark = theme === "dark" || (theme !== "light" && !!prefersDark?.matches);
+  const set = (selector, href) => { const el = document.querySelector(selector); if (el && el.getAttribute("href") !== href) el.setAttribute("href", href); };
+  set('link[rel="manifest"]', dark ? "/static/manifest-dark.webmanifest" : "/static/manifest.webmanifest");
+  set('link[rel="apple-touch-icon"]', dark ? "/static/icons/apple-touch-icon-dark.png" : "/static/icons/apple-touch-icon.png");
+}
+prefersDark?.addEventListener?.("change", () => installIcons());
 
 function setTheme(theme) {
   try {
@@ -953,6 +1093,419 @@ function appearanceHtml() {
     [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
       `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${label}</button>`).join("")
   }</div></div></div>`;
+}
+
+// ---- library-wide actions: refresh all metadata, re-analyze all -----------------------------
+
+const bulkScopes = () => {
+  const items = [...state.items.values()].filter((i) => i.status !== "processing" && !i.pending_upload && !i.batch_pending);
+  return { all: items.length, check: items.filter(needsCheck).length, failed: items.filter((i) => i.status === "error").length };
+};
+
+function libraryHtml() {
+  const n = bulkScopes();
+  return `
+    <p class="setting-help" style="margin-top:0">Run one of these on many items at once. Items that are being analyzed right now are left out.</p>
+    <div class="setting"><div class="setting-text"><label for="bulk-scope">Which items</label></div>
+      <div class="setting-control"><select id="bulk-scope">
+        <option value="all">All items (${n.all})</option>
+        <option value="check">Only items to check (${n.check})</option>
+        <option value="failed">Only failed (${n.failed})</option></select></div></div>
+    <div class="bulk-card">
+      <h4>Refresh all metadata</h4>
+      <p>Looks up posters, covers, ratings and related links again. No AI is asked, so it costs nothing, and nothing you edited or confirmed changes.</p>
+      <button class="btn" type="button" data-bulk="refresh">⟳ Refresh metadata</button>
+    </div>
+    <div class="bulk-card">
+      <h4>Re-analyze all</h4>
+      <p>Identifies the items again with your AI provider, which costs money (Claude runs in a batch at half price, so results take a while).</p>
+      <label class="check"><input type="checkbox" id="bulk-skip" checked> Leave out items I corrected or confirmed, because re-analyzing replaces them</label>
+      <button class="btn" type="button" data-bulk="reanalyze">↻ Re-analyze…</button>
+    </div>
+    <div id="bulk-progress" class="bulk-progress" hidden aria-live="polite"></div>`;
+}
+
+// ---- conversation logs (Settings → Logging) -----------------------------------------------------------------------
+
+const OP_LABEL = { analyze: "Analysis", reanalyze: "Re-analysis", correct: "Correction", bulk: "Bulk re-analysis", batch_result: "Claude batch result" };
+let logsFilter = "";
+
+// Logs hold what is in your screenshots, so they need the same access as settings: the setup code, if there's no token.
+async function apiWithSetup(path, opts = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const headers = { ...(opts.headers || {}) };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    try {
+      return await api(path, { ...opts, headers });
+    } catch (e) {
+      let detail = {};
+      try { detail = JSON.parse(e.message); } catch {}
+      if (!(e instanceof HttpError && e.status === 403 && detail.code === "setup_code_required")) throw e;
+      const code = prompt(`${setupCode ? "That setup code didn't match. " : ""}${detail.message}\n\nSetup code:`);
+      if (!code) throw new Error("Cancelled");
+      setupCode = code.trim();
+    }
+  }
+  throw new Error("The setup code didn't match.");
+}
+
+async function fetchLogFile(id, format) {
+  const token = await db.get("kv", "token");
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+  const res = await fetch(`/api/logs/${id}?format=${format}`, { headers, cache: "no-store" });
+  if (!res.ok) throw new Error(res.statusText);
+  return res.blob();
+}
+
+async function saveLogFile(id, format) {
+  try {
+    const blob = await fetchLogFile(id, format);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${id.replace("/", "_")}.${format === "md" ? "md" : "jsonl"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) { toast(`Couldn't download: ${e.message}`); }
+}
+
+function logsHtml() {
+  return `<div id="logs-box" class="logs-box"><p class="meta-line">Loading…</p></div>`;
+}
+
+const fmtBytes = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`;
+
+async function loadLogs() {
+  const box = $("#logs-box");
+  if (!box) return;
+  let res;
+  try {
+    res = await apiWithSetup(`/api/logs?limit=200${logsFilter ? `&operation=${encodeURIComponent(logsFilter)}` : ""}`);
+  } catch (e) {
+    box.innerHTML = `<p class="meta-line">${esc(e.message === "Cancelled" ? "Enter the setup code to see the logs." : `Couldn't load the logs: ${errorMessage(e)}`)} <button class="link-btn" type="button" data-logs-reload>Try again</button></p>`;
+    return;
+  }
+  const rows = res.sessions.map((x) => {
+    const when = new Date(x.started);
+    const ok = x.outcome === "ok" ? "ok" : x.outcome === "queued_for_batch" || x.outcome === "running" ? "" : "bad";
+    return `<button type="button" class="log-row" data-log-open="${esc(x.id)}">
+      <span class="log-when">${esc(when.toLocaleDateString([], { month: "short", day: "numeric" }))} ${esc(when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</span>
+      <span class="log-op">${esc(OP_LABEL[x.operation] || x.operation)}</span>
+      <span class="log-title">${esc(x.title || x.item_id || "—")}</span>
+      <span class="log-model">${esc(x.models.map((m) => m.replace(/^[^:]*:/, "")).join(", ") || "no model call")}${x.cost_usd ? ` · ${esc(formatUsd(x.cost_usd))}` : ""}</span>
+      <span class="pill ${ok}">${esc(x.outcome.replace(/_/g, " "))}</span></button>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="logs-bar">
+      <span class="meta-line">${res.usage.files} session${res.usage.files === 1 ? "" : "s"} · ${esc(fmtBytes(res.usage.bytes))} · ${res.retention_days ? `kept ${res.retention_days} days` : "kept until deleted"}</span>
+      <select id="logs-op" aria-label="Operation"><option value="">All operations</option>${Object.entries(OP_LABEL).map(([k, v]) => `<option value="${k}" ${logsFilter === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+      <button class="btn small" type="button" data-logs-reload>↻ Refresh</button>
+      ${res.usage.files ? `<button class="btn small" type="button" data-logs-clear>Delete all…</button>` : ""}
+    </div>
+    ${res.enabled ? "" : `<p class="setting-note">Logging is off. Turn on “Save conversations with the AI models” above, save, and each analysis from then on is recorded here.</p>`}
+    ${rows ? `<div class="log-list">${rows}</div>` : (res.enabled ? `<p class="meta-line">Nothing recorded yet. Save a screenshot, or re-analyze one.</p>` : "")}
+    <div id="log-detail" class="log-detail" hidden></div>`;
+}
+
+function logEventHtml(e) {
+  const d = new Date(e.t), t = isNaN(d) ? "" : `${d.toLocaleTimeString([], { hour12: false })}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+  const pre = (v) => `<pre>${esc(typeof v === "string" ? v : JSON.stringify(v, null, 1))}</pre>`;
+  const rest = (skip) => Object.fromEntries(Object.entries(e).filter(([k]) => !["t", "event", ...skip].includes(k)));
+  let title = e.event, body = "", open = false;
+  if (e.event === "llm_request") {
+    title = `→ ${e.provider} · ${e.model} (${e.mode})${e.attempt > 1 ? ` · attempt ${e.attempt}` : ""}`;
+    body = `${e.system ? `<h5>System</h5>${pre(e.system)}` : ""}${(e.messages || []).map((m) => `<h5>${esc(m.role)}</h5>${
+      typeof m.content === "string" ? pre(m.content) : (m.content || []).map((c) => c.type === "text" ? pre(c.text)
+        : c.type === "image" ? `<p class="meta-line">🖼 image ${esc(c.media_type || "")} ${esc(c.size || "")} · ${esc(fmtBytes(c.bytes))} · ${esc(c.sha256 || "")}</p>` : pre(c)).join("")}`).join("")}
+      <details><summary>parameters</summary>${pre(rest(["provider", "model", "mode", "system", "messages", "attempt"]))}</details>`;
+  } else if (e.event === "llm_response") {
+    title = `← ${e.provider} · ${e.model}${e.status ? ` · HTTP ${e.status}` : ""}${e.duration_ms != null ? ` · ${e.duration_ms} ms` : ""}${e.error ? " · error" : ""}`;
+    body = `${e.text != null ? pre(e.text) : ""}${e.content != null ? pre(e.content) : ""}${e.error ? `<p class="meta-line">${esc(typeof e.error === "string" ? e.error : JSON.stringify(e.error))}</p>` : ""}
+      <details><summary>usage and headers</summary>${pre(rest(["provider", "model", "text", "content", "status", "duration_ms", "error"]))}</details>`;
+    open = true;
+  } else if (e.event === "decision") {
+    title = `decision · ${(e.what || "").replace(/_/g, " ")}`;
+    body = pre(rest(["what"]));
+    open = true;
+  } else if (e.event === "session_start" || e.event === "session_end") {
+    title = e.event === "session_end" ? `end · ${e.outcome}${e.error ? ` · ${e.error}` : ""}` : "start";
+    body = pre(rest([]));
+  } else {
+    body = pre(rest([]));
+  }
+  return `<details class="log-event ev-${esc(e.event)}" ${open ? "open" : ""}><summary><time>${esc(t)}</time> ${esc(title)}</summary>${body}</details>`;
+}
+
+async function openLog(id) {
+  const box = $("#log-detail");
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = `<p class="meta-line">Loading…</p>`;
+  try {
+    const d = await apiWithSetup(`/api/logs/${id}`);
+    box.innerHTML = `
+      <div class="logs-bar"><h4>${esc(OP_LABEL[d.operation] || d.operation)} · ${esc(d.title || d.item_id || "")}</h4>
+        <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="md">⬇ Transcript (.md)</button>
+        <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="jsonl">⬇ Raw (.jsonl)</button>
+        <button class="btn small" type="button" data-log-delete="${esc(id)}">Delete</button></div>
+      ${d.events.map(logEventHtml).join("")}
+      ${d.files.length ? `<p class="meta-line">Saved images: ${d.files.map((f) => `<a href="#" data-log-image="${esc(id)}/image/${esc(f)}">${esc(f.split(".").slice(-2).join("."))}</a>`).join(", ")}</p>` : ""}`;
+    box.scrollIntoView({ block: "nearest" });
+  } catch (e) { box.innerHTML = `<p class="meta-line">Couldn't open it: ${esc(errorMessage(e))}</p>`; }
+}
+
+async function showLogImage(path) {
+  try {
+    const token = await db.get("kv", "token");
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    const res = await fetch(`/api/logs/${path}`, { headers });
+    if (!res.ok) throw new Error(res.statusText);
+    window.open(URL.createObjectURL(await res.blob()), "_blank");
+  } catch (e) { toast(`Couldn't open the image: ${e.message}`); }
+}
+
+// ---- debug view (server in debug mode) ---------------------------------------------------------------------------
+// The history of conversations with the AI models: for each, the capture that went in, the conversation, the card that
+// came out and the model that was used.
+
+const logImageUrls = new Map();   // log image path -> object URL (the files need the access token, so <img src> can't fetch them)
+
+async function logImageUrl(path) {
+  if (logImageUrls.has(path)) return logImageUrls.get(path);
+  const token = await db.get("kv", "token");
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+  const res = await fetch(`/api/logs/${path}`, { headers });
+  if (!res.ok) throw new Error(res.statusText);
+  const url = URL.createObjectURL(await res.blob());
+  logImageUrls.set(path, url);
+  return url;
+}
+
+// Put the picture in once it has loaded (the rows are rendered before their images arrive).
+function fillLogImages(root) {
+  root.querySelectorAll("img[data-log-img]").forEach(async (img) => {
+    try { img.src = await logImageUrl(img.dataset.logImg); img.hidden = false; } catch { img.closest(".dbg-thumb")?.classList.add("none"); }
+  });
+}
+
+const debugState = { op: "", item: "", id: null };
+
+function modelsOf(x) {
+  const used = (x.used || []).filter((u) => u !== "ocr" && u !== "rules" && u !== "link" && u !== "readability");
+  return used.length ? used.join(" → ") : (x.models || []).join(", ") || "no model";
+}
+
+function debugRowHtml(x) {
+  const when = new Date(x.started);
+  const ok = x.outcome === "ok" ? "ok" : x.outcome === "queued_for_batch" || x.outcome === "running" ? "" : "bad";
+  const input = x.input || {};
+  const thumb = input.file ? `<img data-log-img="${esc(x.id)}/image/${esc(input.file)}" alt="" hidden>` : "";
+  const sub = input.kind === "url" ? (input.source_url || "").replace(/^https?:\/\/(www\.)?/, "") : "screenshot";
+  return `<button type="button" class="dbg-row ${debugState.id === x.id ? "active" : ""}" data-debug-open="${esc(x.id)}">
+    <span class="dbg-thumb">${thumb}<i>${input.kind === "url" ? "🔗" : "🖼"}</i></span>
+    <span class="dbg-main"><b>${esc((x.card && x.card.title) || x.title || sub || x.item_id || "—")}</b>
+      <small>${esc(OP_LABEL[x.operation] || x.operation)} · ${esc(when.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</small>
+      <small class="dbg-model">${esc(modelsOf(x))}${x.cost_usd ? ` · ${esc(formatUsd(x.cost_usd))}` : ""}</small></span>
+    <span class="pill ${ok}">${esc(x.outcome.replace(/_/g, " "))}</span></button>`;
+}
+
+async function showDebug(opts = {}) {
+  if (opts.item !== undefined) debugState.item = opts.item || "";
+  const dlg = $("#detail");
+  dlg.dataset.id = "";
+  dlg.innerHTML = `<div class="debug-panel" data-view="list"><button class="btn close" data-action="close" aria-label="Close">✕</button>
+    <header class="dbg-head"><h2>Debug · conversations</h2>
+      <select id="dbg-op" aria-label="Operation"><option value="">All operations</option>${Object.entries(OP_LABEL).map(([k, v]) => `<option value="${k}" ${debugState.op === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+      ${debugState.item ? `<button class="btn small" type="button" data-debug-clear-item>Only this item ✕</button>` : ""}
+      <button class="btn small" type="button" data-debug-refresh>↻</button></header>
+    <div class="dbg-body"><div id="dbg-list" class="dbg-list"><p class="meta-line">Loading…</p></div>
+      <div id="dbg-detail" class="dbg-detail"><p class="meta-line">Pick a conversation to see what went in, what was said and what came out.</p></div></div></div>`;
+  if (!dlg.open) dlg.showModal();
+  await loadDebugList();
+  if (opts.open) openDebug(opts.open);
+}
+
+async function loadDebugList() {
+  const list = $("#dbg-list");
+  if (!list) return;
+  try {
+    const q = new URLSearchParams({ limit: "200" });
+    if (debugState.op) q.set("operation", debugState.op);
+    if (debugState.item) q.set("item", debugState.item);
+    const res = await apiWithSetup(`/api/logs?${q}`);
+    if (!res.debug && !res.enabled) { list.innerHTML = `<p class="meta-line">The server isn't recording conversations. Turn on Debug mode in Settings → Logging.</p>`; return; }
+    list.innerHTML = res.sessions.length ? res.sessions.map(debugRowHtml).join("")
+      : `<p class="meta-line">No conversations yet. Save a screenshot or a link, or re-analyze an item, and it shows up here.</p>`;
+    fillLogImages(list);
+  } catch (e) {
+    list.innerHTML = `<p class="meta-line">${esc(e.message === "Cancelled" ? "Enter the setup code to see the history." : `Couldn't load it: ${errorMessage(e)}`)} <button class="link-btn" type="button" data-debug-refresh>Try again</button></p>`;
+  }
+}
+
+function debugCardHtml(card) {
+  if (!card) return `<p class="meta-line">No card was produced (it ended before a result).</p>`;
+  const item = { ...card, image_url: card.image_url, status: card.status || "ready" };
+  const facts = [["Category", card.category && typeName(card.category)], ["Confidence", card.confidence != null && `${card.confidence}%`],
+    ["Verified", card.verified != null && (card.verified ? "yes" : "no")], ["Link", card.canonical_url], ["Image", card.image_url],
+    ["Sources", (card.metadata?.sources || []).join(" → ")], ["Why", card.confidence_reason]].filter(([, v]) => v);
+  return `<div class="dbg-card"><article class="card ${esc(item.status)}">${coverHtml(item)}
+      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div></div></article>
+    <dl>${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${/^https?:/.test(String(v)) ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>` : esc(v)}</dd>`).join("")}</dl></div>
+    ${card.summary ? `<p class="meta-line">${esc(card.summary)}</p>` : ""}
+    <details><summary>Everything on the card</summary><pre>${esc(JSON.stringify(card, null, 1))}</pre></details>`;
+}
+
+async function openDebug(id) {
+  debugState.id = id;
+  document.querySelectorAll(".dbg-row").forEach((r) => r.classList.toggle("active", r.dataset.debugOpen === id));
+  const panel = $(".debug-panel"), box = $("#dbg-detail");
+  if (!box) return;
+  panel.dataset.view = "detail";
+  box.innerHTML = `<p class="meta-line">Loading…</p>`;
+  let d;
+  try { d = await apiWithSetup(`/api/logs/${id}`); } catch (e) { box.innerHTML = `<p class="meta-line">Couldn't open it: ${esc(errorMessage(e))}</p>`; return; }
+  const input = d.input || {}, start = d.events.find((e) => e.event === "session_start") || {};
+  const ocr = d.events.find((e) => e.event === "ocr");
+  const reqs = d.events.filter((e) => e.event === "llm_request");
+  const models = [...new Set(reqs.map((e) => `${PROVIDER_NAMES[e.provider] || e.provider} · ${e.model}`))];
+  const live = state.items.has(d.item_id);
+  box.innerHTML = `
+    <div class="dbg-back"><button class="btn small" type="button" data-debug-back>← History</button>
+      <b>${esc(OP_LABEL[d.operation] || d.operation)}</b> <span class="meta-line">${esc(new Date(d.started).toLocaleString())}</span>
+      <span class="pill ${d.outcome === "ok" ? "ok" : d.outcome === "queued_for_batch" ? "" : "bad"}">${esc(d.outcome.replace(/_/g, " "))}</span>
+      ${live ? `<button class="btn small" type="button" data-open-item="${esc(d.item_id)}">Open the item</button>` : ""}
+      <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="md">⬇ .md</button>
+      <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="jsonl">⬇ .jsonl</button></div>
+    <section class="dbg-model-box"><h3>Model used</h3>
+      <p><b>${esc(models.join("  →  ") || "no model call")}</b></p>
+      <p class="meta-line">${d.used ? `Answer path: ${esc(d.used.join(" → "))}. ` : ""}${reqs.length} call${reqs.length === 1 ? "" : "s"}${d.duration_ms != null ? ` · ${(d.duration_ms / 1000).toFixed(1)} s` : ""}${d.cost_usd ? ` · ${esc(formatUsd(d.cost_usd))}` : ""}${start.escalate_below != null && start.analyzer === "hybrid" ? ` · hybrid, escalates below ${start.escalate_below}%` : ""}${d.error ? ` · ${esc(d.error)}` : ""}</p></section>
+    <section><h3>Input</h3>
+      ${input.kind === "url" ? `<p><a href="${esc(input.source_url)}" target="_blank" rel="noopener noreferrer">${esc(input.source_url)}</a></p>`
+        : input.file ? `<img class="dbg-input" data-log-img="${esc(id)}/image/${esc(input.file)}" alt="The screenshot that was analyzed" hidden>`
+        : `<p class="meta-line">The screenshot wasn't kept (turn on “Keep the screenshots in the logs”, or Debug mode).</p>`}
+      ${input.note ? `<p class="meta-line">Your note: ${esc(input.note)}</p>` : ""}
+      ${start.previous && start.previous.title && d.operation !== "analyze" ? `<p class="meta-line">Before: ${esc(start.previous.title)} (${esc(start.previous.category || "?")}, ${esc(start.previous.confidence ?? "?")}%)</p>` : ""}
+      ${ocr && ocr.text ? `<details><summary>OCR text (${ocr.lines} lines)</summary><pre>${esc(ocr.text)}</pre></details>` : ""}</section>
+    <section><h3>Conversation</h3>${d.events.filter((e) => !["card", "ocr"].includes(e.event)).map(logEventHtml).join("")}</section>
+    <section><h3>Output card</h3>${debugCardHtml(d.card)}</section>`;
+  fillLogImages(box);
+  box.scrollTop = 0;
+}
+
+let bulkTimer = null;
+const BULK_LABEL = { refresh: "Refreshing metadata", reanalyze: "Re-analyzing" };
+
+async function pollBulk() {
+  clearTimeout(bulkTimer);
+  const box = $("#bulk-progress");
+  if (!box) return;   // the settings dialog was closed
+  let st;
+  try { st = await api("/api/bulk", { timeout: 8000 }); } catch { return; }
+  if (st.running) {
+    const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    box.hidden = false;
+    box.innerHTML = `<div class="row-between"><b>${BULK_LABEL[st.kind] || "Working"}: ${st.done} of ${st.total}${st.failed ? ` · ${st.failed} failed` : ""}</b>
+      <button class="btn small" type="button" data-bulk-cancel>Stop</button></div><div class="gauge"><i style="width:${pct}%"></i></div>`;
+    bulkTimer = setTimeout(pollBulk, 1500);
+  } else if (st.total && st.finished && Date.now() / 1000 - st.finished < 600) {
+    box.hidden = false;
+    box.innerHTML = `<b>${st.cancelled ? "Stopped" : "Done"}: ${st.done} of ${st.total} ${st.kind === "refresh" ? "refreshed" : "sent for analysis"}${st.failed ? `, ${st.failed} failed` : ""}.</b>
+      ${st.kind === "reanalyze" ? `<p class="meta-line" style="margin:4px 0 0">Claude batches can take up to an hour; the library updates by itself.</p>` : ""}`;
+    requestSync();
+    refreshCostPill(true);
+  } else {
+    box.hidden = true;
+  }
+}
+
+async function startBulk(kind) {
+  const scope = $("#bulk-scope").value, n = bulkScopes()[scope];
+  if (!n) return toast("Nothing to do for that choice.");
+  const skip = kind === "reanalyze" && $("#bulk-skip").checked;
+  const per = state.usage?.per_screenshot_usd;
+  const ok = kind === "refresh"
+    ? confirm(`Refresh metadata for ${n} item${n > 1 ? "s" : ""}? It looks things up again and doesn't use your AI provider.`)
+    : confirm(`Re-analyze ${n} item${n > 1 ? "s" : ""} with your AI provider?${per ? `\n\nThat costs about ${formatUsd(n * per)} at your average so far.` : "\n\nThis uses your AI provider and costs money."}${skip ? "\nItems you corrected or confirmed are skipped." : "\nItems you corrected or confirmed will be replaced."}`);
+  if (!ok) return;
+  const body = JSON.stringify({ scope, skip_confirmed: skip });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+      await api(`/api/bulk/${kind === "refresh" ? "refresh-metadata" : "reanalyze"}`, { method: "POST", headers, body });
+      return pollBulk();
+    } catch (e) {
+      let detail = {};
+      try { detail = JSON.parse(e.message); } catch {}
+      if (e instanceof HttpError && e.status === 403 && detail.code === "setup_code_required") {
+        const code = prompt(`${setupCode ? "That setup code didn't match. " : ""}${detail.message}\n\nSetup code:`);
+        if (!code) return toast("Not started.");
+        setupCode = code.trim();
+        continue;
+      }
+      return toast(e instanceof HttpError && e.status === 409 ? "A library job is already running." : `Couldn't start: ${errorMessage(e)}`);
+    }
+  }
+}
+
+async function cancelBulk() {
+  const headers = {};
+  if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+  try { await api("/api/bulk/cancel", { method: "POST", headers }); toast("Stopping after the items in progress…"); } catch (e) { toast(`Couldn't stop: ${errorMessage(e)}`); }
+}
+
+// ---- search in settings: type part of a name, in any order ("tmdb key", "budget", "escal conf") --------
+
+// A word matches a setting's name loosely (letters in order, close together: "mnthly bdget" finds "Monthly budget")
+// and its description only as written, so a long description doesn't match every short word.
+function settingMatches(query, name, help) {
+  const n = fold(name), h = fold(help);
+  return fold(query).split(/\s+/).filter(Boolean).every((token) => {
+    const m = fuzzyOne(token, n);
+    if (m) return token.length < 3 && !n.includes(token) ? false : (m.pos.at(-1) - m.pos[0] + 1) <= token.length * 2 + 1;
+    return h.includes(token);
+  });
+}
+
+function searchSettings(query) {
+  const root = $(".settings-content");
+  if (!root) return;
+  const q = query.trim();
+  const sections = [...root.querySelectorAll(".settings-section")];
+  root.querySelectorAll(".search-hit").forEach((el) => el.classList.remove("search-hit", "search-miss"));
+  root.querySelectorAll(".search-miss").forEach((el) => el.classList.remove("search-miss"));
+  $("#settings-none").hidden = true;
+  if (!q) {   // back to the normal, one-section view
+    root.classList.remove("searching");
+    selectSettingsTab(settingsTab);
+    return;
+  }
+  root.classList.add("searching");
+  document.querySelectorAll("[data-settings-tab]").forEach((b) => b.setAttribute("aria-selected", "false"));
+  let total = 0;
+  for (const sec of sections) {
+    sec.hidden = false;
+    let hits = 0;
+    for (const row of sec.querySelectorAll(".setting, .bulk-card")) {
+      const hidden = row.closest("[hidden]") !== sec && row.closest("[hidden]");   // e.g. the local-server block in non-hybrid mode
+      const env = (row.querySelector("[id^='set-']")?.id || row.querySelector("[name]")?.name || "").replace(/^set-/, "");
+      const name = `${row.querySelector("label, h4")?.textContent || ""} ${env} ${sec.dataset.section}`;
+      const hit = !hidden && settingMatches(q, name, row.querySelector(".setting-help, p")?.textContent || "");
+      row.classList.toggle("search-miss", !hit);
+      if (hit) { hits++; row.closest("details")?.setAttribute("open", ""); }
+    }
+    // notes and the section heading only matter where something matched
+    sec.classList.toggle("search-miss", !hits);
+    total += hits;
+  }
+  const none = $("#settings-none");
+  none.hidden = total > 0;
+  none.textContent = `No setting matches “${q}”.`;
 }
 
 let settingsData = null;
@@ -977,6 +1530,7 @@ async function showSettings(errors = {}, typed = {}) {
   }
   dlg.innerHTML = settingsHtml(settingsData, errors, typed);
   if (!dlg.open) dlg.showModal();
+  pollBulk();   // a library job started earlier shows its progress
   if ($("#provider-form")) {
     const shown = settingsData.providers.find((x) => x.id === $("#ot-provider").value);
     $("#ot-provider").dataset.shown = shown.id;
@@ -1059,6 +1613,7 @@ async function putSettings(changes) {
   const firstToken = (changes.MAGPIE_API_TOKEN || "").split(/[,\s]+/).find(Boolean);
   if (firstToken) await setToken(firstToken);
   state.server = settingsData.status;
+  render();   // e.g. a new verification threshold changes which cards need checking
   renderServerStatus();
   renderSyncStatus();
   if (!(settingsData.notices || []).length) toast("Settings saved.");
@@ -1081,7 +1636,7 @@ function hostOf(url) {
 }
 
 function searchBlob(item) {
-  const parts = [item.title, item.subtitle, item.summary, item.note, item.category, item.source_platform, ...(item.tags || [])];
+  const parts = [item.title, item.subtitle, item.summary, item.note, item.category, item.source_platform, ...(item.tags || []), ...(item.related || []).map((r) => r.label)];
   const walk = (v) => {
     if (Array.isArray(v)) v.forEach(walk);
     else if (v && typeof v === "object") Object.values(v).forEach(walk);
@@ -1093,8 +1648,13 @@ function searchBlob(item) {
 }
 
 // Ready items that no metadata source (TMDB, GitHub, ...) confirmed and the user hasn't corrected.
-const isUnverified = (item) => item.status === "ready" && !(item.verified ?? item.corrected);
-const needsCheck = (item) => item.needs_review || isUnverified(item);
+// Worked out here from the item's own fields (same rule as the server), so items saved before the rule existed or changed are judged too.
+const VERIFYING_SOURCES = new Set(["github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm", "huggingface"]);
+const verifiedFrom = () => state.server?.verified_confidence ?? 90;   // the user's threshold (Settings → Verification)
+const isVerified = (item) => !!item.corrected || !!item.confirmed || (item.confidence ?? 0) >= verifiedFrom() || (item.metadata?.sources || []).some((x) => VERIFYING_SOURCES.has(x));
+const isUnverified = (item) => item.status === "ready" && !isVerified(item);
+// A failed analysis needs the user too: retry it, or fix it by hand.
+const needsCheck = (item) => item.status === "error" || item.needs_review || isUnverified(item);
 
 // "#tag" words in the search box are tag filters, the rest is text.
 function searchTerms() {
@@ -1136,11 +1696,101 @@ function formatUsd(v) {
   return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
 }
 
+// ---- model limits --------------------------------------------------------------
+// What each provider/model in use has left, and a model that hit its limit with when it's back.
+
+const LIMIT_KINDS = [["requests", "Requests"], ["requests_minute", "Requests"], ["tokens", "Tokens"], ["input_tokens", "Input tokens"], ["output_tokens", "Output tokens"]];
+const REASON_TEXT = { "rate limit": "rate limit", "daily quota": "daily quota", credit: "credit or billing quota" };
+
+function clockTime(iso) {
+  const d = new Date(iso), today = new Date().toDateString() === d.toDateString();
+  return d.toLocaleString([], today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+// "in 40s", "in 12 min", "at 14:05", "at Thu 09:00"
+function untilText(iso) {
+  const secs = (Date.parse(iso) - Date.now()) / 1000;
+  if (!(secs > 0)) return "now";
+  if (secs < 90) return `in ${Math.ceil(secs)}s`;
+  if (secs < 3600) return `in ${Math.round(secs / 60)} min`;
+  return `at ${clockTime(iso)}`;
+}
+
+const modelLabel = (r) => `${PROVIDER_NAMES[r.provider] || r.provider}${r.model ? ` · ${r.model.replace(/^models\//, "")}` : ""}`;
+const isPaused = (r) => r.blocked_until && Date.parse(r.blocked_until) > Date.now();
+
+function lowestBucket(r) {
+  let best = null;
+  for (const [k, label] of LIMIT_KINDS) {
+    const b = r[k];
+    if (b && b.limit && b.remaining != null && (!best || b.remaining / b.limit < best.b.remaining / best.b.limit)) best = { k, label, b };
+  }
+  return best;
+}
+
+function bucketPer(k, b) { return b.per ? ` per ${b.per}` : k === "requests_minute" ? " per minute" : ""; }
+
+function limitRowHtml(r) {
+  const paused = isPaused(r);
+  const status = paused ? `<span class="pill bad" title="Paused until ${esc(clockTime(r.blocked_until))}">Limit reached · back ${esc(untilText(r.blocked_until))}</span>`
+    : r.low ? `<span class="pill warn">Running low</span>` : `<span class="pill ok">OK</span>`;
+  const bars = LIMIT_KINDS.filter(([k]) => r[k] && r[k].remaining != null).map(([k, label]) => {
+    const b = r[k], share = b.limit ? Math.max(0, Math.min(1, b.remaining / b.limit)) : null;
+    const n = (v) => Number(v).toLocaleString();
+    return `<div class="limit-bucket"><span>${esc(label + bucketPer(k, b))}</span>
+      ${share != null ? `<span class="bar2 ${share < 0.1 ? "low" : ""}"><i style="width:${(share * 100).toFixed(1)}%"></i></span>` : "<span></span>"}
+      <b>${esc(n(b.remaining))}${b.limit ? ` of ${esc(n(b.limit))}` : ""} left</b>
+      <small>${b.reset_at ? `resets ${esc(untilText(b.reset_at))}` : ""}</small></div>`;
+  }).join("");
+  const credit = r.credit && r.credit.remaining != null ? `<div class="meta-line">$${Number(r.credit.remaining).toFixed(2)} credit left${r.credit.limit ? ` of $${Number(r.credit.limit).toFixed(2)}` : ""}</div>` : "";
+  const note = paused ? `<div class="meta-line">Hit its ${esc(REASON_TEXT[r.blocked_reason] || r.blocked_reason)}. Magpie doesn't call it until ${esc(clockTime(r.blocked_until))}; screenshots saved meanwhile are retried automatically then.</div>`
+    : r.estimated ? `<div class="meta-line">Estimated from the provider's published free-tier limits and the requests Magpie made. On a paid tier? Set yours with MAGPIE_RATE_LIMITS.</div>` : "";
+  return `<div class="limit-row ${paused ? "paused" : r.low ? "low" : ""}"><div class="limit-head"><b>${esc(modelLabel(r))}</b>${r.current ? ' <span class="pill">in use</span>' : ""} ${status}</div>
+    ${bars || (credit ? "" : `<div class="meta-line">Nothing reported yet: it appears after the next analysis or a key test.</div>`)}${credit}${note}</div>`;
+}
+
 function limitsPanel(c) {
-  const rows = Object.entries(c.limits || {}).map(([id, l]) => `<div><span>${esc(PROVIDER_NAMES[id] || id)}</span><b>${esc(limitsText(l) || "—")}</b></div>`).join("");
-  return `<h3>What's left</h3>${rows ? `<div class="funnel">${rows}</div>`
+  const rows = Array.isArray(c.limits) ? c.limits : [];
+  return `<h3>What's left</h3>${rows.length ? `<div class="limit-list">${rows.map(limitRowHtml).join("")}</div>`
     : `<p class="meta-line">Providers report their remaining rate limits (and, for OpenRouter, credit) with each answer. Nothing seen yet: it appears after the next analysis or a key test. Billing balances aren't available from any provider's API.</p>`}`;
 }
+
+// The header warning: a model in use that hit its limit (and when it's back), or is about to.
+function renderLimitPill() {
+  const b = $("#limit-pill");
+  if (!b) return;
+  const rows = (state.limits?.models || []).filter((r) => r.current);
+  const paused = rows.find(isPaused);
+  const low = !paused && rows.find((r) => r.low);
+  if (!paused && !low) { b.hidden = true; return; }
+  const waiting = state.limits?.waiting || 0;
+  if (paused) {
+    b.className = "pill-btn limit-pill paused";
+    b.innerHTML = `<span aria-hidden="true">⏳</span><span class="lp-text">${esc(PROVIDER_NAMES[paused.provider] || paused.provider)}<span class="lp-mid"> limit · back</span> ${esc(untilText(paused.blocked_until))}</span>`;
+    b.title = `${modelLabel(paused)} reached its ${REASON_TEXT[paused.blocked_reason] || paused.blocked_reason}. Available again ${untilText(paused.blocked_until)} (${clockTime(paused.blocked_until)}).`
+      + (waiting ? ` ${waiting} item${waiting > 1 ? "s" : ""} will be retried automatically then.` : "") + " Click for details.";
+  } else {
+    const lb = lowestBucket(low);
+    b.className = "pill-btn limit-pill low";
+    b.innerHTML = `<span aria-hidden="true">⚠</span><span class="lp-text">${esc(PROVIDER_NAMES[low.provider] || low.provider)}: ${esc(Number(lb.b.remaining).toLocaleString())} ${esc(lb.label.toLowerCase())} left</span>`;
+    b.title = `${modelLabel(low)} is close to its limit: ${lb.b.remaining} of ${lb.b.limit} ${lb.label.toLowerCase()}${bucketPer(lb.k, lb.b)} left${lb.b.reset_at ? `, resets ${untilText(lb.b.reset_at)}` : ""}. Click for details.`;
+  }
+  b.hidden = false;
+}
+
+let limitsAt = 0;
+async function refreshLimits(force = false) {
+  if (!force && Date.now() - limitsAt < 30000) return;
+  limitsAt = Date.now();
+  try { state.limits = await api("/api/limits", { timeout: 8000 }); } catch { return; }   // older server, or offline
+  renderLimitPill();
+}
+// Keep the countdown current, and look again once a pause should be over.
+setInterval(() => {
+  renderLimitPill();
+  const due = (state.limits?.models || []).some((r) => r.blocked_until && Date.parse(r.blocked_until) <= Date.now());
+  if (due) refreshLimits(true);
+}, 15000);
 
 const PROVIDER_NAMES = { claude: "Claude", openai: "OpenAI", gemini: "Gemini", openrouter: "OpenRouter", groq: "Groq" };
 const providerName = (c) => PROVIDER_NAMES[c.provider] || "Claude";
@@ -1250,6 +1900,7 @@ async function showUsage(days = 30) {
 function cardTitle(item) {
   if (item.title) return item.title;
   if (item.batch_pending) return "Queued for analysis (batch)";
+  if (item.status === "error" && item.retry_at) return "Waiting for the AI model's limit";
   return { queued: "Waiting to upload", processing: "Analyzing screenshot…", error: "Couldn't identify — open to retry" }[item.status] || "Untitled";
 }
 
@@ -1270,7 +1921,7 @@ function renderFilters() {
   for (const i of items) counts[tabOf(i)] = (counts[tabOf(i)] || 0) + 1;
   if (state.tab !== "all" && !counts[state.tab]) state.tab = "all";
   $("#tabs").innerHTML = TABS.filter((t) => t.id === "all" || counts[t.id]).map((t) => `
-    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${t.cats[0]}">${typeIcon(t.cats[0])}</span>` : ""}${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
+    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${themeOf(t.cats[0])}">${typeIcon(themeOf(t.cats[0]))}</span>` : ""}${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
   const check = items.filter(needsCheck).length;
   $("#check-count").textContent = check || "";
   document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
@@ -1283,44 +1934,84 @@ function renderFilters() {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 80).map(([t, n]) => `
     <button class="chip ${state.tags.includes(t) ? "active" : ""}" type="button" data-tag="${esc(t)}" aria-pressed="${state.tags.includes(t)}">#${esc(t)} <span class="count">${n}</span></button>`).join("")
     || `<span class="hint">No tags yet. Add them from an item's details.</span>`;
-  $("#tag-btn").textContent = state.tags.length ? `# Tags · ${state.tags.length}` : "# Tags";
+  $("#tag-btn").innerHTML = `#<span class="lbl"> Tags</span>${state.tags.length ? `<span class="count tagn">${state.tags.length}</span>` : ""}`;
 }
 
-const initialsOf = (item) => {
-  const text = item.title || hostOf(item.source_url) || "";
-  return text.replace(/[^\p{L}\p{N} ]/gu, "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "·";
-};
+// The title set on a generated cover, like a book jacket: repos show the owner small above the name.
+function coverTitleHtml(item) {
+  const text = item.title || hostOf(item.source_url) || cardTitle(item);
+  const repo = item.category === "github_repo" && /^[^/\s]+\/[^/\s]+$/.test(text) ? text.split("/") : null;
+  const main = repo ? repo[1] : text;
+  // Two lines at most. Short titles are set big; longer ones smaller so that they fit two lines (a very long one is
+  // cut with an ellipsis, and the full title is right under the card). The longest word must fit a line unbroken
+  // (bold ≈ 0.72em a letter, 86% of the cover's width available).
+  const longest = Math.max(...main.split(/[\s/_-]+/).map((w) => w.length), 1);
+  const fitTwoLines = (2 * 86) / (0.68 * (main.length + 3));
+  const size = Math.max(6, Math.min(17, fitTwoLines, 86 / (0.72 * longest))).toFixed(1);
+  const lines = 2;
+  return `<span class="cover-title" style="--fs:${size}cqw;--lines:${lines}" aria-hidden="true">${repo ? `<small>${esc(repo[0])}/</small>${esc(repo[1])}` : esc(text)}</span>`;
+}
 
 // The picture area of a card: the real poster/cover/header when there is one, else a cover themed for the type.
+// Pictures that failed to load in this browser (hotlink protection, gone): shown as the themed cover instead.
+const brokenImages = new Set();
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.classList.contains("cover-img")) return;
+  brokenImages.add(img.getAttribute("src"));
+  img.closest(".cover")?.classList.remove("has-img", "wide-img", "logo-img");
+  img.remove();
+}, true);
+
 function coverHtml(item, { chip = true } = {}) {
-  const pic = safeUrl(item.image_url);   // a real poster, cover or header; your own screenshot lives under "Original"
-  const wide = !!safeUrl(item.image_url) && WIDE_CATEGORIES.has(item.category);
+  // a real poster, cover or header; your own screenshot lives under "Original"
+  const pic = safeUrl(item.image_url) && !brokenImages.has(safeUrl(item.image_url)) ? safeUrl(item.image_url) : null;
+  // only the site's logo (no picture of the article): shown whole on a tile, with the title still on the cover
+  const logo = !!pic && item.metadata?.image_kind === "logo";
+  const wide = !!pic && !logo && WIDE_CATEGORIES.has(item.category);
   const busy = ["queued", "processing"].includes(item.status) || item.batch_pending || item.pending_upload;
-  const flag = item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
+  const flag = item.status === "error" && item.retry_at ? `<span class="flag warn" title="The AI model hit its limit; retried automatically ${esc(untilText(item.retry_at))}">⏳</span>`
+    : item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
-  const label = item.status === "error" ? "Failed" : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
-  return `<div class="cover t-${esc(item.category || "other")} ${pic ? (wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
-    pic ? `<span class="cover-img" style="background-image:url('${esc(pic)}')"></span>` : ""}${
-    pic && !wide ? "" : `${typeIcon(item.category || "other", "glyph")}<span class="mono">${esc(initialsOf(item))}</span>`}${
-    chip ? `<span class="typechip">${typeIcon(item.category || "other")}${esc(label)}</span>` : ""}${flag}</div>`;
+  const label = item.status === "error" ? (item.retry_at ? "Waiting" : "Failed") : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
+  return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
+    // the themed cover sits underneath, so it shows if the picture never loads
+    `${typeIcon(themeOf(item.category), "glyph")}${coverTitleHtml(item)}`}${
+    // no-referrer: many sites refuse images to pages on other sites but serve them without a Referer
+    pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
+    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
 }
 
 function cardMeta(item) {
+  if (item.status === "error" && item.retry_at) return `Waiting for limit · retry ${untilText(item.retry_at)}`;
   if (item.status !== "ready") return item.status === "error" ? "Open to retry" : item.pending_upload ? "Saved on this device" : "Working on it…";
   return [typeName(item.category), ...cardFacts(item).slice(0, 2)].join(" · ");
 }
+
+// How many columns fit: up to 4 on a phone (a card needs room to be read), 8 on a wide screen.
+const maxColumns = () => (window.innerWidth < 760 ? 4 : 8);
+window.addEventListener("resize", () => { if (state.cols) renderGrid(); });
 
 function renderGrid() {
   const items = filteredItems();
   $("#empty").hidden = items.length > 0;
   const filtered = state.q || state.tab !== "all" || state.show !== "all" || state.tags.length;
   $("#empty").textContent = filtered ? "Nothing matches. Clear the search or switch tabs." : "Nothing here yet. Tap + Add, or paste a screenshot or link.";
-  $("#grid").className = `grid ${state.layout === "list" ? "list" : ""}`;
+  const cols = Math.min(state.cols, maxColumns());
+  $("#grid").className = `grid ${state.layout === "list" ? "list" : cols ? `cols${cols >= 6 ? " dense" : ""}` : ""}`;
+  $("#grid").style.setProperty("--cols", cols || "");
+  $("#cols-ctl").hidden = state.layout === "list";
+  const pick = $("#cols-select");   // Auto, then 1 up to what fits this screen
+  const max = maxColumns();
+  const wanted = ["0", ...Array.from({ length: max }, (_, i) => String(i + 1))];
+  if (pick.options.length !== wanted.length) pick.innerHTML = wanted.map((v) => `<option value="${v}">${v === "0" ? "Auto" : v}</option>`).join("");
+  pick.value = String(cols);
   $("#grid").innerHTML = items.map((item) => `
     <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
-      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div></div>
+      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div>${item.status === "ready" && item.usage?.model ? `<div class="by-model" title="Resolved by ${esc(item.usage.model)}">${esc(item.usage.model)}</div>` : ""}</div>
+      ${isUnverified(item) ? `<button class="verify-btn" type="button" data-verify="${esc(item.id)}" title="Mark this identification as correct">✓ Verify</button>` : ""}
     </article>`).join("");
 
   const active = [];
@@ -1387,6 +2078,7 @@ function scoresHtml(m) {
 }
 
 function statusHtml(item) {
+  if (item.status === "error" && item.retry_at) return `<div class="error-box waiting">⏳ ${esc(item.error)} Next try ${esc(untilText(item.retry_at))}.</div>`;
   if (item.status === "error") return `<div class="error-box">Analysis failed: ${esc(item.error)}</div>`;
   if (item.pending_upload) return `<div class="meta-line">⏳ Saved on this device. It will be ${item.kind === "url" ? "looked up" : "uploaded and identified"} when the server is reachable.</div>`;
   if (item.batch_pending) return `<div class="meta-line">⏳ Queued for Claude batch processing (half price). Usually done within minutes to an hour, at most 24 h.</div>`;
@@ -1409,6 +2101,7 @@ function confidenceHtml(item, { fixButton = true } = {}) {
         ${fixButton ? `<button class="btn small" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
       </div>
       ${item.confidence_reason && !item.corrected ? `<div class="meta-line">${esc(item.confidence_reason)}</div>` : ""}
+      ${item.usage?.model ? `<div class="meta-line resolved-by">Resolved by ${esc(item.usage.model)}</div>` : ""}
       ${alts.length && !item.corrected ? `<div class="alternatives"><span class="meta-line">Did you mean:</span>
         ${alts.map((a, i) => `<button class="chip" data-alt="${i}" title="${esc(a.why || "")}">${esc(a.title)}${a.year ? ` (${esc(a.year)})` : ""} · ${esc((CATEGORY_LABELS[a.category] || a.category || "").replace(/^\S+ /, ""))}</button>`).join("")}
       </div>` : ""}
@@ -1447,6 +2140,18 @@ function orderedFacts(item) {
   return shown.sort((a, b) => rank(a[0]) - rank(b[0]));
 }
 
+// Things connected to this item that are worth a look: the repository an article describes, an app's homepage, the company behind it.
+const REL_KIND = { repo: "Repo", package: "Package", app: "App", paper: "Paper", company: "Company", docs: "Docs", video: "Video", reference: "Reference", site: "Site" };
+function relatedHtml(item) {
+  const rows = (item.related || []).filter((r) => safeUrl(r.url));
+  if (!rows.length) return "";
+  return `<section><h3>Related</h3><ul class="related">${rows.map((r) => `
+    <li><a class="rel" href="${esc(safeUrl(r.url))}" target="_blank" rel="noopener"${r.why ? ` title="${esc(r.why)}"` : ""}>
+      <span class="rel-kind">${esc(REL_KIND[r.kind] || "Link")}</span>
+      <span class="rel-main"><b>${esc(r.label)}</b><small>${esc(hostOf(r.url))}${r.why ? ` · ${esc(r.why)}` : ""}</small></span>
+      <span class="rel-go" aria-hidden="true">↗</span></a></li>`).join("")}</ul></section>`;
+}
+
 function originalHtml(item) {
   const shot = screenshotFor(item);
   const link = item.kind === "url" ? safeUrl(item.source_url) : null;
@@ -1470,7 +2175,7 @@ function renderDetail(item) {
   const canonical = safeUrl(item.canonical_url);
   const facts = orderedFacts(item);
   const links = (item.links || []).filter((l) => safeUrl(l.url));
-  const metaLine = `<span class="eyebrow-type t-${esc(item.category || "other")}">${typeIcon(item.category || "other")}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
+  const metaLine = `<span class="eyebrow-type t-${themeOf(item.category)}">${typeIcon(themeOf(item.category))}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
 
   const dlg = $("#detail");
   dlg.dataset.id = item.id;
@@ -1481,9 +2186,9 @@ function renderDetail(item) {
   const about = [item.summary, m.description && m.description !== item.summary && m.description !== item.subtitle ? m.description : null].filter(Boolean);
   const notice = item.status !== "ready" || item.corrected ? "" : item.needs_review
     ? `<div class="notice warn"><span>Magpie isn't sure about this one. ${esc(item.confidence_reason || "")}</span></div>`
-    : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span></div>` : "";
+    : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span><button class="btn small" data-action="verify">✓ Mark as correct</button></div>` : "";
   dlg.innerHTML = `
-    <div class="detail t-${esc(item.category || "other")}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
+    <div class="detail t-${themeOf(item.category)}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
       <button class="btn close" data-action="close" aria-label="Close">✕</button>
       <div class="hero">
         <div class="hero-cover">${coverHtml(item, { chip: false })}</div>
@@ -1515,6 +2220,7 @@ function renderDetail(item) {
       ${m.ingredients?.length ? `<section><h3>Ingredients</h3><ul>${m.ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></section>` : ""}
       ${m.instructions?.length ? `<section><h3>Steps</h3><ol>${m.instructions.map((i) => `<li>${esc(i)}</li>`).join("")}</ol></section>` : ""}
       ${links.length ? `<section><div class="links">${links.map((l) => `<a class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join("")}</div></section>` : ""}
+      ${relatedHtml(item)}
       <section><h3>Original</h3>${originalHtml(item)}</section>
       ${item.status === "ready" && fixing !== item.id ? `<section><h3>How sure Magpie is</h3>${confidenceHtml(item, { fixButton: false })}</section>` : ""}
       <section><h3>Your note</h3>
@@ -1524,8 +2230,9 @@ function renderDetail(item) {
           <input id="new-tag" placeholder="add tag ↵" enterkeyhint="done" autocapitalize="off">
         </div>
       </section>
+      ${state.server?.debug ? `<p class="meta-line"><button class="btn small" type="button" data-debug-item="${esc(item.id)}">🐞 Conversations for this item</button></p>` : ""}
       <details class="provenance"><summary>Where this came from</summary>
-        <p class="meta-line">${m.sources ? `Identified via ${esc(m.sources.join(" → "))}.` : "Source trail not recorded."}${
+        <p class="meta-line">${m.sources ? `Identified via ${esc(m.sources.join(" → "))}.` : "Source trail not recorded."}${m.found_by ? ` Repository found by ${esc(m.found_by.replace(/^GitHub search/, "a GitHub search"))}.` : ""}${
           item.usage?.runs ? ` Cost ${esc(formatUsd(item.usage.cost_usd))}${item.usage.web_searches ? `, ${item.usage.web_searches} web search${item.usage.web_searches > 1 ? "es" : ""}` : ""}.` : ""}</p>
         ${m.screenshot_text ? `<pre>${esc(m.screenshot_text)}</pre>` : ""}
       </details>
@@ -1575,6 +2282,21 @@ $("#search").addEventListener("input", (e) => {
   searchTimer = setTimeout(() => { state.q = e.target.value.trim(); renderGrid(); }, 120);
 });
 $("#tag-filter").addEventListener("input", renderFilters);
+$("#detail").addEventListener("input", (e) => { if (e.target.id === "settings-search") searchSettings(e.target.value); });
+$("#detail").addEventListener("change", (e) => {
+  if (e.target.id === "logs-op") { logsFilter = e.target.value; loadLogs(); }
+  if (e.target.id === "dbg-op") { debugState.op = e.target.value; loadDebugList(); }
+});
+$("#detail").addEventListener("keydown", (e) => {
+  if (e.target.id !== "settings-search") return;
+  if (e.key === "Enter") e.preventDefault();   // not "save settings"
+  if (e.key === "Escape" && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ""; searchSettings(""); }
+});
+$("#cols-select").addEventListener("change", (e) => {
+  state.cols = Number(e.target.value);
+  try { localStorage.setItem("magpie.columns", String(state.cols)); } catch {}
+  renderGrid();
+});
 
 // Keyboard: / searches, N adds, Esc closes the tag list, arrows move between cards.
 document.addEventListener("keydown", (e) => {
@@ -1611,7 +2333,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -1629,6 +2351,28 @@ document.addEventListener("click", async (e) => {
     field?.scrollIntoView({ block: "center" });
     return field?.focus();
   }
+  if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
+  if (t.dataset.debugOpen !== undefined) return openDebug(t.dataset.debugOpen);
+  if (t.dataset.debugBack !== undefined) { $(".debug-panel").dataset.view = "list"; return; }
+  if (t.dataset.debugRefresh !== undefined) return loadDebugList();
+  if (t.dataset.debugClearItem !== undefined) return showDebug({ item: "" });
+  if (t.dataset.debugItem !== undefined) return showDebug({ item: t.dataset.debugItem });
+  if (t.dataset.logOpen !== undefined) return openLog(t.dataset.logOpen);
+  if (t.dataset.logSave !== undefined) return saveLogFile(t.dataset.logSave, t.dataset.format);
+  if (t.dataset.logImage !== undefined) { e.preventDefault(); return showLogImage(t.dataset.logImage); }
+  if (t.dataset.logsReload !== undefined) return loadLogs();
+  if (t.dataset.logDelete !== undefined) {
+    if (!confirm("Delete this log?")) return;
+    try { await apiWithSetup(`/api/logs/${t.dataset.logDelete}`, { method: "DELETE" }); } catch (err) { return toast(`Couldn't delete: ${errorMessage(err)}`); }
+    return loadLogs();
+  }
+  if (t.dataset.logsClear !== undefined) {
+    if (!confirm("Delete every saved conversation log? This can't be undone.")) return;
+    try { await apiWithSetup("/api/logs", { method: "DELETE" }); } catch (err) { return toast(`Couldn't delete: ${errorMessage(err)}`); }
+    return loadLogs();
+  }
+  if (t.dataset.bulk !== undefined) return startBulk(t.dataset.bulk);
+  if (t.dataset.bulkCancel !== undefined) return cancelBulk();
   if (t.dataset.tab !== undefined) {
     state.tab = t.dataset.tab;
   } else if (t.dataset.show !== undefined) {
@@ -1670,6 +2414,7 @@ document.addEventListener("click", async (e) => {
     }
     switch (t.dataset.action) {
       case "close": return $("#detail").close();
+      case "verify": return verifyItem(id);
       case "fix": fixing = id; renderDetail(item); return $("#correct-form input[name=title]")?.focus();
       case "cancel-fix": fixing = null; return renderDetail(item);
       case "refresh": return refreshItemMetadata(id);
@@ -1683,6 +2428,7 @@ document.addEventListener("click", async (e) => {
       case "add": return $("#add-dialog").showModal();
       case "close-add": return $("#add-dialog").close();
       case "settings": return showSettings();
+      case "debug": return showDebug();
       case "sync": return requestSync();
       case "dismiss-install":
         try { localStorage.setItem("magpie.installHintDismissed", "1"); } catch {}
@@ -1761,6 +2507,7 @@ async function boot() {
   if (new URLSearchParams(location.search).has("shared")) history.replaceState(null, "", "/");
   requestSync();
   refreshCostPill(true);
+  refreshLimits(true);
 }
 
 boot().catch((e) => { console.error(e); toast(`Couldn't open the offline library: ${e.message}`); });

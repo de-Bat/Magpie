@@ -91,7 +91,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
 );
 """
 
-JSON_COLUMNS = ("metadata", "links", "analysis", "alternatives")
+JSON_COLUMNS = ("metadata", "links", "analysis", "alternatives", "related")
 
 # Columns added after the first release; created on startup for existing databases.
 MIGRATIONS = {
@@ -101,16 +101,20 @@ MIGRATIONS = {
     "corrected": "INTEGER NOT NULL DEFAULT 0",
     "kind": "TEXT NOT NULL DEFAULT 'screenshot'",
     "source_url": "TEXT",
+    "confirmed": "INTEGER NOT NULL DEFAULT 0",   # the user marked this identification as correct
+    "related": "TEXT NOT NULL DEFAULT '[]'",     # worth-a-look links: [{kind, label, url, why?}]
+    "retry_at": "TEXT",                          # failed because a model hit its limit: retried automatically then
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
 # Metadata sources that confirm what an item is (as opposed to the model's say-so or a generic page card).
-VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm"}
+VERIFIED_CONFIDENCE = 90   # default: a confident model answer counts as verified (settings: MAGPIE_VERIFIED_CONFIDENCE)
+VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "schema.org/Recipe", "npm", "huggingface"}
 
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related", "retry_at",
 }
 
 
@@ -125,7 +129,9 @@ def normalize_tag(tag: str) -> str:
 
 
 class Database:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, verified_confidence=None):
+        # () -> the confidence from which an answer counts as verified (a callable, so settings changes apply at once)
+        self.verified_confidence = verified_confidence or (lambda: VERIFIED_CONFIDENCE)
         self.path = str(path)
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
@@ -180,6 +186,8 @@ class Database:
 
     def update_item(self, item_id: str, **fields: Any) -> dict | None:
         fields = {k: v for k, v in fields.items() if k in EDITABLE_COLUMNS}
+        if "status" in fields and "retry_at" not in fields:
+            fields["retry_at"] = None   # any new outcome replaces a pending automatic retry
         if fields:
             for col in JSON_COLUMNS:
                 if col in fields and not isinstance(fields[col], str) and fields[col] is not None:
@@ -190,6 +198,22 @@ class Database:
                 self.conn.execute(f"UPDATE items SET {assignments} WHERE id = ?", (*fields.values(), item_id))
             self._reindex(item_id)
         return self.get_item(item_id)
+
+    def due_retries(self, limit: int = 5) -> list[str]:
+        """Items that failed because a model hit its limit, whose retry time has come."""
+        rows = self.conn.execute(
+            "SELECT id FROM items WHERE status = 'error' AND retry_at IS NOT NULL AND retry_at <= ? ORDER BY retry_at LIMIT ?",
+            (now(), limit)).fetchall()
+        return [r["id"] for r in rows]
+
+    def waiting_for_limits(self) -> int:
+        return self.conn.execute("SELECT COUNT(*) FROM items WHERE status = 'error' AND retry_at IS NOT NULL").fetchone()[0]
+
+    def requests_since(self, analyzer: str, model: str, since: str) -> int:
+        """Requests made to one provider's model since a time (for providers that don't report their limits)."""
+        row = self.conn.execute("SELECT COALESCE(SUM(requests), 0) AS n FROM analysis_runs "
+                                "WHERE analyzer = ? AND model = ? AND created_at >= ?", (analyzer, model, since)).fetchone()
+        return int(row["n"])
 
     def get_item(self, item_id: str) -> dict | None:
         row = self.conn.execute("SELECT * FROM items WHERE id = ?", (item_id,)).fetchone()
@@ -212,6 +236,7 @@ class Database:
         tags: list[str] | None = None,
         needs_review: bool = False,
         unverified: bool = False,
+        to_check: bool = False,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -236,6 +261,10 @@ class Database:
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += f" ORDER BY {order} LIMIT ? OFFSET ?"
+        if to_check:  # failed, unsure or unverified: derived per item, so filter after loading
+            rows = self.conn.execute(sql.replace(" LIMIT ? OFFSET ?", ""), params).fetchall()
+            found = [i for i in (self._row_to_item(r) for r in rows) if i["to_check"]]
+            return found[offset:offset + limit]
         if unverified:  # derived from each item's metadata sources, so filter after loading
             rows = self.conn.execute(sql.replace(" LIMIT ? OFFSET ?", ""), params).fetchall()
             found = [i for i in (self._row_to_item(r) for r in rows) if i["status"] == "ready" and not i["verified"]]
@@ -420,7 +449,11 @@ class Database:
             and item.get("confidence") is not None and item["confidence"] < REVIEW_THRESHOLD
         )
         sources = (item.get("metadata") or {}).get("sources") or []
-        item["verified"] = item["corrected"] or bool(VERIFYING_SOURCES.intersection(sources))
+        item["confirmed"] = bool(item.get("confirmed"))
+        item["verified"] = (item["corrected"] or item["confirmed"] or bool(VERIFYING_SOURCES.intersection(sources))
+                            or (item.get("confidence") or 0) >= self.verified_confidence())
+        item["to_check"] = (item.get("status") == "error" or item["needs_review"]
+                            or (item.get("status") == "ready" and not item["verified"]))
         item["tags"] = self.get_tags(item["id"])
         cost = self.conn.execute(
             "SELECT COUNT(*) AS runs, COALESCE(SUM(cost_usd), 0) AS cost, "
@@ -431,6 +464,10 @@ class Database:
             "cost_usd": round(cost["cost"], 4), "runs": cost["runs"], "web_searches": cost["searches"],
             "via": sorted((cost["how"] or "").split(",")) if cost["how"] else [],
         }
+        last = self.conn.execute(
+            "SELECT analyzer, model FROM analysis_runs WHERE item_id = ? AND ok = 1 AND analyzer != 'ocr' "
+            "ORDER BY id DESC LIMIT 1", (item["id"],)).fetchone()
+        item["usage"]["model"] = (last["model"] or last["analyzer"]) if last else None
         item["batch_pending"] = self.conn.execute(
             "SELECT 1 FROM batch_jobs WHERE item_id = ? LIMIT 1", (item["id"],)).fetchone() is not None
         return item

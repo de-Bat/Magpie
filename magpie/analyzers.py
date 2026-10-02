@@ -19,34 +19,49 @@ from typing import Any
 
 import httpx
 
-from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, ScreenshotAnalyzer, correction_prompt, prepare_image
+from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, RateLimited, ScreenshotAnalyzer, correction_prompt, prepare_image
 from .config import HOSTED_LLMS, Settings
+from .related import clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
+from . import convlog, limits
 from .usage import Run, local_cost, record_limits, token_cost
 
 log = logging.getLogger(__name__)
 
-SCHEMA = SAVE_TOOL["input_schema"]
+# Models without web search can't find related links, and Magpie lists the ones written in the capture itself, so
+# they aren't asked for them: a shorter answer to fill in, and nothing to invent.
+SCHEMA = {**SAVE_TOOL["input_schema"], "properties": {k: v for k, v in SAVE_TOOL["input_schema"]["properties"].items() if k != "related"}}
+SCHEMA["required"] = [k for k in SAVE_TOOL["input_schema"]["required"] if k != "related"]
 DETAIL_KEYS = list(SCHEMA["properties"]["details"]["properties"])
 ARRAY_DETAILS = {k for k, v in SCHEMA["properties"]["details"]["properties"].items() if v.get("type") == "array"}
 
-LOCAL_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
-    "2. Use web search to confirm the identity and find the canonical source.",
-    "2. You have no web access. Use what you know plus the screenshot and OCR text to name the thing and, "
-    "when you are sure of it, its canonical URL.",
-).replace(
+# Models without web access (local servers, hosted OpenAI-compatible providers) get the same instructions,
+# except where Claude searches the web: Magpie looks things up after they answer (GitHub, TMDB, Open Library, the
+# article by its headline), so they should name the thing exactly as it would be searched for.
+NO_WEB_STEP = (
+    "2. You have no web access; Magpie looks things up after you answer. So name the thing exactly as it would be "
+    "searched for: for code, the repository's name as the title, and owner/repo in details.github_full_name when it is "
+    "visible or you are certain; for articles, the headline exactly as shown and the site or publisher in "
+    "details.publisher; for films, TV and books, the exact title and year. Give a canonical URL when it is written in the "
+    "screenshot or you are certain it exists (a repository, an IMDb page, the publisher's article); Magpie opens every "
+    "address, so an invented one is dropped, but do not leave it out when you know it."
+)
+LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^2\. Use web search.*$", lambda _: NO_WEB_STEP, SYSTEM_PROMPT).replace(
     "Finish by calling save_analysis once. Do not ask the user questions.",
     "Reply with a single JSON object matching the requested schema. Do not ask the user questions.",
 ).replace(
     "Only report URLs, ratings and facts you actually saw in search results or the screenshot.",
     "Only report URLs, ratings and facts you saw in the screenshot or are certain of; ratings are looked up later.",
 )
+LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^6\. Also note what is connected.*\n", "", LOCAL_SYSTEM_PROMPT)   # no `related` field for them
+LOCAL_SYSTEM_PROMPT = LOCAL_SYSTEM_PROMPT.replace("7. If the user", "6. If the user").replace("8. Reply", "7. Reply")
+
 
 
 def blank_analysis() -> dict:
     return {
         "category": "other", "source_platform": "other", "title": "", "subtitle": None, "year": None,
-        "summary": "", "canonical_url": None, "image_url": None, "links": [], "tags": [],
+        "summary": "", "canonical_url": None, "image_url": None, "links": [], "related": [], "tags": [],
         "screenshot_text": "", "confidence": 0, "confidence_reason": "", "alternatives": [],
         "details": {k: ([] if k in ARRAY_DETAILS else None) for k in DETAIL_KEYS},
     }
@@ -87,6 +102,7 @@ def normalize(raw: dict) -> dict:
         out["year"] = None
     out["tags"] = [str(t) for t in out["tags"]] if isinstance(out["tags"], list) else []
     out["links"] = [l for l in out["links"] if isinstance(l, dict) and l.get("url")] if isinstance(out["links"], list) else []
+    out["related"] = clean_related(out["related"] if isinstance(out["related"], list) else [])
     out["alternatives"] = [
         {"title": str(a.get("title")), "category": a.get("category") if a.get("category") in CATEGORIES else "other",
          "year": a.get("year") if isinstance(a.get("year"), int) else None,
@@ -205,7 +221,8 @@ class LocalLLMAnalyzer:
             result = normalize(parse_json(text))
         except AnalysisError as e:
             run.ok = False
-            e.runs = [self._finish_run(run, started, {})]
+            # paused before anything was sent: no request to account for
+            e.runs = [] if getattr(e, "unsent", False) else [self._finish_run(run, started, {})]
             raise
         result["_runs"] = [self._finish_run(run, started, usage)]
         return result
@@ -252,14 +269,36 @@ class LocalLLMAnalyzer:
 
     async def _post(self, req: dict) -> httpx.Response:
         """POST with retries on rate limits and temporary unavailability (the hosted NVIDIA API
-        allows ~40 requests/minute; a self-hosted NIM answers 503 while the model loads)."""
+        allows ~40 requests/minute; a self-hosted NIM answers 503 while the model loads). A hosted model that
+        hit its limit is paused: short waits are waited out, longer ones fail fast with the time it's back."""
         for attempt in range(self.MAX_RETRIES + 1):
+            if self.hosted:
+                hit = limits.blocked(self.name, self.model)
+                if hit and limits.wait_seconds(hit[0]) > limits.WAIT_AT_MOST:
+                    e = RateLimited(self.name, self.model, hit[0], hit[1])
+                    e.unsent = attempt == 0
+                    raise e
+                if hit:
+                    await self._sleep(limits.wait_seconds(hit[0]))
+            convlog.log_request(self.name, self.model, "hosted" if self.hosted else "local", attempt=attempt + 1, url=self.url,
+                                messages=req.get("messages"),
+                                parameters={k: v for k, v in req.items() if k != "messages"})
+            started = time.monotonic()
             try:
                 r = await self.http.post(self.url, json=req, headers=self.headers, timeout=self.timeout)
             except httpx.HTTPError as e:
+                convlog.log_response(self.name, self.model, duration_ms=int((time.monotonic() - started) * 1000), error=repr(e))
                 raise AnalysisError(f"Can't reach the local LLM at {self.url}: {e!r}") from e
+            convlog.log_response(self.name, self.model, headers=r.headers, status=r.status_code,
+                                 duration_ms=int((time.monotonic() - started) * 1000), text=r.text)
             if self.hosted:
-                record_limits(self.name, r.headers)
+                record_limits(self.name, r.headers, model=self.model, status=r.status_code)
+                if r.status_code in (402, 429):
+                    entry = limits.mark_limited(self.name, self.model, r.headers, r.text, r.status_code, default_delay=4 * 2 ** attempt)
+                    until = limits._parse_iso(entry["blocked_until"])
+                    if entry["blocked_reason"] == "credit" or limits.wait_seconds(until) > limits.WAIT_AT_MOST or attempt == self.MAX_RETRIES:
+                        raise RateLimited(self.name, self.model, until, entry["blocked_reason"])
+                    continue   # the pause is short: the check above waits it out
             if r.status_code not in self.RETRY_STATUSES or attempt == self.MAX_RETRIES:
                 return r
             try:
@@ -368,6 +407,8 @@ class AnalyzerRouter:
         hints = hints_prompt(ocr, signals) + page_hints
         link = {"link_url": link_url, "web": web} if link_url else {}
         context: dict[str, Any] = {"used": [], "runs": [], "ocr_text": ocr.text if ocr and ocr.lines else ""}
+        convlog.event("ocr", engine=ocr.engine if ocr else None, lines=len(ocr.lines) if ocr else 0,
+                      text=(ocr.text[:4000] if ocr and ocr.lines else ""))
         if ocr and ocr.lines:
             context["used"].append("ocr")
             context["runs"].append(Run("ocr", model=ocr.engine, mode="local", requests=1,
@@ -426,13 +467,25 @@ class AnalyzerRouter:
                         self._local_down_until = time.monotonic() + self.LOCAL_RETRY_AFTER
                     log.warning("Local model failed, asking Claude: %s", e)
             if result is None or result.get("confidence", 0) < self.escalate_below:
+                convlog.event("decision", what="hybrid_escalate", local_confidence=None if result is None else result.get("confidence"),
+                              escalate_below=self.escalate_below, over_budget=self.over_budget(),
+                              fallback=self.fallback.label if self.fallback is not None else "claude")
                 if result is not None and self.over_budget():
                     log.info("Monthly budget reached: keeping the local answer")  # nothing paid is called
                 else:
+                    local = result
                     if result is not None:
                         context["runs"] += result.pop("_runs", [])
                         context["local_result"] = {k: v for k, v in result.items() if not k.startswith("_")}
-                    result = await fallback_step()
+                    try:
+                        result = await fallback_step()
+                    except RateLimited as e:
+                        if local is None:
+                            raise
+                        log.info("%s; keeping the local answer", e)   # a less sure answer beats none
+                        convlog.event("decision", what="fallback_rate_limited_kept_local_answer", reason=str(e))
+                        context["runs"] = e.runs
+                        result = local
         return self.finish(result, context)
 
     async def finish_batch(self, params: dict, message: Any, context: dict) -> dict:

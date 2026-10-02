@@ -6,6 +6,7 @@ search to pin down the canonical source, and reports back through a strict tool 
 the result always matches the schema below.
 """
 
+import asyncio
 import base64
 import io
 import logging
@@ -14,6 +15,7 @@ from typing import Any
 
 import anthropic
 
+from . import convlog, limits
 from .usage import Run, claude_cost, record_limits
 
 log = logging.getLogger(__name__)
@@ -106,6 +108,23 @@ SAVE_TOOL: dict[str, Any] = {
                     "additionalProperties": False,
                 },
             },
+            "related": {
+                "type": "array",
+                "description": "Up to 5 links to things connected to this one that the reader would want next, each with its own page: "
+                               "the repository or package of a tool an article describes, an app's homepage or docs, the company or "
+                               "project behind it, the paper it is based on. Not the item's own page, and only URLs you saw.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["repo", "package", "app", "paper", "company", "docs", "video", "reference", "site"]},
+                        "label": {"type": "string", "description": "What it is, e.g. 'astral-sh/uv' or 'Astral (the company)'."},
+                        "url": {"type": "string"},
+                        "why": {"type": "string", "description": "A few words on why it is related."},
+                    },
+                    "required": ["kind", "label", "url", "why"],
+                    "additionalProperties": False,
+                },
+            },
             "tags": {"type": "array", "items": {"type": "string"}, "description": "5-10 short lowercase retrieval tags (genre, topic, mood, cuisine, tech...)."},
             "screenshot_text": {"type": "string", "description": "The key text visible in the screenshot, condensed (max ~500 chars)."},
             "confidence": {
@@ -143,18 +162,36 @@ Each screenshot usually shows a recommendation seen somewhere: a Facebook or Ins
 
 How to work:
 1. Read the screenshot carefully: the app/site chrome tells you the source platform; captions, overlays, handles, and partially visible titles tell you the subject.
-2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository; for recipes find the original recipe page; for articles find the article URL.
+2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository and put its owner/repo in details.github_full_name (a project is often posted by name only: search for it); for recipes find the original recipe page; for articles find the article's own URL on the publisher's site (search its headline; the capture often shows the site's name), not a share link or aggregator copy.
 3. Only report URLs, ratings and facts you actually saw in search results or the screenshot. Use null rather than guessing.
 4. If the screenshot recommends several things, catalogue the most prominent one and mention the others in the summary.
 5. Be honest about confidence. Score it on evidence: a clearly visible title confirmed by a matching search result is 90+; an inference from partial text, a blurry poster, or an ambiguous title (remakes, same-name books and films) is lower. List the plausible alternatives.
-6. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
-7. Finish by calling save_analysis once. Do not ask the user questions."""
+6. Also note what is connected to it in `related`: when an article or post is about a tool, name its repository, package or homepage; when it names a company, project, person, paper, product or event, link that; links written in the screenshot count too. Each link must be a page you saw, and must not be the item's own page. Use `why` to say in a few words how it's connected.
+7. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
+8. Finish by calling save_analysis once. Do not ask the user questions."""
 
 
 class AnalysisError(Exception):
     def __init__(self, message: str, runs: list | None = None):
         super().__init__(message)
         self.runs = runs or []  # usage already spent before the failure, so it is still recorded
+
+
+PROVIDER_LABELS = {"claude": "Claude", "openai": "OpenAI", "gemini": "Gemini", "openrouter": "OpenRouter", "groq": "Groq"}
+REASONS = {"rate limit": "rate limit", "daily quota": "daily quota", "credit": "credit or billing quota"}
+
+
+class RateLimited(AnalysisError):
+    """The provider won't take requests for this model until `until` (a UTC datetime)."""
+
+    def __init__(self, provider: str, model: str | None, until, reason: str, runs: list | None = None):
+        self.provider, self.model, self.until, self.reason = provider, model, until, reason
+        name = PROVIDER_LABELS.get(provider, provider) + (f" ({model})" if model else "")
+        if reason == "credit":
+            msg = f"{name} is out of credit or over its billing quota. Add credit with the provider; Magpie retries automatically."
+        else:
+            msg = f"{name} reached its {REASONS.get(reason, reason)}. Magpie retries automatically when it's available again."
+        super().__init__(msg, runs)
 
 
 def correction_prompt(correction: dict) -> str:
@@ -330,12 +367,39 @@ class ScreenshotAnalyzer:
             raise
 
     async def _create(self, params: dict):
+        hit = limits.blocked("claude", self.model)
+        if hit and limits.wait_seconds(hit[0]) > limits.WAIT_AT_MOST:
+            raise RateLimited("claude", self.model, hit[0], hit[1])
+        if hit:
+            await asyncio.sleep(limits.wait_seconds(hit[0]))
+        try:
+            return await self._send(params)
+        except anthropic.RateLimitError as e:
+            response = getattr(e, "response", None)
+            entry = limits.mark_limited("claude", self.model, getattr(response, "headers", None), getattr(response, "text", "") or str(e))
+            raise RateLimited("claude", self.model, limits._parse_iso(entry["blocked_until"]), entry["blocked_reason"]) from e
+
+    async def _send(self, params: dict):
         fallback = self.model in FALLBACK_MODELS
         messages = self.client.beta.messages if fallback else self.client.messages
         kwargs = {**params, "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if fallback else params
-        raw = getattr(messages, "with_raw_response", None)
-        if raw is None:
-            return await messages.create(**kwargs)
-        response = await raw.create(**kwargs)
-        record_limits("claude", response.headers)  # what the account has left in this rate-limit window
-        return response.parse()
+        convlog.log_request("claude", self.model, "realtime", system=params.get("system"), messages=params.get("messages"),
+                            parameters={k: v for k, v in params.items() if k not in ("system", "messages")})
+        started = time.monotonic()
+        try:
+            raw = getattr(messages, "with_raw_response", None)
+            if raw is None:
+                response, headers = await messages.create(**kwargs), None
+            else:
+                raw_response = await raw.create(**kwargs)
+                record_limits("claude", raw_response.headers, model=self.model, status=200)  # what's left in this rate-limit window
+                response, headers = raw_response.parse(), raw_response.headers
+        except Exception as e:
+            err = getattr(e, "response", None)
+            convlog.log_response("claude", self.model, headers=getattr(err, "headers", None), status=getattr(e, "status_code", None),
+                                 duration_ms=int((time.monotonic() - started) * 1000), error=f"{type(e).__name__}: {e}")
+            raise
+        convlog.log_response("claude", self.model, headers=headers, status=200, duration_ms=int((time.monotonic() - started) * 1000),
+                             model_used=getattr(response, "model", None), stop_reason=getattr(response, "stop_reason", None),
+                             content=getattr(response, "content", None), usage=getattr(response, "usage", None))
+        return response

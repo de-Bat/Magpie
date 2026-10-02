@@ -4,6 +4,7 @@ import json
 import logging
 import mimetypes
 import re
+from datetime import timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -11,16 +12,32 @@ from typing import Any
 import anthropic
 import httpx
 
-from .analyzer import AnalysisError
+from .analyzer import AnalysisError, RateLimited
 from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
-from . import links, readability
-from .enrich import fetch_page
+from . import convlog, links, readability
+from .findlink import repair_link
+from .related import clean_related, drop_dead, same_site, text_related
+from .images import best_image
+from .enrich import fetch_page, link_is_gone
 from .config import Settings
 from .db import Database, normalize_tag
 from .enrich import Enrichment, run_enrichers
 
 log = logging.getLogger(__name__)
+
+
+def card_snapshot(item: dict) -> dict:
+    """The card as it came out: everything the app shows for it, without the bulky raw fields."""
+    heavy = {"analysis", "image_file"}
+    card = {k: v for k, v in item.items() if k not in heavy}
+    card["metadata"] = {k: v for k, v in (item.get("metadata") or {}).items() if k not in ("article_text", "ocr_text", "screenshot_text")}
+    return card
+
+
+def jsonable_error(result: Any) -> Any:
+    """Why a batch request didn't succeed, for the log."""
+    return None if getattr(result, "type", None) == "succeeded" else convlog.jsonable(getattr(result, "error", None) or getattr(result, "type", None))
 
 
 def _empty(v: Any) -> bool:
@@ -48,6 +65,22 @@ def titles_match(a: str | None, b: str | None) -> bool:
     return bool(a) and (a == b or SequenceMatcher(None, a, b).ratio() >= 0.9)
 
 
+SOURCE_NAMES = {"github": "GitHub", "tmdb": "TMDB", "omdb": "OMDb", "tmdb+omdb": "TMDB", "openlibrary": "Open Library",
+                "npm": "npm", "huggingface": "Hugging Face", "schema.org/Recipe": "the recipe page",
+                "opengraph": "the page itself", "opengraph+readability": "the page itself"}
+
+
+def source_confirms(title: str | None, matched: str | None) -> bool:
+    """Does what a source found carry the name the model gave? Also when the model named a repository without its
+    owner ("uv" for astral-sh/uv), or a page title carries the site's name ("Headline | XDA")."""
+    if titles_match(title, matched):
+        return True
+    if matched and "/" in matched and titles_match((title or "").split("/")[-1], matched.split("/")[-1]):
+        return True
+    head = re.split(r"\s[|–—-]\s", matched or "")[0]
+    return bool(head) and head != matched and titles_match(title, head)
+
+
 def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     """Combine Claude's identification with enrichment results into item fields.
 
@@ -65,13 +98,16 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     subtitle = analysis.get("subtitle")
     summary = analysis.get("summary") or None
     links = list(analysis.get("links") or [])
+    related = list(analysis.get("related") or [])
     tags = list(analysis.get("tags") or [])
     sources = ["claude"]
+    image_kind = None
 
     for e in enrichments:
         metadata.update({k: v for k, v in e.metadata.items() if not _empty(v)})
         canonical_url = e.canonical_url or canonical_url
-        image_url = e.image_url or image_url
+        if e.image_url:
+            image_url, image_kind = e.image_url, e.image_kind
         subtitle = subtitle or e.subtitle
         if e.subtitle and e.subtitle != subtitle:
             metadata.setdefault("description", e.subtitle)
@@ -81,6 +117,7 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
             else:
                 summary = e.summary  # e.g. after a manual correction, when there is no model summary
         links.extend(e.links)
+        related.extend(e.related)
         tags.extend(e.tags)
         if e.source:
             sources.append(e.source)
@@ -93,6 +130,12 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         if url and url.startswith("http") and url not in seen:
             seen.add(url)
             unique_links.append({"label": link.get("label") or url, "url": url})
+    metadata.pop("image_kind", None)
+    if image_kind:
+        metadata["image_kind"] = image_kind   # the card shows a logo whole on the themed cover instead of cropping it
+    # links written in the capture itself: the tool's site, its repository or package, a paper
+    written = text_related("\n".join(filter(None, [analysis.get("screenshot_text"), analysis.get("_ocr_text")])))
+    related += [r for r in written if not (r["kind"] == "site" and canonical_url and same_site(r["url"], canonical_url))]
     used = analysis.get("_analyzer") or ["claude"]
     metadata["sources"] = used + sources[1:]
     if analysis.get("_ocr_text"):
@@ -103,10 +146,10 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     # Claude verifies with web search itself; other analyzers get a second opinion from the
     # authoritative source the enrichers matched (GitHub, TMDB, Open Library, the recipe page).
     if "claude" not in used and confidence is not None and confidence < 90:
-        match = next((e for e in enrichments if e.matched_title and titles_match(analysis.get("title"), e.matched_title)), None)
+        match = next((e for e in enrichments if e.matched_title and source_confirms(analysis.get("title"), e.matched_title)), None)
         if match:
             confidence = max(confidence, 85)
-            confidence_reason = f"{confidence_reason or ''} Confirmed by {match.source}.".strip()
+            confidence_reason = f"{confidence_reason or ''} Confirmed by {SOURCE_NAMES.get(match.source, match.source)}.".strip()
 
     alternatives = [
         {k: a.get(k) for k in ("title", "category", "year", "canonical_url", "why")}
@@ -123,6 +166,8 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         "image_url": image_url,
         "metadata": metadata,
         "links": unique_links,
+        # worth a look, but not what the item already links to (its own page, source links)
+        "related": clean_related(related, exclude=[canonical_url, analysis.get("canonical_url"), *[l["url"] for l in unique_links]]),
         "tags": tags,
         "confidence": confidence,
         "confidence_reason": confidence_reason,
@@ -149,6 +194,7 @@ def corrected_analysis(previous: dict, correction: dict) -> dict:
         "summary": previous.get("summary") if same_thing else None,
         "image_url": None,
         "links": [],
+        "related": [],
         "tags": list(previous.get("tags") or []) if same_thing else [],
         "screenshot_text": previous.get("screenshot_text"),
         "details": {k: old_details.get(k) for k in ("posted_by", "post_url") if old_details.get(k)},
@@ -177,7 +223,7 @@ class Pipeline:
         kwargs: dict[str, Any] = {"note": item.get("note"), "correction": context}
         if isinstance(self.analyzer, AnalyzerRouter):
             # The user is waiting on corrections and re-analyses: never send those to a batch.
-            kwargs["interactive"] = purpose != "analyze"
+            kwargs["interactive"] = purpose not in ("analyze", "bulk")
 
         async def identify() -> dict:
             analysis = await self.analyzer.analyze(Path(path).read_bytes(), media_type, **kwargs)
@@ -212,7 +258,7 @@ class Pipeline:
                     context = {**correction, "previous_title": item.get("title"), "previous_category": item.get("category")}
                 readable = bool(article and article.word_count >= 150)
                 analysis = await router.analyze(
-                    None, None, note=item.get("note"), correction=context, interactive=purpose != "analyze",
+                    None, None, note=item.get("note"), correction=context, interactive=purpose not in ("analyze", "bulk"),
                     link_url=url, page_hints=links.page_context(url, page, article), web=not readable,
                 )
                 analysis["_analyzer"] = ["link", "readability"] + analysis.get("_analyzer", [])
@@ -267,17 +313,30 @@ class Pipeline:
                     "canonical_url": item.get("canonical_url"), "image_url": None, "links": [], "tags": [],
                     "details": {**(stored.get("details") or {}), **{k: v for k, v in (item.get("metadata") or {}).items()
                                                                      if k in ("imdb_id", "github_full_name", "author", "isbn")}}}
-        fresh = merge(analysis, await run_enrichers(analysis, self.settings, self.http))
+        repaired = await repair_link({**analysis, "_analyzer": ["link"] if item.get("kind") == "url" else []}, self.http) \
+            if self.settings.enrich else analysis
+        analysis = {**analysis, "canonical_url": repaired.get("canonical_url")}
+        enrichments = await run_enrichers(analysis, self.settings, self.http)
+        fresh = merge(analysis, enrichments)
+        from_page = any((e.source or "").startswith("opengraph") for e in enrichments)
         links, seen = list(item.get("links") or []), {l.get("url") for l in item.get("links") or []}
         links += [l for l in fresh["links"] if l["url"] not in seen]
         changes = {
             "image_url": fresh["image_url"] or item.get("image_url"),
             "metadata": {**(item.get("metadata") or {}), **{k: v for k, v in fresh["metadata"].items() if k != "screenshot_text"}},
             "links": links,
+            "related": clean_related([*(item.get("related") or []), *fresh["related"]], exclude=[analysis["canonical_url"] or fresh["canonical_url"], *[l.get("url") for l in links]]),
             "subtitle": item.get("subtitle") or fresh["subtitle"],
             "summary": item.get("summary") or fresh["summary"],
-            "canonical_url": item.get("canonical_url") or fresh["canonical_url"],
+            # a dead link is replaced, or dropped; a page's own canonical address (the original of a syndicated or
+            # AMP copy, without tracking parameters) replaces the one we had, unless you set the link yourself
+            "canonical_url": (fresh["canonical_url"] if from_page and not item.get("corrected") and fresh["canonical_url"]
+                              else analysis["canonical_url"] or fresh["canonical_url"]),
         }
+        if fresh["image_url"]:
+            changes["metadata"].pop("image_kind", None)
+            if fresh["metadata"].get("image_kind"):
+                changes["metadata"]["image_kind"] = fresh["metadata"]["image_kind"]
         return self.db.update_item(item_id, **changes)
 
     async def complete_batch_job(self, job: dict, result: Any) -> dict | None:
@@ -297,7 +356,13 @@ class Pipeline:
             if getattr(result, "type", None) == "succeeded":
                 self.db.record_runs(job["item_id"], [self._batch_only_run(result.message)], job["purpose"])
             return None
-        return await self._run(job["item_id"], job["purpose"], finish(), corrected=job["purpose"] == "correct")
+        with convlog.session("batch_result", job["item_id"], requested_as=job["purpose"], batch_id=job.get("batch_id")):
+            msg = getattr(result, "message", None)
+            convlog.log_response("claude", params.get("model"), mode="batch", batch_result=getattr(result, "type", None),
+                                 model_used=getattr(msg, "model", None), stop_reason=getattr(msg, "stop_reason", None),
+                                 content=getattr(msg, "content", None), usage=getattr(msg, "usage", None),
+                                 error=jsonable_error(result))
+            return await self._run(job["item_id"], job["purpose"], finish(), corrected=job["purpose"] == "correct")
 
     def _batch_only_run(self, message: Any) -> dict:
         run = Run("claude", model=getattr(message, "model", ""), mode="batch")
@@ -306,8 +371,22 @@ class Pipeline:
         return run.to_dict()
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
+        if self.settings.enrich:
+            before = analysis.get("canonical_url")
+            analysis = await repair_link(analysis, self.http)   # a made-up address becomes the real article's, or none
+            if analysis.get("canonical_url") != before:
+                convlog.event("decision", what="link_repaired", model_gave=before, now=analysis.get("canonical_url"))
+            offered = clean_related(analysis.get("related"))
+            analysis = {**analysis, "related": await drop_dead(offered, self.http, fetch_page, link_is_gone)}
+            if len(analysis["related"]) != len(offered):
+                convlog.event("decision", what="dead_related_links_dropped", dropped=[r["url"] for r in offered if r not in analysis["related"]])
         enrichments = await run_enrichers(analysis, self.settings, self.http)
+        convlog.event("enrichment", sources=[e.source for e in enrichments], matched=[e.matched_title for e in enrichments if e.matched_title],
+                      canonical_url=[e.canonical_url for e in enrichments if e.canonical_url], images=[e.image_url for e in enrichments if e.image_url])
         fields = merge(analysis, enrichments)
+        if fields["image_url"] and not any(e.image_url for e in enrichments):
+            # Only the model suggested it, and models sometimes make up image links: keep it only if it isn't dead.
+            fields["image_url"] = await best_image(self.http, [fields["image_url"]])
 
         # Replace the tags generated for the previous identification, keep the user's own.
         item = self.db.get_item(item_id) or {}
@@ -318,37 +397,81 @@ class Pipeline:
         self.db.set_tags(item_id, [t for t in item.get("tags", []) if t not in stale] + auto_tags)
 
         return self.db.update_item(
-            item_id, **fields, analysis=analysis, status="ready", error=None,
+            item_id, **fields, analysis=analysis, status="ready", error=None, confirmed=0,
             corrected=int(corrected or bool(item.get("corrected"))),
         )
 
     async def _run(self, item_id: str, purpose: str, work, corrected: bool) -> dict | None:
-        """Run an identification, record what it cost, and store the result or the error."""
+        """Run an identification, record what it cost, and store the result or the error. When conversation logging
+        is on, everything said to the models meanwhile goes into one log file for this operation."""
+        item = self.db.get_item(item_id) or {}
+        s = self.settings
+        with convlog.session(purpose, item_id, item_title=item.get("title"), item_kind=item.get("kind"), corrected=corrected,
+                             note=item.get("note"), analyzer=s.resolved_analyzer(), claude_model=s.model,
+                             hosted_provider=s.hosted_llm if s.hosted_llm != "none" else None, hosted_model=s.llm_model,
+                             local_model=s.local_llm_model if s.local_llm_url else None, escalate_below=s.escalate_below,
+                             claude_batch=s.claude_batch, previous={k: item.get(k) for k in ("title", "category", "canonical_url", "confidence")},
+                             input={"kind": item.get("kind") or "screenshot", "source_url": item.get("source_url"), "note": item.get("note")},
+                             input_image=(s.uploads_dir / item["image_file"]) if item.get("image_file") and item.get("kind") != "url" else None):
+            return await self._run_logged(item_id, purpose, work, corrected)
+
+    async def _run_logged(self, item_id: str, purpose: str, work, corrected: bool) -> dict | None:
+        def record(runs: list[dict]) -> None:
+            self.db.record_runs(item_id, runs, purpose)
+            cost = sum(r.get("cost_usd") or 0 for r in runs)
+            if cost and convlog.current():
+                convlog.current().cost += cost
+
         try:
             analysis = await work
         except Deferred as d:
-            self.db.record_runs(item_id, d.context.get("runs", []), purpose)  # OCR / local runs so far
+            record(d.context.get("runs", []))  # OCR / local runs so far
             d.context["runs"] = []
             self.db.add_batch_job(item_id, purpose, d.params, d.context)
+            convlog.event("batch_queued", note="The Claude request was queued for the Message Batches API; its answer is logged as a batch_result session.",
+                          model=d.params.get("model"), system=d.params.get("system"), messages=d.params.get("messages"),
+                          parameters={k: v for k, v in d.params.items() if k not in ("system", "messages")})
+            convlog.set_outcome(outcome="queued_for_batch")
             return self.db.get_item(item_id)
+        except RateLimited as e:
+            record(e.runs)
+            convlog.set_outcome(outcome="rate_limited", error=str(e), retry_at=e.until.isoformat() if e.until else None)
+            return self.db.update_item(item_id, status="error", error=str(e),
+                                       retry_at=e.until.astimezone(timezone.utc).isoformat(timespec="microseconds") if e.until else None)
         except AnalysisError as e:
-            self.db.record_runs(item_id, e.runs, purpose)
+            record(e.runs)
+            convlog.set_outcome(outcome="error", error=str(e))
             return self.db.update_item(item_id, status="error", error=str(e))
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
-            self.db.record_runs(item_id, getattr(e, "magpie_runs", []), purpose)
+            record(getattr(e, "magpie_runs", []))
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=(
                 "The server's Anthropic API key is missing or invalid. Set ANTHROPIC_API_KEY and re-analyze."
             ))
         except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.InternalServerError) as e:
-            self.db.record_runs(item_id, getattr(e, "magpie_runs", []), purpose)
+            record(getattr(e, "magpie_runs", []))
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"Temporary problem reaching Claude ({type(e).__name__}). Try re-analyzing.")
         except Exception as e:  # keep the item; the user can retry
             log.exception("Processing %s failed", item_id)
-            self.db.record_runs(item_id, getattr(e, "magpie_runs", []), purpose)
+            record(getattr(e, "magpie_runs", []))
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"{type(e).__name__}: {e}")
-        self.db.record_runs(item_id, analysis.pop("_runs", []), purpose)
+        convlog.event("analysis", used=analysis.get("_analyzer"), title=analysis.get("title"), category=analysis.get("category"),
+                      confidence=analysis.get("confidence"), confidence_reason=analysis.get("confidence_reason"),
+                      canonical_url=analysis.get("canonical_url"), alternatives=analysis.get("alternatives"),
+                      related=analysis.get("related"), details=analysis.get("details"), summary=analysis.get("summary"))
+        record(analysis.pop("_runs", []))
         try:
-            return await self.apply_analysis(item_id, analysis, corrected=corrected)
+            stored = await self.apply_analysis(item_id, analysis, corrected=corrected)
         except Exception as e:
             log.exception("Storing the analysis for %s failed", item_id)
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"{type(e).__name__}: {e}")
+        if stored:
+            convlog.event("card", card=card_snapshot(stored))
+            convlog.event("result", title=stored.get("title"), category=stored.get("category"), confidence=stored.get("confidence"),
+                          canonical_url=stored.get("canonical_url"), image_url=stored.get("image_url"), status=stored.get("status"),
+                          verified=stored.get("verified"), sources=(stored.get("metadata") or {}).get("sources"),
+                          related=[r.get("url") for r in stored.get("related") or []])
+        return stored

@@ -30,6 +30,8 @@
   <header class="topbar">
     <div class="brand"><img class="logo-light" src="/static/icons/logo-96.png" alt="" width="32" height="32"><img class="logo-dark" src="/static/icons/logo-96-dark.png" alt="" width="32" height="32"><span>Magpie</span></div>
     <label class="search"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Search everything you saved" autocomplete="off" aria-label="Search"><kbd>/</kbd></label>
+    <button id="debug-btn" class="pill-btn debug-btn" type="button" data-action="debug" title="Debug: what was sent to the AI models, and what came back" hidden>🐞<span class="debug-text"> Debug</span></button>
+    <button id="limit-pill" class="pill-btn limit-pill" type="button" data-action="usage" hidden></button>
     <button id="cost-btn" class="pill-btn" type="button" data-action="usage" title="Usage &amp; cost" hidden></button>
     <button id="sync-status" class="sync-status" type="button" title="Sync status"></button>
     <button id="settings-btn" class="pill-btn settings-btn" type="button" data-action="settings" title="Settings" aria-label="Settings">⚙<span id="settings-dot" class="status-dot" hidden></span></button>
@@ -40,11 +42,15 @@
   <div class="subbar">
     <div class="seg" role="group" aria-label="Show">
       <button type="button" data-show="all" aria-pressed="true">All</button>
-      <button type="button" data-show="check" aria-pressed="false" title="Items Magpie isn't sure about, or that no source confirmed">To check <span id="check-count" class="count"></span></button>
+      <button type="button" data-show="check" aria-pressed="false" title="Items Magpie isn't sure about, that no source confirmed, or that failed"><span class="to">To </span>check <span id="check-count" class="count"></span></button>
     </div>
-    <button id="tag-btn" class="pill-btn" type="button" aria-expanded="false" aria-controls="tag-pop"># Tags</button>
+    <button id="tag-btn" class="pill-btn" type="button" aria-expanded="false" aria-controls="tag-pop" aria-label="Tags" title="Tags">#<span class="lbl"> Tags</span></button>
     <div id="active-filters" class="active-filters"></div>
     <span class="spacer"></span>
+    <label class="cols-pick" id="cols-ctl" title="How many cards per row">
+      <span class="cols-icon" aria-hidden="true">▥</span>
+      <select id="cols-select" aria-label="Columns"></select>
+    </label>
     <div class="seg" role="group" aria-label="Layout">
       <button type="button" data-layout="grid" aria-pressed="true" aria-label="Grid">▦</button>
       <button type="button" data-layout="list" aria-pressed="false" aria-label="List">☰</button>

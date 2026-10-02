@@ -115,6 +115,9 @@ SPECS: list[Spec] = [
     Spec("batch_poll_seconds", "MAGPIE_BATCH_POLL_SECONDS", "int", 60, "Claude options", "Batch poll interval (s)", min=5),
     Spec("fetch_max_tokens", "MAGPIE_FETCH_MAX_TOKENS", "int", 8000, "Claude options", "Max tokens per fetched page",
          "0 = no cap.", min=0),
+    Spec("verified_confidence", "MAGPIE_VERIFIED_CONFIDENCE", "int", 90, "Verification", "Count as verified from confidence (%)",
+         "Answers this sure count as verified, even when no source (TMDB, GitHub, ...) confirmed them. Anything below and "
+         "unconfirmed shows a Verify button and appears under To check. You can lower it to 60, no further.", min=60, max=100),
     Spec("ocr_engine", "MAGPIE_OCR", "choice", "rapidocr", "OCR", "OCR engine", "", ("rapidocr", "tesseract", "off")),
     Spec("ocr_langs", "MAGPIE_OCR_LANGS", "str", "eng", "OCR", "Tesseract languages", "e.g. eng+heb"),
     Spec("enrich", "MAGPIE_ENRICH", "bool", True, "Lookups", "Online lookups",
@@ -125,6 +128,17 @@ SPECS: list[Spec] = [
          "IMDb, Rotten Tomatoes and Metacritic scores. https://www.omdbapi.com/apikey.aspx"),
     Spec("github_token", "GITHUB_TOKEN", "secret", None, "Lookups", "GitHub token",
          "Raises the GitHub rate limit from 60 to 5000 requests/hour."),
+    Spec("debug", "MAGPIE_DEBUG", "bool", False, "Logging", "Debug mode",
+         "Records every conversation with the AI models, together with the screenshot or link that went in and the card that came "
+         "out, and adds a Debug view to the app to browse them. Implies the two logging settings below; for troubleshooting, "
+         "since the logs contain what is in your screenshots."),
+    Spec("log_conversations", "MAGPIE_LOG_CONVERSATIONS", "bool", False, "Logging", "Save conversations with the AI models",
+         "Keeps what Magpie sent to each model and what came back, one file per operation (analysis, correction, batch result), "
+         "for debriefing and inspection. The logs contain what is in your screenshots; they never contain API keys."),
+    Spec("log_images", "MAGPIE_LOG_IMAGES", "bool", False, "Logging", "Keep the screenshots in the logs",
+         "Saves the image that was sent next to each log file. Off: only its size and a hash are recorded."),
+    Spec("log_retention_days", "MAGPIE_LOG_RETENTION_DAYS", "int", 30, "Logging", "Delete logs older than (days)",
+         "0 = keep them until you delete them.", min=0),
     Spec("api_token", "MAGPIE_API_TOKEN", "secret", None, "Access", "Access tokens",
          "Required by every client when set. Separate several tokens with commas or spaces (e.g. one per device, so one can be revoked alone). Recommended whenever the server is reachable beyond localhost."),
 ]
@@ -218,6 +232,8 @@ class Settings:
     # Cost controls for every provider (see docs/COSTS.md)
     monthly_budget_usd: float = field(default_factory=_from_env("monthly_budget_usd"))  # 0 = no limit
     max_output_tokens: int = field(default_factory=_from_env("max_output_tokens"))      # 0 = provider default
+    # From this confidence an answer counts as verified (below it, and unconfirmed by a source, the item is "unverified")
+    verified_confidence: int = field(default_factory=_from_env("verified_confidence"))
     # OCR pre-pass: rapidocr (bundled, CPU) | tesseract (needs the binary; better for Hebrew/Arabic/...) | off
     ocr_engine: str = field(default_factory=_from_env("ocr_engine"))
     ocr_langs: str = field(default_factory=_from_env("ocr_langs"))  # tesseract only, e.g. eng+heb
@@ -229,6 +245,12 @@ class Settings:
     batch_poll_seconds: int = field(default_factory=_from_env("batch_poll_seconds"))
     # Running cost of your on-prem inference box, for the usage report (e.g. 350 W at $0.20/kWh = 0.07)
     local_cost_per_hour: float = field(default_factory=_from_env("local_cost_per_hour"))
+
+    # Conversation logs: what was sent to each model and what came back (see magpie/convlog.py)
+    debug: bool = field(default_factory=_from_env("debug"))   # records everything and adds the app's Debug view
+    log_conversations: bool = field(default_factory=_from_env("log_conversations"))
+    log_images: bool = field(default_factory=_from_env("log_images"))
+    log_retention_days: int = field(default_factory=_from_env("log_retention_days"))
 
     # Online metadata lookups (TMDB, GitHub, recipe pages...). Turn off for air-gapped installs.
     enrich: bool = field(default_factory=_from_env("enrich"))
@@ -418,6 +440,17 @@ class Settings:
         if "api.nvidia.com" in url or key.startswith("nvapi-"):
             return "nim"
         return "openai"
+
+    def paid_models(self) -> list[tuple[str, str]]:
+        """The (provider, model) pairs the configured analyzer calls that have limits: Claude and hosted providers."""
+        mode, hosted = self.resolved_analyzer(), self.hosted_llm in HOSTED_LLMS
+        if mode == "claude":
+            return [("claude", self.model)]
+        if mode == "local":
+            return [(self.hosted_llm, self.llm_model)] if hosted else []
+        if mode == "hybrid":
+            return [(self.hosted_llm, self.llm_model)] if hosted else [("claude", self.model)]
+        return []
 
     def resolved_analyzer(self) -> str:
         """`auto` picks the best configured option: Claude, else the local LLM, else OCR rules."""

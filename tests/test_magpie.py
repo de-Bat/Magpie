@@ -148,10 +148,13 @@ def test_failed_analysis_is_kept_and_can_be_retried(settings):
         item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
         item = client.get(f"/api/items/{item_id}").json()
         assert item["status"] == "error" and "declined" in item["error"]
+        assert item["to_check"] is True       # a failed analysis needs a look
+        assert [i["id"] for i in client.get("/api/items", params={"to_check": True}).json()] == [item_id]
 
         analyzer.result = analysis()
         client.post(f"/api/items/{item_id}/reanalyze")
-        assert client.get(f"/api/items/{item_id}").json()["status"] == "ready"
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["status"] == "ready" and item["to_check"] is False    # solved by the retry
 
 
 def test_rejects_non_images(settings):
@@ -560,6 +563,12 @@ def test_pwa_assets_are_served(settings):
         for icon in manifest.json()["icons"]:
             assert client.get(icon["src"]).status_code == 200
         assert client.get("/static/icons/apple-touch-icon.png").status_code == 200
+        dark = client.get("/static/manifest-dark.webmanifest")   # the dark-theme install icons
+        assert dark.json()["start_url"] == manifest.json()["start_url"] and dark.json()["theme_color"] == "#151412"
+        assert [i["sizes"] for i in dark.json()["icons"]] == [i["sizes"] for i in manifest.json()["icons"]]
+        for icon in dark.json()["icons"]:
+            assert client.get(icon["src"]).status_code == 200
+        assert client.get("/static/icons/apple-touch-icon-dark.png").status_code == 200
         index = client.get("/").text
         assert 'rel="manifest"' in index and "apple-mobile-web-app-capable" in index
         assert client.post("/share-target", follow_redirects=False).status_code == 303
@@ -614,10 +623,13 @@ def test_unverified_items_are_flagged_and_filterable(settings):
     client, analyzer = make_client(settings, analysis(), routes)
     with client:
         good = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
-        analyzer.result = analysis(category="other", title="Mystery", canonical_url=None, details=blank_details())
+        analyzer.result = analysis(category="other", title="Mystery", canonical_url=None, details=blank_details(), confidence=75)
         odd = client.post("/api/items", files={"file": ("b.png", png_bytes((41, 60)), "image/png")}).json()["id"]
         assert client.get(f"/api/items/{good}").json()["verified"] is True    # confirmed by GitHub
-        assert client.get(f"/api/items/{odd}").json()["verified"] is False    # only the model's word
+        assert client.get(f"/api/items/{odd}").json()["verified"] is False    # only the model's word, and not sure
+        analyzer.result = analysis(category="other", title="Sure thing", canonical_url=None, details=blank_details(), confidence=95)
+        sure = client.post("/api/items", files={"file": ("c.png", png_bytes((42, 60)), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{sure}").json()["verified"] is True    # a confident answer counts
         assert [i["id"] for i in client.get("/api/items", params={"unverified": True}).json()] == [odd]
         client.post(f"/api/items/{odd}/correct", json={"title": "Mystery Box"})
         assert client.get(f"/api/items/{odd}").json()["verified"] is True     # corrected by the user
@@ -674,3 +686,617 @@ async def test_github_prefers_the_maintainers_social_preview(settings):
     async with mock_http(routes) as http:
         [e] = await run_enrichers(analysis(), settings, http)
     assert e.image_url == "https://repository-images.githubusercontent.com/1/abc"
+
+
+def test_verified_threshold_is_configurable_and_items_can_be_confirmed(settings):
+    client, analyzer = make_client(settings, analysis(category="other", title="Maybe", canonical_url=None, details=blank_details(), confidence=75))
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        get = lambda: client.get(f"/api/items/{item_id}").json()
+        assert get()["verified"] is False                       # 75 < the default 90
+        assert client.get("/api/status").json()["verified_confidence"] == 90
+        # the user's own threshold applies at once, and can't go below 60
+        auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+        assert client.put("/api/settings", json={"changes": {"MAGPIE_VERIFIED_CONFIDENCE": "70"}}, headers=auth).status_code == 200
+        assert get()["verified"] is True
+        assert client.put("/api/settings", json={"changes": {"MAGPIE_VERIFIED_CONFIDENCE": "50"}}, headers=auth).status_code == 422
+        assert client.put("/api/settings", json={"changes": {"MAGPIE_VERIFIED_CONFIDENCE": None}}, headers=auth).status_code == 200
+        assert get()["verified"] is False
+        # "Verify": the user confirms the identification
+        assert client.patch(f"/api/items/{item_id}", json={"confirmed": True}).json()["verified"] is True
+        assert client.get("/api/items", params={"unverified": True}).json() == []
+        # a fresh analysis is a new identification: not confirmed any more
+        client.post(f"/api/items/{item_id}/reanalyze")
+        assert get()["confirmed"] is False and get()["verified"] is False
+
+
+async def test_page_picture_falls_back_to_oembed_and_the_site_icon(settings):
+    import httpx
+    html = ('<html><head><meta property="og:image" content="/dead.png">'
+            '<link rel="alternate" type="application/json+oembed" href="https://blog.example/oembed?u=1"></head></html>')
+    routes = {"https://blog.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://blog.example/oembed": httpx.Response(200, json={"thumbnail_url": "https://blog.example/thumb.png"}),
+              "https://blog.example/thumb.png": httpx.Response(200, content=_png((640, 360)), headers={"content-type": "image/png"})}
+    a = analysis(category="other", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://blog.example/thumb.png"
+    # a blocked page still yields the site's touch icon... and a YouTube video its thumbnail
+    routes = {"https://www.youtube.com/watch?v=abcdefghijk": httpx.Response(403),
+              "https://i.ytimg.com/vi/abcdefghijk/maxresdefault.jpg": httpx.Response(404),
+              "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg": httpx.Response(200, content=_png((480, 360)), headers={"content-type": "image/png"})}
+    a = analysis(category="video", canonical_url="https://www.youtube.com/watch?v=abcdefghijk", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"
+
+
+def test_content_images_use_the_largest_srcset_and_lazy_sources():
+    from magpie.images import content_images
+    html = ('<img src="data:image/gif;base64,R0lG" data-src="/lazy.jpg"><img src="/small.jpg" srcset="/a-480.jpg 480w, /a-1200.jpg 1200w">'
+            '<img src="/logo.png"><img src="/px.png" width="1" height="1">')
+    assert content_images(html) == ["/lazy.jpg", "/a-1200.jpg"]
+
+
+async def test_npm_monorepo_readme_and_shipped_logo(settings):
+    import httpx
+    registry = {"dist-tags": {"latest": "2.0.0"}, "readme": "![logo](./assets/logo.png)", "versions": {"2.0.0": {}},
+                "repository": {"url": "git+https://github.com/acme/mono.git", "directory": "packages/pkg"}}
+    routes = {
+        "https://registry.npmjs.org/pkg": httpx.Response(200, json=registry),
+        "https://raw.githubusercontent.com/acme/mono/HEAD/packages/pkg/assets/logo.png": httpx.Response(200, content=_png((300, 300)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", canonical_url="https://www.npmjs.com/package/pkg", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "npm").image_url == "https://raw.githubusercontent.com/acme/mono/HEAD/packages/pkg/assets/logo.png"
+    # a package without a repository: relative README images resolve against its files on the CDN, and shipped logos are found
+    registry = {"dist-tags": {"latest": "1.0.0"}, "readme": "<img src='docs/hero.png'>", "versions": {"1.0.0": {}}}
+    routes = {
+        "https://registry.npmjs.org/solo": httpx.Response(200, json=registry),
+        "https://data.jsdelivr.com/v1/package/npm/solo@1.0.0/flat": httpx.Response(200, json={"files": [{"name": "/dist/x.js"}, {"name": "/assets/logo.png"}]}),
+        "https://cdn.jsdelivr.net/npm/solo@1.0.0/docs/hero.png": httpx.Response(404),
+        "https://cdn.jsdelivr.net/npm/solo@1.0.0/assets/logo.png": httpx.Response(200, content=_png((256, 256)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", canonical_url="https://www.npmjs.com/package/solo", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "npm").image_url == "https://cdn.jsdelivr.net/npm/solo@1.0.0/assets/logo.png"
+
+
+async def test_hugging_face_model_gets_facts_and_a_card_picture(settings):
+    import httpx
+    from magpie.links import classify
+    model = {"pipeline_tag": "text-generation", "library_name": "transformers", "downloads": 1234, "likes": 56,
+             "tags": ["transformers", "safetensors", "license:apache-2.0", "region:us", "llama"], "lastModified": "2026-01-01T00:00:00Z",
+             "cardData": {"license": "apache-2.0"}, "safetensors": {"total": 7_200_000_000}}
+    routes = {
+        "https://huggingface.co/api/models/acme/tiny-7b": httpx.Response(200, json=model),
+        "https://huggingface.co/acme/tiny-7b/raw/main/README.md": httpx.Response(200, text="---\nlicense: apache-2.0\n---\n![banner](banner.png)"),
+        "https://huggingface.co/acme/tiny-7b/resolve/main/banner.png": httpx.Response(200, content=_png((1200, 400)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(category="app", canonical_url="https://huggingface.co/acme/tiny-7b", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    hf = next(e for e in results if e.source == "huggingface")
+    assert hf.image_url == "https://huggingface.co/acme/tiny-7b/resolve/main/banner.png"
+    assert hf.metadata["task"] == "text-generation" and hf.metadata["license"] == "apache-2.0" and hf.metadata["parameters"] == "7.2B"
+    assert "transformers" in hf.tags and not any(":" in t for t in hf.tags)
+    # links to models, datasets and spaces are recognized without a model call
+    assert classify("https://huggingface.co/acme/tiny-7b/tree/main", None)["title"] == "acme/tiny-7b"
+    assert classify("https://huggingface.co/datasets/acme/words", None)["canonical_url"] == "https://huggingface.co/datasets/acme/words"
+    assert classify("https://huggingface.co/spaces/acme/demo", None)["category"] == "app"
+    assert classify("https://huggingface.co/docs/hub", None) is None
+
+
+def _img(size=(800, 500)):
+    return httpx.Response(200, content=_png(size), headers={"content-type": "image/png"})
+
+
+def test_readme_blob_links_become_raw_and_badges_are_skipped():
+    from magpie.images import readme_images
+    md = ("[![npm](https://badgen.net/npm/v/x)](x) ![Build](https://circleci.com/gh/a/b.png)\n"
+          "![logo](https://github.com/acme/tool/blob/main/media/logo.png?raw=true)")
+    assert readme_images(md, "acme/tool") == ["https://raw.githubusercontent.com/acme/tool/main/media/logo.png"]
+
+
+async def test_article_photo_beats_the_sites_default_share_image(settings):
+    # the page's og:image is the site-wide default; the article's own photo (named "pixel-9-review") is the better cover
+    html = ('<html><head><meta property="og:image" content="https://news.example/static/og-default.png"></head><body>'
+            '<img src="https://news.example/img/pixel-9-review.jpg" width="1200" height="800"></body></html>')
+    routes = {"https://news.example/pixel-9": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://news.example/static/og-default.png": _img(), "https://news.example/img/pixel-9-review.jpg": _img()}
+    a = analysis(category="article", canonical_url="https://news.example/pixel-9", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://news.example/img/pixel-9-review.jpg"
+
+
+async def test_article_that_refuses_servers_uses_the_internet_archive_copy(settings):
+    archived = '<html><head><meta property="og:image" content="https://cdn.blog.example/hero.jpg"></head></html>'
+    routes = {"https://blog.example/post": httpx.Response(403),
+              "https://archive.org/wayback/available": httpx.Response(200, json={"archived_snapshots": {"closest": {"available": True, "timestamp": "20260101000000"}}}),
+              "https://web.archive.org/web/20260101000000id_/https://blog.example/post": httpx.Response(200, text=archived, headers={"content-type": "text/html"}),
+              "https://cdn.blog.example/hero.jpg": _img()}
+    a = analysis(category="article", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://cdn.blog.example/hero.jpg"
+    # a page that is merely missing (404) is not looked up elsewhere
+    seen = []
+    def handler(request):
+        seen.append(request.url.host)
+        return httpx.Response(404)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await run_enrichers(analysis(category="article", canonical_url="https://gone.example/x", details=blank_details()), settings, http)
+    assert "archive.org" not in seen
+
+
+async def test_npm_package_without_pictures_uses_the_maintainers_logo(settings):
+    registry = {"dist-tags": {"latest": "7.0.0"}, "versions": {"7.0.0": {}}, "readme": "no pictures here",
+                "repository": {"url": "git+https://github.com/babel/babel.git", "directory": "packages/babel-core"}}
+    routes = {"https://registry.npmjs.org/@babel%2Fcore": httpx.Response(200, json=registry),
+              "https://api.github.com/repos/babel/babel/readme": httpx.Response(200, text="![](https://img.shields.io/x.png)"),
+              "https://avatars.githubusercontent.com/babel": _img((460, 460))}
+    a = analysis(category="app", canonical_url="https://www.npmjs.com/package/@babel/core", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "npm").image_url == "https://avatars.githubusercontent.com/babel?s=460"
+
+
+async def test_hugging_face_falls_back_to_the_owners_logo(settings):
+    routes = {"https://huggingface.co/api/models/acme/bare": httpx.Response(200, json={"tags": []}),
+              "https://huggingface.co/api/organizations/acme/avatar": httpx.Response(200, json={"avatarUrl": "https://cdn-avatars.huggingface.co/acme.png"}),
+              "https://cdn-avatars.huggingface.co/acme.png": _img((300, 300))}
+    a = analysis(category="app", canonical_url="https://huggingface.co/acme/bare", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    assert next(e for e in results if e.source == "huggingface").image_url == "https://cdn-avatars.huggingface.co/acme.png"
+
+
+async def test_book_cover_beats_the_shared_pages_picture_and_itunes_finds_album_art(settings):
+    page = '<html><head><meta property="og:image" content="https://shop.example/banner.jpg"></head></html>'
+    routes = {"https://shop.example/book": httpx.Response(200, text=page, headers={"content-type": "text/html"}),
+              "https://shop.example/banner.jpg": _img((1200, 630)),
+              "https://openlibrary.org/search.json": httpx.Response(200, json={"docs": [{"key": "/works/1", "title": "The Overstory", "cover_i": 42}]}),
+              "https://covers.openlibrary.org/b/id/42-L.jpg": _img((400, 600))}
+    a = analysis(category="book", title="The Overstory", canonical_url="https://shop.example/book", details=blank_details())
+    async with mock_http(routes) as http:
+        fields = merge(a, await run_enrichers(a, settings, http))
+    assert fields["image_url"] == "https://covers.openlibrary.org/b/id/42-L.jpg"
+    art = "https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/100x100bb.jpg"
+    routes = {"https://itunes.apple.com/search": httpx.Response(200, json={"results": [{"collectionName": "Selected Ambient Works 85-92", "artistName": "Aphex Twin", "artworkUrl100": art, "trackCount": 13}]}),
+              "https://is1-ssl.mzstatic.com/image/thumb/Music/ab/cd/600x600bb.jpg": _img((600, 600))}
+    a = analysis(category="music", title="Selected Ambient Works 85-92", canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url.endswith("600x600bb.jpg") and e.metadata["tracks"] == 13
+
+
+def test_a_dead_image_link_from_the_model_is_dropped(settings):
+    client, _ = make_client(settings, analysis(category="other", canonical_url=None, details=blank_details(),
+                                                image_url="https://made-up.example/poster.jpg"),
+                            {"https://made-up.example/poster.jpg": httpx.Response(404)})
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{item_id}").json()["image_url"] is None
+
+
+TITLE = "Two old GPUs I salvaged are doing more AI work than a brand new $2000 card, and I won't be upgrading anytime soon"
+
+
+def _ddg(*urls):
+    from urllib.parse import quote
+    body = "".join(f'<a class="result__a" href="//duckduckgo.com/l/?uddg={quote(u, safe="")}&amp;rut=x">r</a>' for u in urls)
+    return httpx.Response(200, text=f"<html><body>{body}</body></html>", headers={"content-type": "text/html"})
+
+
+def _article_page(title):
+    return httpx.Response(200, text=f'<html><head><title>{title} | XDA</title><meta property="og:title" content="{title}"></head></html>',
+                          headers={"content-type": "text/html"})
+
+
+async def test_invented_article_link_is_replaced_by_the_real_one(settings):
+    from magpie.findlink import repair_link
+    routes = {"https://www.xda-developers.com/two-old-gpus": httpx.Response(404),
+              "https://html.duckduckgo.com/html/": _ddg("https://other.example/unrelated", "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"),
+              "https://other.example/unrelated": _article_page("A completely different story"),
+              "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": _article_page(TITLE)}
+    a = analysis(category="article", title=TITLE, canonical_url="https://www.xda-developers.com/two-old-gpus", details=blank_details())
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+
+
+async def test_no_link_is_better_than_a_dead_one(settings):
+    from magpie.findlink import repair_link
+    routes = {"https://www.xda-developers.com/gone": httpx.Response(404), "https://html.duckduckgo.com/html/": _ddg()}
+    a = analysis(category="article", title=TITLE, canonical_url="https://www.xda-developers.com/gone", details=blank_details())
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] is None and "doesn't work" in fixed["confidence_reason"]
+
+
+async def test_working_blocked_and_shared_links_are_left_alone(settings):
+    from magpie.findlink import repair_link
+    asked = []
+    def handler(request):
+        asked.append(str(request.url))
+        if request.url.host == "good.example":
+            return _article_page(TITLE)
+        return httpx.Response(403)   # a bot wall: we can't tell whether the link is right
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        for url, extra in [("https://good.example/a", {}), ("https://walled.example/a", {}), ("https://shared.example/a", {"_analyzer": ["link"]})]:
+            a = analysis(category="article", title=TITLE, canonical_url=url, details=blank_details(), **extra)
+            assert (await repair_link(a, http))["canonical_url"] == url
+    assert not any("duckduckgo" in u for u in asked)   # never searched
+
+
+def test_canonical_link_leads_to_the_original_without_tracking():
+    from magpie.enrich import Page, canonical_link
+    def page(url, links=(), meta=None):
+        return Page(url=url, meta=meta or {}, ld=[], title="", links=[{"rel": "canonical", "href": h} for h in links])
+    # a syndicated / AMP copy points at the original article
+    assert canonical_link(page("https://news.aggregator.example/amp/story-123?utm_source=fb",
+                               ["https://www.publisher.example/2026/09/story?utm_medium=social&id=7#top"])) \
+        == "https://www.publisher.example/2026/09/story?id=7"
+    # a template bug that declares the home page as canonical is ignored; og:url is next
+    assert canonical_link(page("https://blog.example/post", ["https://blog.example/"], {"og:url": "https://blog.example/post-final"})) \
+        == "https://blog.example/post-final"
+    assert canonical_link(page("https://blog.example/post?fbclid=abc&page=2")) == "https://blog.example/post?page=2"
+
+
+async def test_article_header_picture_then_the_site_logo(settings):
+    # no share image: the header picture the page preloads / marks as the hero comes before body pictures
+    html = ('<html><head><link rel="preload" as="image" href="/img/hero-1200.jpg"></head><body>'
+            '<img src="/img/inline.jpg" width="800" height="500"></body></html>')
+    routes = {"https://blog.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://blog.example/img/hero-1200.jpg": httpx.Response(200, content=_png((1200, 630)), headers={"content-type": "image/png"}),
+              "https://blog.example/img/inline.jpg": httpx.Response(200, content=_png((800, 500)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://blog.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://blog.example/img/hero-1200.jpg" and e.image_kind is None
+
+    html = '<img class="wp-post-image attachment-full" src="/uploads/featured.jpg"><img src="/uploads/body.jpg" width="900" height="600">'
+    from magpie.images import header_images
+    assert header_images(html) == ["/uploads/featured.jpg"]
+
+    # no picture of the article at all: the publisher's logo, flagged as a logo
+    ld = '{"@type": "NewsArticle", "headline": "x", "publisher": {"@type": "Organization", "logo": {"url": "/brand/logo-square.png"}}}'
+    html = f'<html><head><script type="application/ld+json">{ld}</script><meta property="og:image" content="/gone.jpg"></head></html>'
+    routes = {"https://news.example/story": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://news.example/brand/logo-square.png": httpx.Response(200, content=_png((400, 400)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://news.example/story", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://news.example/brand/logo-square.png" and e.image_kind == "logo"
+    from magpie.pipeline import merge
+    assert merge(a, [e])["metadata"]["image_kind"] == "logo"
+
+
+async def test_web_app_manifest_icon_is_a_logo_too(settings):
+    html = '<html><head><link rel="manifest" href="/site.webmanifest"></head></html>'
+    manifest = {"icons": [{"src": "/i/192.png", "sizes": "192x192"}, {"src": "/i/512.png", "sizes": "512x512"}, {"src": "/i/48.png", "sizes": "48x48"}]}
+    routes = {"https://app.example/post": httpx.Response(200, text=html, headers={"content-type": "text/html"}),
+              "https://app.example/site.webmanifest": httpx.Response(200, json=manifest),
+              "https://app.example/i/512.png": httpx.Response(200, content=_png((512, 512)), headers={"content-type": "image/png"})}
+    a = analysis(category="article", canonical_url="https://app.example/post", details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.image_url == "https://app.example/i/512.png" and e.image_kind == "logo"
+
+
+async def test_article_without_a_link_is_looked_up_and_bing_backs_up_duckduckgo(settings):
+    import base64
+    from magpie.findlink import repair_link
+    real = "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    wrapped = "https://www.bing.com/ck/a?!&amp;p=x&amp;u=a1" + base64.urlsafe_b64encode(real.encode()).decode().rstrip("=")
+    bing = f'<html><body><ol><li class="b_algo"><h2><a href="{wrapped}">t</a></h2></li></ol></body></html>'
+    routes = {"https://html.duckduckgo.com/html/": httpx.Response(202),   # DuckDuckGo's bot check
+              "https://www.bing.com/search": httpx.Response(200, text=bing, headers={"content-type": "text/html"}),
+              real: _article_page(TITLE)}
+    a = analysis(category="article", title=TITLE, canonical_url=None, details={**blank_details(), "publisher": "XDA"})
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real
+
+
+ARTICLE_WITH_LINKS = '''<html><head><title>uv replaced pip for me</title><meta property="og:title" content="uv replaced pip for me"></head><body>
+<a href="/about">About us</a> <a href="https://www.xda-developers.com/other-post">More posts</a>
+<a href="https://twitter.com/share?u=1">Tweet</a> <a href="https://www.facebook.com/sharer.php?u=1">Share</a>
+<p>I've been using <a href="https://github.com/astral-sh/uv">uv</a>, from <a href="https://astral.sh">Astral</a>, and
+<a href="https://docs.astral.sh/uv/guides/">the guide</a>. Also <a href="https://pypi.org/project/ruff/">ruff</a> and this
+<a href="https://arxiv.org/pdf/2307.09288.pdf">paper</a>. <a href="https://apps.apple.com/us/app/some-app/id123?ign-mpt=uo%3D4">Some App</a></p>
+</body></html>'''
+
+
+def test_outbound_links_become_related_items():
+    from magpie.enrich import Page
+    from magpie.related import outbound_related
+    page = Page(url="https://www.xda-developers.com/uv-replaced-pip/", meta={}, ld=[], title="", html=ARTICLE_WITH_LINKS)
+    got = [(r["kind"], r["label"], r["url"]) for r in outbound_related(page)]
+    assert got == [
+        ("repo", "astral-sh/uv", "https://github.com/astral-sh/uv"),
+        ("package", "ruff", "https://pypi.org/project/ruff/"),
+        ("app", "Some App", "https://apps.apple.com/us/app/some-app/id123"),
+        ("paper", "arXiv 2307.09288", "https://arxiv.org/abs/2307.09288"),
+        ("docs", "the guide", "https://docs.astral.sh/uv/guides/"),
+        ("site", "Astral", "https://astral.sh"),   # a named homepage; the share buttons and same-site links are not listed
+    ]
+
+
+async def test_article_item_lists_what_it_is_about_and_drops_the_dead_and_its_own_links(settings):
+    routes = {
+        "https://www.xda-developers.com/uv-replaced-pip/": httpx.Response(200, text=ARTICLE_WITH_LINKS, headers={"content-type": "text/html"}),
+        "https://astral.sh": httpx.Response(200, text="<html><title>Astral</title></html>", headers={"content-type": "text/html"}),
+        "https://made-up.example/": httpx.Response(404),
+    }
+    model = [{"kind": "company", "label": "Astral (the company)", "url": "https://astral.sh", "why": "makes uv"},
+             {"kind": "site", "label": "Invented", "url": "https://made-up.example/", "why": ""},
+             {"kind": "site", "label": "The article itself", "url": "https://www.xda-developers.com/uv-replaced-pip/", "why": ""}]
+    client, _ = make_client(settings, analysis(category="article", title="uv replaced pip for me", confidence=95,
+                                               canonical_url="https://www.xda-developers.com/uv-replaced-pip/",
+                                               details=blank_details(), related=model), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+    related = {(r["kind"], r["url"]) for r in item["related"]}
+    assert ("repo", "https://github.com/astral-sh/uv") in related              # from the article's own links
+    assert ("company", "https://astral.sh") in related                          # from the model, and it opens
+    assert not any("made-up.example" in u for _, u in related)                  # a made-up address is dropped
+    assert not any(u.rstrip("/") == "https://www.xda-developers.com/uv-replaced-pip" for _, u in related)   # not the item itself
+    assert len([1 for _, u in related if "astral.sh" in u and "docs" not in u]) == 1   # no duplicates (model + page)
+    assert len(item["related"]) <= 8
+
+
+async def test_github_npm_and_hugging_face_add_related_links(settings):
+    repo = {**GITHUB_REPO, "owner": {"login": "astral-sh", "type": "Organization", "html_url": "https://github.com/astral-sh"},
+            "parent": {"full_name": "someone/uv", "html_url": "https://github.com/someone/uv"}}
+    async with mock_http({"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=repo)}) as http:
+        [e] = await run_enrichers(analysis(), settings, http)
+    assert {(r["kind"], r["url"]) for r in e.related} == {("company", "https://github.com/astral-sh"), ("repo", "https://github.com/someone/uv")}
+    model = {"tags": ["arxiv:2307.09288", "license:mit"], "cardData": {"base_model": "meta-llama/Llama-2-7b"}}
+    routes = {"https://huggingface.co/api/models/acme/tuned": httpx.Response(200, json=model)}
+    a = analysis(category="app", canonical_url="https://huggingface.co/acme/tuned", details=blank_details())
+    async with mock_http(routes) as http:
+        results = await run_enrichers(a, settings, http)
+    hf = next(e for e in results if e.source == "huggingface")
+    assert {r["url"] for r in hf.related} == {"https://arxiv.org/abs/2307.09288", "https://huggingface.co/meta-llama/Llama-2-7b"}
+
+
+def test_refresh_metadata_adds_related_links_without_losing_the_old_ones(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json={**GITHUB_REPO,
+              "owner": {"login": "astral-sh", "type": "Organization", "html_url": "https://github.com/astral-sh"}})}
+    client, _ = make_client(settings, analysis(related=[{"kind": "docs", "label": "Docs", "url": "https://docs.astral.sh/uv/", "why": ""}]), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        before = {r["url"] for r in client.get(f"/api/items/{item_id}").json()["related"]}
+        after = {r["url"] for r in client.post(f"/api/items/{item_id}/refresh-metadata").json()["related"]}
+    assert "https://github.com/astral-sh" in before | after and before <= after
+
+
+def _wait_bulk(client, timeout=10):
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        st = client.get("/api/bulk").json()
+        if not st["running"]:
+            return st
+        time.sleep(0.05)
+    raise AssertionError("bulk job did not finish")
+
+
+def test_refresh_and_reanalyze_the_whole_library(settings):
+    stars = {"n": 100}
+    routes = {"https://api.github.com/repos/astral-sh/uv": lambda request: httpx.Response(200, json={**GITHUB_REPO, "stargazers_count": stars["n"]})}
+    client, analyzer = make_client(settings, analysis(), routes)
+    with client:
+        auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+        ids = [client.post("/api/items", files={"file": (f"{n}.png", png_bytes((40 + n, 60)), "image/png")}).json()["id"] for n in range(3)]
+        assert client.post("/api/bulk/refresh-metadata", json={"scope": "all"}).status_code == 403   # needs the setup code, like settings
+        assert client.post("/api/bulk/refresh-metadata", json={"scope": "bogus"}, headers=auth).status_code == 422
+
+        stars["n"] = 555
+        calls = len(analyzer.calls)
+        r = client.post("/api/bulk/refresh-metadata", json={"scope": "all"}, headers=auth)
+        assert r.status_code == 202 and r.json()["total"] == 3
+        done = _wait_bulk(client)
+        assert done["done"] == 3 and done["failed"] == 0 and not done["running"]
+        assert all(client.get(f"/api/items/{i}").json()["metadata"]["stars"] == 555 for i in ids)
+        assert len(analyzer.calls) == calls                     # no model was asked
+
+        # re-analyze: the model runs again, but what you corrected or confirmed can be left alone
+        client.patch(f"/api/items/{ids[0]}", json={"confirmed": True})
+        analyzer.result = analysis(title="astral-sh/uv (again)")
+        r = client.post("/api/bulk/reanalyze", json={"scope": "all", "skip_confirmed": True}, headers=auth)
+        assert r.json()["total"] == 2
+        done = _wait_bulk(client)
+        assert done["done"] == 2 and len(analyzer.calls) == calls + 2
+        assert client.get(f"/api/items/{ids[0]}").json()["title"] == "astral-sh/uv"
+        assert client.get(f"/api/items/{ids[1]}").json()["title"] == "astral-sh/uv (again)"
+
+
+def test_bulk_scopes_and_one_job_at_a_time(settings):
+    client, analyzer = make_client(settings, AnalysisError("declined"))
+    with client:
+        auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
+        a = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        analyzer.result = analysis(confidence=95)
+        b = client.post("/api/items", files={"file": ("b.png", png_bytes((41, 60)), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{a}").json()["status"] == "error" and client.get(f"/api/items/{b}").json()["status"] == "ready"
+        totals = {}
+        for scope in ("all", "failed", "check"):
+            totals[scope] = client.post("/api/bulk/refresh-metadata", json={"scope": scope}, headers=auth).json()["total"]
+            _wait_bulk(client)
+        assert totals == {"all": 2, "failed": 1, "check": 1}     # to check = the failed one (b is sure and ready)
+
+
+async def test_only_one_bulk_job_runs_at_a_time():
+    import asyncio
+    from magpie.bulk import BulkBusy, BulkRunner
+    started = asyncio.Event()
+
+    class Slow:
+        async def refresh_metadata(self, item_id):
+            started.set()
+            await asyncio.sleep(0.2)
+            return {"id": item_id}
+
+    class Db:
+        def list_items(self, **kw):
+            return [{"id": "a", "status": "ready", "created_at": "1"}]
+
+    runner = BulkRunner(Db(), lambda: Slow())
+    runner.start("refresh", "all")
+    await started.wait()
+    with pytest.raises(BulkBusy):
+        runner.start("refresh", "all")
+    runner.cancel()
+    await runner._task
+    assert runner.snapshot()["running"] is False and runner.snapshot()["done"] == 1
+
+
+
+# ---- finding the repository / article, and what else the capture points to -------------
+
+
+async def test_repo_named_without_owner_is_found_by_search(settings):
+    search = {"items": [
+        {"name": "uv-tools", "full_name": "someone/uv-tools", "stargazers_count": 9000, "owner": {"login": "someone"}},
+        {"name": "uv", "full_name": "fork-person/uv", "stargazers_count": 3, "fork": True, "owner": {"login": "fork-person"}},
+        {"name": "uv", "full_name": "astral-sh/uv", "stargazers_count": 70000, "owner": {"login": "astral-sh"}}]}
+    readme = ("# uv\n[![PyPI](https://img.shields.io/pypi/v/uv.svg)](https://pypi.org/project/uv/)\n"
+              "[Documentation](https://docs.astral.sh/uv) · [Discord](https://discord.gg/astral-sh) · [PyPI](https://pypi.org/project/uv/) "
+              "· [contributing](https://github.com/astral-sh/uv/blob/main/CONTRIBUTING.md) · [random](https://random.example/x)")
+    asked = []
+    def search_handler(request):
+        asked.append(request.url.params["q"])
+        return httpx.Response(200, json=search)
+    routes = {
+        "https://api.github.com/repos/wrong-owner/uv": httpx.Response(404),
+        "https://api.github.com/search/repositories": search_handler,
+        "https://api.github.com/repos/astral-sh/uv/readme": httpx.Response(200, text=readme),
+        "https://api.github.com/repos/astral-sh/uv/releases/latest": httpx.Response(200, json={"tag_name": "0.9.1", "published_at": "2026-09-20T10:00:00Z", "html_url": "https://github.com/astral-sh/uv/releases/tag/0.9.1"}),
+        "https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json={**GITHUB_REPO, "created_at": "2023-10-02T00:00:00Z", "subscribers_count": 120}),
+    }
+    # the model got the name right and the owner wrong
+    a = analysis(title="uv", canonical_url="https://github.com/wrong-owner/uv", details=blank_details(github_full_name="wrong-owner/uv"))
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.canonical_url == "https://github.com/astral-sh/uv" and e.metadata["github_full_name"] == "astral-sh/uv"
+    assert asked[0] == "uv in:name user:wrong-owner" and "found_by" in e.metadata
+    assert e.metadata["latest_release"] == "0.9.1" and e.metadata["released"] == "2026-09-20" and e.metadata["created"] == "2023-10-02"
+    assert e.metadata["watchers"] == 120 and any(l["label"] == "Release 0.9.1" for l in e.links)
+    readme_links = {r["url"]: r for r in e.related if r.get("why") == "linked from the README"}
+    # the homepage (docs.astral.sh/uv) is already a link; badges, the repo's own files and plain sites are left out
+    assert set(readme_links) == {"https://discord.gg/astral-sh", "https://pypi.org/project/uv/"}
+    assert readme_links["https://pypi.org/project/uv/"]["kind"] == "package"
+    # only a name, no owner at all ("uv: an extremely fast package manager")
+    asked.clear()
+    a = analysis(title="uv: an extremely fast Python package manager", canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        [e] = await run_enrichers(a, settings, http)
+    assert e.metadata["github_full_name"] == "astral-sh/uv" and asked == ["uv in:name"]
+
+
+async def test_repo_address_written_in_the_screenshot_is_used(settings):
+    from magpie.enrich import github_full_name
+    a = analysis(title="A great tool", canonical_url=None, details=blank_details(), screenshot_text="Try it: github.com/astral-sh/uv.")
+    assert github_full_name(a) == "astral-sh/uv"
+
+
+def test_links_written_in_the_capture_become_related():
+    from magpie.pipeline import merge
+    a = analysis(category="article", title="Why I switched to uv", canonical_url="https://www.xda-developers.com/uv/",
+                 details=blank_details(), screenshot_text="xda-developers.com\nWhy I switched to uv\ngithub.com/astral-sh/uv · docs.astral.sh/uv · @dana on x.com")
+    related = merge(a, [])["related"]
+    assert {r["url"] for r in related} == {"https://github.com/astral-sh/uv", "https://docs.astral.sh/uv"}
+    assert all(r["why"] == "mentioned in the capture" for r in related)
+
+
+async def test_article_search_starts_at_the_site_named_in_the_capture(settings):
+    from magpie.findlink import repair_link
+    asked = []
+    def ddg(request):
+        asked.append(request.url.params["q"])
+        return _ddg("https://www.xda-developers.com/salvaged-gpus-beat-new-card/")
+    routes = {"https://html.duckduckgo.com/html/": ddg,
+              "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": _article_page(TITLE)}
+    a = analysis(category="article", title=TITLE, canonical_url=None, details=blank_details(),
+                 screenshot_text=f"XDA · xda-developers.com\n{TITLE}\nfacebook.com/xda")
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    assert asked == [f'"{TITLE}" site:xda-developers.com']
+
+
+def test_models_without_web_search_get_their_own_instructions():
+    from magpie.analyzers import LOCAL_SYSTEM_PROMPT
+    assert "web search" not in LOCAL_SYSTEM_PROMPT.lower() and "search its headline" not in LOCAL_SYSTEM_PROMPT
+    assert "github_full_name" in LOCAL_SYSTEM_PROMPT and "details.publisher" in LOCAL_SYSTEM_PROMPT
+    assert "save_analysis once" not in LOCAL_SYSTEM_PROMPT
+    # they may give an address they are certain of (it's opened and checked), and aren't asked for related links
+    assert "certain it exists" in LOCAL_SYSTEM_PROMPT and "related" not in LOCAL_SYSTEM_PROMPT
+    from magpie.analyzers import SCHEMA
+    assert "related" not in SCHEMA["properties"] and "related" not in SCHEMA["required"]
+
+
+def test_lookups_confirm_answers_from_any_provider():
+    from magpie.enrich import Enrichment
+    from magpie.pipeline import merge
+    # a hosted model (no web search) named the repository without its owner; GitHub's search found it
+    a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["ocr", "gemini:gemini-2.5-flash"])
+    out = merge(a, [Enrichment(source="github", matched_title="astral-sh/uv", canonical_url="https://github.com/astral-sh/uv")])
+    assert out["confidence"] == 85 and "Confirmed by GitHub" in out["confidence_reason"]
+    assert out["canonical_url"] == "https://github.com/astral-sh/uv"
+    # a local model's article headline, confirmed by the page found for it ("Headline | Site")
+    a = analysis(category="article", title=TITLE, confidence=60, details=blank_details(), _analyzer=["local:qwen"])
+    out = merge(a, [Enrichment(source="opengraph+readability", matched_title=f"{TITLE} | XDA")])
+    assert out["confidence"] == 85 and "Confirmed by the page itself" in out["confidence_reason"]
+    # a different page doesn't confirm anything; Claude's own answer isn't re-scored
+    assert merge(a, [Enrichment(source="opengraph", matched_title="Something else entirely")])["confidence"] == 60
+    a = analysis(title="uv", confidence=70, details=blank_details(), _analyzer=["claude"])
+    assert merge(a, [Enrichment(source="github", matched_title="astral-sh/uv")])["confidence"] == 70
+
+
+# ---- regressions behind "results got worse with hosted models" -------------------------------
+
+
+async def test_a_live_link_whose_headline_differs_is_kept(settings):
+    from magpie.findlink import repair_link
+    page = httpx.Response(200, text="<html><head><title>Acme Pro 3000 | Acme Store</title></head></html>", headers={"content-type": "text/html"})
+    routes = {"https://shop.example/pro-3000": page, "https://html.duckduckgo.com/html/": httpx.Response(202), "https://www.bing.com/search": httpx.Response(200, text="")}
+    a = analysis(category="product", title="The best budget espresso machine", canonical_url="https://shop.example/pro-3000", details=blank_details())
+    async with mock_http(routes) as http:
+        assert (await repair_link(a, http))["canonical_url"] == "https://shop.example/pro-3000"   # opens: not invented
+    routes["https://shop.example/pro-3000"] = httpx.Response(404)
+    from magpie import enrich
+    enrich._PAGE_CACHE.clear()
+    async with mock_http(routes) as http:
+        assert (await repair_link(a, http))["canonical_url"] is None   # dead and nothing better found
+
+
+async def test_a_name_alone_does_not_pick_a_lookalike_repository(settings):
+    obscure = {"items": [{"name": "magpie", "full_name": "someone/magpie", "stargazers_count": 3, "owner": {"login": "someone"}}]}
+    routes = {"https://api.github.com/search/repositories": httpx.Response(200, json=obscure)}
+    a = analysis(title="magpie", canonical_url=None, details=blank_details())
+    async with mock_http(routes) as http:
+        from magpie.enrich import enrich_github
+        assert await enrich_github(a, settings, http) is None   # 3 stars, no owner: not taken
+
+
+async def test_a_429_without_a_stated_delay_is_retried_like_before(tmp_path):
+    from magpie.analyzers import LocalLLMAnalyzer
+    from test_limits import GOOD, hosted, server
+    http, calls = server((429, {}, "Resource has been exhausted"), (200, {}, ""))
+    llm = LocalLLMAnalyzer(hosted(tmp_path, "gemini"), http)
+    waited = []
+
+    async def sleep(s):
+        waited.append(s)
+        from magpie import limits
+        limits.LIMITS[f"gemini:{llm.model}"]["blocked_until"] = None
+    llm._sleep = sleep
+    out = await llm.analyze(png_bytes(), "image/png")
+    assert out["title"] == GOOD["title"] and len(calls) == 2 and waited and waited[0] <= 4   # not "back in an hour"

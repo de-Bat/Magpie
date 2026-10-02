@@ -24,11 +24,12 @@ from pydantic import BaseModel
 
 from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
+from .bulk import BulkBusy, BulkRunner
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
 from .models import check_key
-from .usage import LIMITS
+from . import convlog, limits
 from .db import Database
 from .pipeline import Pipeline
 
@@ -61,6 +62,12 @@ class ItemPatch(BaseModel):
     note: str | None = None
     canonical_url: str | None = None
     tags: list[str] | None = None
+    confirmed: bool | None = None   # the user says this identification is right
+
+
+class BulkRequest(BaseModel):
+    scope: str = "all"                    # all | check (to check) | failed
+    skip_confirmed: bool = False          # leave out items you corrected or confirmed (re-analyze would overwrite them)
 
 
 class ModelsRequest(BaseModel):
@@ -90,12 +97,14 @@ def create_app(
             settings.load_errors.append(f"Settings could not be loaded: {e}")
     rt = _Runtime(settings)
     rt.open_database()
+    convlog.configure(settings)   # read live: turning logging on in the app takes effect at once
 
     def log_setup_code() -> None:
         log.warning("No access token is set. Setup code for changing settings in the web app: %s "
                     "(new on every start; not needed once MAGPIE_API_TOKEN is set)", rt.setup_code)
     db = rt.db  # a proxy: answers 503 with the reason while the database is unavailable
     state: dict = {}
+    bulk = BulkRunner(db, lambda: state["pipeline"])
 
     def build_analyzer(client: httpx.AsyncClient) -> Any:
         if analyzer is not None:
@@ -124,9 +133,29 @@ def create_app(
         pipeline.analyzer = build_analyzer(pipeline.http)
         start_worker(pipeline.analyzer)
 
+    async def retry_limited() -> None:
+        """Re-run items that failed because a model hit its limit, once their retry time has come."""
+        while True:
+            await asyncio.sleep(RETRY_POLL_SECONDS)
+            try:
+                if not rt.db_ok:
+                    continue
+                for item_id in db.due_retries():
+                    item = db.get_item(item_id)
+                    if not item or item.get("status") != "error":
+                        continue
+                    db.update_item(item_id, status="processing", error=None)
+                    await state["pipeline"].process(item_id, None, "analyze")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("Automatic retry failed")
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         client = http or httpx.AsyncClient(timeout=20)
+        limits.count_requests = lambda provider, model, since: db.requests_since(provider, model, since) if rt.db_ok else 0
+        retry_task = asyncio.create_task(retry_limited())
         chosen = build_analyzer(client)
         state["pipeline"] = app.state.pipeline = Pipeline(db, settings, chosen, client)
         try:
@@ -140,6 +169,7 @@ def create_app(
         if not settings.api_tokens:
             log_setup_code()
         yield
+        retry_task.cancel()
         if rt.worker_task:
             rt.worker_task.cancel()
         if http is None:
@@ -184,14 +214,15 @@ def create_app(
             problems.append({"level": "error", "key": None, "message": f"Analyzer not available: {rt.analyzer_error}"})
         levels = {p["level"] for p in problems}
         status = "error" if "error" in levels else "warning" if "warning" in levels else "ok"
-        return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer()}
+        return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer(),
+                "verified_confidence": settings.verified_confidence, "debug": settings.debug}
 
     @app.get("/api/health")
     def health():
         report = status_report()
         return {
             "ok": True, "api_version": API_VERSION, "auth_required": bool(settings.api_tokens),
-            "analyzer": settings.resolved_analyzer(), "status": report["status"],
+            "analyzer": settings.resolved_analyzer(), "status": report["status"], "debug": settings.debug,
             "errors": sum(p["level"] == "error" for p in report["problems"]),
             "warnings": sum(p["level"] == "warning" for p in report["problems"]),
         }
@@ -361,10 +392,11 @@ def create_app(
         tag: list[str] = Query(default=[]),
         needs_review: bool = False,
         unverified: bool = Query(False, description="Only items no metadata source (TMDB, GitHub, ...) confirmed and you haven't corrected"),
+        to_check: bool = Query(False, description="Only items that failed, are unsure, or that nothing confirmed"),
         limit: int = Query(200, le=500),
         offset: int = 0,
     ):
-        return db.list_items(q=q, category=category, tags=tag, needs_review=needs_review, unverified=unverified,
+        return db.list_items(q=q, category=category, tags=tag, needs_review=needs_review, unverified=unverified, to_check=to_check,
                              limit=limit, offset=offset)
 
     @app.get("/api/items/{item_id}")
@@ -380,6 +412,10 @@ def create_app(
         tags = fields.pop("tags", None)
         if tags is not None:
             db.set_tags(item_id, tags)
+        if fields.get("confirmed") is not None:
+            fields["confirmed"] = int(bool(fields["confirmed"]))
+        else:
+            fields.pop("confirmed", None)
         return db.update_item(item_id, **fields)
 
     @app.post("/api/items/{item_id}/reanalyze", status_code=202)
@@ -395,6 +431,84 @@ def create_app(
         No model is called, so it costs nothing and never changes the identification."""
         get_or_404(item_id)
         return await state["pipeline"].refresh_metadata(item_id)
+
+    @app.get("/api/bulk")
+    def bulk_status():
+        """Progress of the library-wide job (refresh all metadata / re-analyze all), if one is running."""
+        return bulk.snapshot()
+
+    def start_bulk(kind: str, req: BulkRequest, request: Request):
+        require_settings_access(request)   # re-analyzing the library spends money: same access rules as changing settings
+        try:
+            return bulk.start(kind, req.scope, req.skip_confirmed)
+        except BulkBusy as e:
+            raise HTTPException(409, str(e))
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @app.post("/api/bulk/refresh-metadata", status_code=202)
+    async def bulk_refresh(req: BulkRequest, request: Request):
+        """Look up posters, covers, ratings and links again for many items. No model is called."""
+        return start_bulk("refresh", req, request)
+
+    @app.post("/api/bulk/reanalyze", status_code=202)
+    async def bulk_reanalyze(req: BulkRequest, request: Request):
+        """Identify many items again with the configured analyzer (batched when Claude is used)."""
+        return start_bulk("reanalyze", req, request)
+
+    # ---- conversation logs (what was said to each AI model; see convlog.py) ----------------------------------------
+
+    @app.get("/api/logs")
+    def logs_list(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+                  operation: str | None = None, item: str | None = None, outcome: str | None = None):
+        require_settings_access(request)   # they contain what is in your screenshots
+        return {"enabled": convlog.enabled(), "debug": settings.debug, "images": settings.log_images or settings.debug, "retention_days": settings.log_retention_days,
+                "usage": convlog.disk_usage(), **convlog.list_sessions(limit, offset, operation, item, outcome)}
+
+    @app.get("/api/logs/{day}/{name}")
+    def logs_get(day: str, name: str, request: Request, format: str = Query("json", pattern="^(json|jsonl|md)$")):
+        require_settings_access(request)
+        sid = f"{day}/{name}"
+        if format == "md":
+            text = convlog.render_markdown(sid)
+            if text is None:
+                raise HTTPException(404, "No such log")
+            return Response(text, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f'inline; filename="{name}.md"'})
+        if format == "jsonl":
+            path = convlog.raw_session(sid)
+            if path is None:
+                raise HTTPException(404, "No such log")
+            return Response(path.read_text(encoding="utf-8"), media_type="application/x-ndjson",
+                            headers={"Content-Disposition": f'attachment; filename="{name}.jsonl"'})
+        data = convlog.read_session(sid)
+        if data is None:
+            raise HTTPException(404, "No such log")
+        return data
+
+    @app.get("/api/logs/{day}/{name}/image/{file}")
+    def logs_image(day: str, name: str, file: str, request: Request):
+        require_settings_access(request)
+        path = convlog.image_file(f"{day}/{name}", file)
+        if path is None:
+            raise HTTPException(404, "No such image")
+        return FileResponse(path)
+
+    @app.delete("/api/logs/{day}/{name}")
+    def logs_delete(day: str, name: str, request: Request):
+        require_settings_access(request)
+        if not convlog.delete_session(f"{day}/{name}"):
+            raise HTTPException(404, "No such log")
+        return {"ok": True}
+
+    @app.delete("/api/logs")
+    def logs_clear(request: Request):
+        require_settings_access(request)
+        return {"deleted": convlog.delete_all()}
+
+    @app.post("/api/bulk/cancel")
+    def bulk_cancel(request: Request):
+        require_settings_access(request)
+        return bulk.cancel()
 
     @app.post("/api/items/{item_id}/correct", status_code=202)
     def correct(item_id: str, correction: Correction, background: BackgroundTasks):
@@ -430,9 +544,14 @@ def create_app(
             "provider_model": settings.llm_model if settings.hosted_llm in HOSTED_LLMS else settings.model,
             "claude_batch": settings.claude_batch, "fetch_max_tokens": settings.fetch_max_tokens,
             "escalate_below": settings.escalate_below, "monthly_budget_usd": settings.monthly_budget_usd,
-            "month_spent_usd": round(db.month_cost(), 4), "limits": LIMITS,
+            "month_spent_usd": round(db.month_cost(), 4), "limits": limits.report(settings.paid_models()),
         }
         return report
+
+    @app.get("/api/limits")
+    def model_limits():
+        """What each provider/model in use has left, and any that hit a limit with when they're back."""
+        return {"models": limits.report(settings.paid_models()), "waiting": db.waiting_for_limits()}
 
     @app.get("/api/usage.csv")
     def usage_csv(days: int = Query(30, ge=1, le=366)):
@@ -498,6 +617,7 @@ def _normalize_time(value: str | None) -> str | None:
 
 
 INTERRUPTED = "The server stopped before this finished. Re-analyze to try again."
+RETRY_POLL_SECONDS = 30   # how often items waiting for a model's limit are checked
 SETUP_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O or 1/I: easy to copy from a log
 
 
@@ -536,7 +656,7 @@ class _Runtime:
         self._last_attempt = time.monotonic()
         try:
             self.settings.uploads_dir.mkdir(parents=True, exist_ok=True)
-            db = Database(self.settings.db_path)
+            db = Database(self.settings.db_path, verified_confidence=lambda: self.settings.verified_confidence)
         except Exception as e:
             self.db_error = (f"can't use the data directory {self.settings.data_dir} ({type(e).__name__}: {e}). "
                              "Check that it exists and that the server may write to it (MAGPIE_DATA_DIR).")
