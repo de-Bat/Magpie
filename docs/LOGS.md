@@ -32,6 +32,7 @@ Each line of a file is one event, written as it happens, so a crash keeps what w
 | `llm_request` | provider, model, mode (`realtime`, `hosted`, `local`), the **system prompt**, the **messages**, parameters. Images become their type, size and hash |
 | `llm_response` | HTTP status, time, the reply (text, tool call, thinking), tokens, rate-limit headers, errors |
 | `decision` | a choice Magpie made: escalated to the fallback model, kept the local answer, repaired a link, dropped dead links |
+| `web_search` / `link_search` | the queries Gemini ran and the pages it read; and the hunt for an article's address: each search engine's answer (ok, refused, no results), every page checked and why it was taken or refused |
 | `analysis` / `enrichment` / `result` | what the model said, what the lookups (GitHub, TMDB, the article page…) found, and what was stored |
 | `session_end` | outcome (`ok`, `error`, `rate_limited`, `queued_for_batch`), error, duration, number of calls, cost |
 
