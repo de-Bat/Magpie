@@ -15,7 +15,7 @@ from test_analyzers import GOOD, INSTAGRAM_POST, FakeBackend, FakeOcr, png
 
 def hosted(tmp_path, provider="groq", model=None, **kw):
     key = {"groq": "groq_api_key", "gemini": "gemini_api_key", "openai": "openai_api_key"}[provider]
-    s = Settings(data_dir=tmp_path, hosted_llm=provider, **{key: "k"}, **kw)
+    s = Settings(data_dir=tmp_path, hosted_llm=provider, gemini_web_search=False, **{key: "k"}, **kw)
     return s
 
 
@@ -135,7 +135,7 @@ def test_limited_items_are_retried_automatically(tmp_path):
             return {**GOOD, "_runs": []}
 
     flaky = Flaky()
-    app = create_app(Settings(data_dir=tmp_path, api_token=None, enrich=False, hosted_llm="gemini", gemini_api_key="k"), analyzer=flaky)
+    app = create_app(Settings(data_dir=tmp_path, api_token=None, enrich=False, hosted_llm="gemini", gemini_web_search=False, gemini_api_key="k"), analyzer=flaky)
     with TestClient(app) as client:
         item_id = client.post("/api/items", files={"file": ("s.png", png(), "image/png")}).json()["id"]
         item = client.get(f"/api/items/{item_id}").json()

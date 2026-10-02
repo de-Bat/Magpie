@@ -35,7 +35,7 @@ def hosted_app(tmp_path, token="tok", **kw):
         return httpx.Response(200, headers={"x-ratelimit-remaining-requests": "99", "set-cookie": "secret=1"},
                               json={"choices": [{"message": {"content": json.dumps(GOOD)}}], "usage": {"prompt_tokens": 900, "completion_tokens": 120}})
 
-    s = Settings(data_dir=tmp_path, api_token=token, enrich=False, hosted_llm="gemini", gemini_api_key="SECRET-KEY-123",
+    s = Settings(data_dir=tmp_path, api_token=token, enrich=False, hosted_llm="gemini", gemini_web_search=False, gemini_api_key="SECRET-KEY-123",
                  analyzer="local", ocr_engine="off", **kw)
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     router = AnalyzerRouter(s, http, ocr=FakeOcr(INSTAGRAM_POST))
@@ -109,7 +109,7 @@ def test_keys_never_reach_the_logs_and_images_are_kept_only_when_asked(tmp_path)
 
 
 def test_a_failed_call_is_logged_with_its_error(tmp_path):
-    s = Settings(data_dir=tmp_path, api_token="tok", enrich=False, hosted_llm="gemini", gemini_api_key="k", analyzer="local",
+    s = Settings(data_dir=tmp_path, api_token="tok", enrich=False, hosted_llm="gemini", gemini_web_search=False, gemini_api_key="k", analyzer="local",
                  ocr_engine="off", log_conversations=True)
     http = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(500, text="boom")))
     app = create_app(s, analyzer=AnalyzerRouter(s, http, ocr=FakeOcr(INSTAGRAM_POST)), http=http, start_batch_worker=False)
@@ -217,7 +217,7 @@ def test_a_shared_link_is_logged_with_its_url(tmp_path):
         if request.url.host == "blog.example":
             return httpx.Response(200, text=page, headers={"content-type": "text/html"})
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({**GOOD, "category": "article", "title": "Hello"})}}]})
-    s = Settings(data_dir=tmp_path, api_token="tok", enrich=False, hosted_llm="gemini", gemini_api_key="k", analyzer="local", ocr_engine="off", debug=True)
+    s = Settings(data_dir=tmp_path, api_token="tok", enrich=False, hosted_llm="gemini", gemini_web_search=False, gemini_api_key="k", analyzer="local", ocr_engine="off", debug=True)
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     app = create_app(s, analyzer=AnalyzerRouter(s, http, ocr=FakeOcr(INSTAGRAM_POST)), http=http, start_batch_worker=False)
     with TestClient(app, headers=AUTH) as client:

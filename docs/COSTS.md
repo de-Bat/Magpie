@@ -157,3 +157,10 @@ Every provider limits how much you can send, and they report it differently. Mag
 When a model hits a limit (HTTP 429, Gemini's `RESOURCE_EXHAUSTED`, or OpenAI's `insufficient_quota`), Magpie pauses that model until the time the provider gives: `retry-after`, Gemini's `retryDelay`, the reset of the exhausted limit, or the next quota day. A pause of a few seconds is waited out. A longer one fails fast without calling the provider, and the screenshot is **retried automatically** when the model is available again. Out of credit doesn't reset by itself, so Magpie tries again every 15 minutes. In hybrid mode, a paused fallback model means the local model's answer is kept instead.
 
 The web app shows a red **⏳ Gemini limit · back in 25 min** pill in the header while a model in use is paused, and an amber one when less than 10% of a limit is left. **Usage & cost → What's left** shows each model's limits, with bars and reset times.
+
+## Gemini web search
+
+Gemini models search the web through Google Search grounding (Settings → Other AI providers → "Gemini: search the web", on by default),
+so they find the repository, the article's own page and related links themselves, as Claude does. Google bills the search queries
+(Gemini 3: about $14 per 1,000; Magpie counts $0.014 per query, and a screenshot typically uses 1–3). Turn it off to have Gemini answer
+from the screenshot alone and let Magpie look things up afterwards. A model that doesn't accept the search tool is used without it.
