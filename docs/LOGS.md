@@ -41,11 +41,28 @@ Every retry is its own `llm_request` / `llm_response` pair (`attempt` 1, 2, …)
 
 | Setting | Default | |
 |---|---|---|
+| `MAGPIE_DEBUG` | off | debug mode: logging with images kept, plus the app's Debug view |
 | `MAGPIE_LOG_CONVERSATIONS` | off | turn logging on |
 | `MAGPIE_LOG_IMAGES` | off | also save the screenshot that was sent (after downscaling) next to each log, as `<name>.1.png` |
 | `MAGPIE_LOG_RETENTION_DAYS` | 30 | delete day folders older than this; `0` keeps them until you delete them |
 
 A single session stops at 8 MB, and a text field longer than 60,000 characters is cut with a note.
+
+## Debug mode
+
+`MAGPIE_DEBUG=true` (Settings → Logging → **Debug mode**) is logging with everything on, plus a **🐞 Debug** button in the app's
+header. It opens the history of conversations; each one shows
+
+- the **input**: the screenshot that was analyzed (a copy kept with the log, so it is still there after you edit or delete the
+  item) or the link, your note, what the item was before, and the OCR text;
+- the **conversation**: every request and reply with the model, in order, including retries, rate limits and decisions;
+- the **model used**: the provider and model of each call and the path the answer took (e.g. `ocr → local:qwen → gemini:gemini-2.5-flash`),
+  the number of calls, time and cost;
+- the **output card**: the card as it came out, with its category, confidence, sources and the whole stored record.
+
+An item's detail sheet gets a "Conversations for this item" button. The Debug view needs the same access as settings (your access
+token, or the setup code while there is none), and only appears while the server is in debug mode. It is meant for troubleshooting:
+turn it off when you are done, and delete the logs if you don't need them (Settings → Logging).
 
 ## Looking at them
 
@@ -57,6 +74,6 @@ data directory, or:
 jq -c 'select(.event=="llm_response") | {t, model, status, duration_ms}' logs/2026-10-02/*.jsonl
 ```
 
-API (same access as settings: your access token, or the setup code while there is none): `GET /api/logs?operation=&item=&outcome=`,
+API (same access as settings: your access token, or the setup code while there is none): `GET /api/logs?operation=&item=&outcome=` (each session lists its `input`, the models `used` and the output `card`),
 `GET /api/logs/<day>/<name>` (`?format=md|jsonl`), `GET /api/logs/<day>/<name>/image/<file>`, `DELETE /api/logs/<day>/<name>`,
 `DELETE /api/logs`.

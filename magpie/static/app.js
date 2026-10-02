@@ -544,6 +544,7 @@ function renderServerStatus() {
   dot.hidden = !level;
   dot.className = `status-dot ${level || ""}`;
   const counts = s ? s.problems.filter((p) => p.level !== "info").length : 0;
+  $("#debug-btn").hidden = !(s && s.debug);   // the server is in debug mode: there is a history of conversations to browse
   $("#settings-btn").title = level ? `Settings — ${counts} problem${counts === 1 ? "" : "s"} with the server setup` : "Settings";
 }
 
@@ -1264,6 +1265,136 @@ async function showLogImage(path) {
     if (!res.ok) throw new Error(res.statusText);
     window.open(URL.createObjectURL(await res.blob()), "_blank");
   } catch (e) { toast(`Couldn't open the image: ${e.message}`); }
+}
+
+// ---- debug view (server in debug mode) ---------------------------------------------------------------------------
+// The history of conversations with the AI models: for each, the capture that went in, the conversation, the card that
+// came out and the model that was used.
+
+const logImageUrls = new Map();   // log image path -> object URL (the files need the access token, so <img src> can't fetch them)
+
+async function logImageUrl(path) {
+  if (logImageUrls.has(path)) return logImageUrls.get(path);
+  const token = await db.get("kv", "token");
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+  const res = await fetch(`/api/logs/${path}`, { headers });
+  if (!res.ok) throw new Error(res.statusText);
+  const url = URL.createObjectURL(await res.blob());
+  logImageUrls.set(path, url);
+  return url;
+}
+
+// Put the picture in once it has loaded (the rows are rendered before their images arrive).
+function fillLogImages(root) {
+  root.querySelectorAll("img[data-log-img]").forEach(async (img) => {
+    try { img.src = await logImageUrl(img.dataset.logImg); img.hidden = false; } catch { img.closest(".dbg-thumb")?.classList.add("none"); }
+  });
+}
+
+const debugState = { op: "", item: "", id: null };
+
+function modelsOf(x) {
+  const used = (x.used || []).filter((u) => u !== "ocr" && u !== "rules" && u !== "link" && u !== "readability");
+  return used.length ? used.join(" → ") : (x.models || []).join(", ") || "no model";
+}
+
+function debugRowHtml(x) {
+  const when = new Date(x.started);
+  const ok = x.outcome === "ok" ? "ok" : x.outcome === "queued_for_batch" || x.outcome === "running" ? "" : "bad";
+  const input = x.input || {};
+  const thumb = input.file ? `<img data-log-img="${esc(x.id)}/image/${esc(input.file)}" alt="" hidden>` : "";
+  const sub = input.kind === "url" ? (input.source_url || "").replace(/^https?:\/\/(www\.)?/, "") : "screenshot";
+  return `<button type="button" class="dbg-row ${debugState.id === x.id ? "active" : ""}" data-debug-open="${esc(x.id)}">
+    <span class="dbg-thumb">${thumb}<i>${input.kind === "url" ? "🔗" : "🖼"}</i></span>
+    <span class="dbg-main"><b>${esc((x.card && x.card.title) || x.title || sub || x.item_id || "—")}</b>
+      <small>${esc(OP_LABEL[x.operation] || x.operation)} · ${esc(when.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</small>
+      <small class="dbg-model">${esc(modelsOf(x))}${x.cost_usd ? ` · ${esc(formatUsd(x.cost_usd))}` : ""}</small></span>
+    <span class="pill ${ok}">${esc(x.outcome.replace(/_/g, " "))}</span></button>`;
+}
+
+async function showDebug(opts = {}) {
+  if (opts.item !== undefined) debugState.item = opts.item || "";
+  const dlg = $("#detail");
+  dlg.dataset.id = "";
+  dlg.innerHTML = `<div class="debug-panel" data-view="list"><button class="btn close" data-action="close" aria-label="Close">✕</button>
+    <header class="dbg-head"><h2>Debug · conversations</h2>
+      <select id="dbg-op" aria-label="Operation"><option value="">All operations</option>${Object.entries(OP_LABEL).map(([k, v]) => `<option value="${k}" ${debugState.op === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+      ${debugState.item ? `<button class="btn small" type="button" data-debug-clear-item>Only this item ✕</button>` : ""}
+      <button class="btn small" type="button" data-debug-refresh>↻</button></header>
+    <div class="dbg-body"><div id="dbg-list" class="dbg-list"><p class="meta-line">Loading…</p></div>
+      <div id="dbg-detail" class="dbg-detail"><p class="meta-line">Pick a conversation to see what went in, what was said and what came out.</p></div></div></div>`;
+  if (!dlg.open) dlg.showModal();
+  await loadDebugList();
+  if (opts.open) openDebug(opts.open);
+}
+
+async function loadDebugList() {
+  const list = $("#dbg-list");
+  if (!list) return;
+  try {
+    const q = new URLSearchParams({ limit: "200" });
+    if (debugState.op) q.set("operation", debugState.op);
+    if (debugState.item) q.set("item", debugState.item);
+    const res = await apiWithSetup(`/api/logs?${q}`);
+    if (!res.debug && !res.enabled) { list.innerHTML = `<p class="meta-line">The server isn't recording conversations. Turn on Debug mode in Settings → Logging.</p>`; return; }
+    list.innerHTML = res.sessions.length ? res.sessions.map(debugRowHtml).join("")
+      : `<p class="meta-line">No conversations yet. Save a screenshot or a link, or re-analyze an item, and it shows up here.</p>`;
+    fillLogImages(list);
+  } catch (e) {
+    list.innerHTML = `<p class="meta-line">${esc(e.message === "Cancelled" ? "Enter the setup code to see the history." : `Couldn't load it: ${errorMessage(e)}`)} <button class="link-btn" type="button" data-debug-refresh>Try again</button></p>`;
+  }
+}
+
+function debugCardHtml(card) {
+  if (!card) return `<p class="meta-line">No card was produced (it ended before a result).</p>`;
+  const item = { ...card, image_url: card.image_url, status: card.status || "ready" };
+  const facts = [["Category", card.category && typeName(card.category)], ["Confidence", card.confidence != null && `${card.confidence}%`],
+    ["Verified", card.verified != null && (card.verified ? "yes" : "no")], ["Link", card.canonical_url], ["Image", card.image_url],
+    ["Sources", (card.metadata?.sources || []).join(" → ")], ["Why", card.confidence_reason]].filter(([, v]) => v);
+  return `<div class="dbg-card"><article class="card ${esc(item.status)}">${coverHtml(item)}
+      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div></div></article>
+    <dl>${facts.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${/^https?:/.test(String(v)) ? `<a href="${esc(v)}" target="_blank" rel="noopener noreferrer">${esc(v)}</a>` : esc(v)}</dd>`).join("")}</dl></div>
+    ${card.summary ? `<p class="meta-line">${esc(card.summary)}</p>` : ""}
+    <details><summary>Everything on the card</summary><pre>${esc(JSON.stringify(card, null, 1))}</pre></details>`;
+}
+
+async function openDebug(id) {
+  debugState.id = id;
+  document.querySelectorAll(".dbg-row").forEach((r) => r.classList.toggle("active", r.dataset.debugOpen === id));
+  const panel = $(".debug-panel"), box = $("#dbg-detail");
+  if (!box) return;
+  panel.dataset.view = "detail";
+  box.innerHTML = `<p class="meta-line">Loading…</p>`;
+  let d;
+  try { d = await apiWithSetup(`/api/logs/${id}`); } catch (e) { box.innerHTML = `<p class="meta-line">Couldn't open it: ${esc(errorMessage(e))}</p>`; return; }
+  const input = d.input || {}, start = d.events.find((e) => e.event === "session_start") || {};
+  const ocr = d.events.find((e) => e.event === "ocr");
+  const reqs = d.events.filter((e) => e.event === "llm_request");
+  const models = [...new Set(reqs.map((e) => `${PROVIDER_NAMES[e.provider] || e.provider} · ${e.model}`))];
+  const live = state.items.has(d.item_id);
+  box.innerHTML = `
+    <div class="dbg-back"><button class="btn small" type="button" data-debug-back>← History</button>
+      <b>${esc(OP_LABEL[d.operation] || d.operation)}</b> <span class="meta-line">${esc(new Date(d.started).toLocaleString())}</span>
+      <span class="pill ${d.outcome === "ok" ? "ok" : d.outcome === "queued_for_batch" ? "" : "bad"}">${esc(d.outcome.replace(/_/g, " "))}</span>
+      ${live ? `<button class="btn small" type="button" data-open-item="${esc(d.item_id)}">Open the item</button>` : ""}
+      <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="md">⬇ .md</button>
+      <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="jsonl">⬇ .jsonl</button></div>
+    <section class="dbg-model-box"><h3>Model used</h3>
+      <p><b>${esc(models.join("  →  ") || "no model call")}</b></p>
+      <p class="meta-line">${d.used ? `Answer path: ${esc(d.used.join(" → "))}. ` : ""}${reqs.length} call${reqs.length === 1 ? "" : "s"}${d.duration_ms != null ? ` · ${(d.duration_ms / 1000).toFixed(1)} s` : ""}${d.cost_usd ? ` · ${esc(formatUsd(d.cost_usd))}` : ""}${start.escalate_below != null && start.analyzer === "hybrid" ? ` · hybrid, escalates below ${start.escalate_below}%` : ""}${d.error ? ` · ${esc(d.error)}` : ""}</p></section>
+    <section><h3>Input</h3>
+      ${input.kind === "url" ? `<p><a href="${esc(input.source_url)}" target="_blank" rel="noopener noreferrer">${esc(input.source_url)}</a></p>`
+        : input.file ? `<img class="dbg-input" data-log-img="${esc(id)}/image/${esc(input.file)}" alt="The screenshot that was analyzed" hidden>`
+        : `<p class="meta-line">The screenshot wasn't kept (turn on “Keep the screenshots in the logs”, or Debug mode).</p>`}
+      ${input.note ? `<p class="meta-line">Your note: ${esc(input.note)}</p>` : ""}
+      ${start.previous && start.previous.title && d.operation !== "analyze" ? `<p class="meta-line">Before: ${esc(start.previous.title)} (${esc(start.previous.category || "?")}, ${esc(start.previous.confidence ?? "?")}%)</p>` : ""}
+      ${ocr && ocr.text ? `<details><summary>OCR text (${ocr.lines} lines)</summary><pre>${esc(ocr.text)}</pre></details>` : ""}</section>
+    <section><h3>Conversation</h3>${d.events.filter((e) => !["card", "ocr"].includes(e.event)).map(logEventHtml).join("")}</section>
+    <section><h3>Output card</h3>${debugCardHtml(d.card)}</section>`;
+  fillLogImages(box);
+  box.scrollTop = 0;
 }
 
 let bulkTimer = null;
@@ -2099,6 +2230,7 @@ function renderDetail(item) {
           <input id="new-tag" placeholder="add tag ↵" enterkeyhint="done" autocapitalize="off">
         </div>
       </section>
+      ${state.server?.debug ? `<p class="meta-line"><button class="btn small" type="button" data-debug-item="${esc(item.id)}">🐞 Conversations for this item</button></p>` : ""}
       <details class="provenance"><summary>Where this came from</summary>
         <p class="meta-line">${m.sources ? `Identified via ${esc(m.sources.join(" → "))}.` : "Source trail not recorded."}${m.found_by ? ` Repository found by ${esc(m.found_by.replace(/^GitHub search/, "a GitHub search"))}.` : ""}${
           item.usage?.runs ? ` Cost ${esc(formatUsd(item.usage.cost_usd))}${item.usage.web_searches ? `, ${item.usage.web_searches} web search${item.usage.web_searches > 1 ? "es" : ""}` : ""}.` : ""}</p>
@@ -2151,7 +2283,10 @@ $("#search").addEventListener("input", (e) => {
 });
 $("#tag-filter").addEventListener("input", renderFilters);
 $("#detail").addEventListener("input", (e) => { if (e.target.id === "settings-search") searchSettings(e.target.value); });
-$("#detail").addEventListener("change", (e) => { if (e.target.id === "logs-op") { logsFilter = e.target.value; loadLogs(); } });
+$("#detail").addEventListener("change", (e) => {
+  if (e.target.id === "logs-op") { logsFilter = e.target.value; loadLogs(); }
+  if (e.target.id === "dbg-op") { debugState.op = e.target.value; loadDebugList(); }
+});
 $("#detail").addEventListener("keydown", (e) => {
   if (e.target.id !== "settings-search") return;
   if (e.key === "Enter") e.preventDefault();   // not "save settings"
@@ -2198,7 +2333,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -2217,6 +2352,11 @@ document.addEventListener("click", async (e) => {
     return field?.focus();
   }
   if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
+  if (t.dataset.debugOpen !== undefined) return openDebug(t.dataset.debugOpen);
+  if (t.dataset.debugBack !== undefined) { $(".debug-panel").dataset.view = "list"; return; }
+  if (t.dataset.debugRefresh !== undefined) return loadDebugList();
+  if (t.dataset.debugClearItem !== undefined) return showDebug({ item: "" });
+  if (t.dataset.debugItem !== undefined) return showDebug({ item: t.dataset.debugItem });
   if (t.dataset.logOpen !== undefined) return openLog(t.dataset.logOpen);
   if (t.dataset.logSave !== undefined) return saveLogFile(t.dataset.logSave, t.dataset.format);
   if (t.dataset.logImage !== undefined) { e.preventDefault(); return showLogImage(t.dataset.logImage); }
@@ -2288,6 +2428,7 @@ document.addEventListener("click", async (e) => {
       case "add": return $("#add-dialog").showModal();
       case "close-add": return $("#add-dialog").close();
       case "settings": return showSettings();
+      case "debug": return showDebug();
       case "sync": return requestSync();
       case "dismiss-install":
         try { localStorage.setItem("magpie.installHintDismissed", "1"); } catch {}

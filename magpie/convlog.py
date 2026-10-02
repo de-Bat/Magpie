@@ -51,8 +51,17 @@ def configure(settings: Any) -> None:
     _settings = settings
 
 
+def _flag(name: str) -> bool:
+    """A logging setting; debug mode turns on conversation logging and image keeping."""
+    return bool(_settings is not None and (getattr(_settings, "debug", False) or getattr(_settings, name, False)))
+
+
 def enabled() -> bool:
-    return bool(_settings is not None and getattr(_settings, "log_conversations", False))
+    return _flag("log_conversations")
+
+
+def debug_mode() -> bool:
+    return bool(_settings is not None and getattr(_settings, "debug", False))
 
 
 def log_dir() -> Path:
@@ -120,7 +129,7 @@ def _image_note(session: "Session | None", media_type: str | None, data: bytes) 
             note["size"] = f"{im.width}x{im.height}"
     except Exception:
         pass
-    if session is not None and getattr(_settings, "log_images", False):
+    if session is not None and _flag("log_images"):
         note["file"] = session.save_image(data, media_type)
     return note
 
@@ -148,6 +157,16 @@ class Session:
         self.llm_calls = 0
         self.cost = 0.0
         self.capped = False
+        input_image = meta.pop("input_image", None)
+        if input_image and _flag("log_images"):
+            try:   # the capture as it was when this ran: the item may be edited or deleted later
+                src = Path(input_image)
+                if src.is_file():
+                    target = folder / f"{name}.input{src.suffix.lower() or '.png'}"
+                    shutil.copyfile(src, target)
+                    meta["input"] = {**(meta.get("input") or {}), "file": target.name}
+            except OSError:
+                log.exception("Could not keep the input capture")
         self.add("session_start", operation=operation, item_id=item_id, **meta)
 
     def add(self, event: str, **data: Any) -> None:
@@ -290,6 +309,8 @@ def summarize(p: Path) -> dict:
     end = next((e for e in reversed(events) if e["event"] == "session_end"), {})
     reqs = [e for e in events if e["event"] == "llm_request"]
     result = next((e for e in reversed(events) if e["event"] == "result"), {})
+    card = next((e.get("card") for e in reversed(events) if e["event"] == "card"), None)
+    analysis = next((e for e in reversed(events) if e["event"] == "analysis"), {})
     return {
         "id": f"{p.parent.name}/{p.stem}", "started": start.get("t") or events[0]["t"] if events else None,
         "operation": start.get("operation"), "item_id": start.get("item_id"), "title": result.get("title") or start.get("item_title"),
@@ -297,6 +318,8 @@ def summarize(p: Path) -> dict:
         "outcome": end.get("outcome") or "running", "error": end.get("error"), "cost_usd": end.get("cost_usd"),
         "duration_ms": end.get("duration_ms"), "bytes": p.stat().st_size,
         "confidence": result.get("confidence"), "category": result.get("category"),
+        "input": start.get("input"), "used": analysis.get("used"),
+        "card": {k: card.get(k) for k in ("title", "category", "image_url", "confidence", "status")} if card else None,
     }
 
 
@@ -325,7 +348,9 @@ def read_session(session_id: str) -> dict | None:
     p = _path(session_id)
     if not p:
         return None
-    return {**summarize(p), "events": _events(p), "files": sorted(f.name for f in p.parent.glob(f"{p.stem}.*") if f.suffix != ".jsonl")}
+    events = _events(p)
+    card = next((e.get("card") for e in reversed(events) if e["event"] == "card"), None)
+    return {**summarize(p), "events": events, "card": card, "files": sorted(f.name for f in p.parent.glob(f"{p.stem}.*") if f.suffix != ".jsonl")}
 
 
 def raw_session(session_id: str) -> Path | None:
@@ -334,7 +359,7 @@ def raw_session(session_id: str) -> Path | None:
 
 def image_file(session_id: str, name: str) -> Path | None:
     p = _path(session_id)
-    if not p or not re.fullmatch(re.escape(p.stem) + r"\.\d+\.\w+", name or ""):
+    if not p or not re.fullmatch(re.escape(p.stem) + r"\.(\d+|input)\.\w+", name or ""):
         return None
     f = p.parent / name
     return f if f.is_file() else None

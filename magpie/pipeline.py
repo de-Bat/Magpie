@@ -27,6 +27,14 @@ from .enrich import Enrichment, run_enrichers
 log = logging.getLogger(__name__)
 
 
+def card_snapshot(item: dict) -> dict:
+    """The card as it came out: everything the app shows for it, without the bulky raw fields."""
+    heavy = {"analysis", "image_file"}
+    card = {k: v for k, v in item.items() if k not in heavy}
+    card["metadata"] = {k: v for k, v in (item.get("metadata") or {}).items() if k not in ("article_text", "ocr_text", "screenshot_text")}
+    return card
+
+
 def jsonable_error(result: Any) -> Any:
     """Why a batch request didn't succeed, for the log."""
     return None if getattr(result, "type", None) == "succeeded" else convlog.jsonable(getattr(result, "error", None) or getattr(result, "type", None))
@@ -402,7 +410,9 @@ class Pipeline:
                              note=item.get("note"), analyzer=s.resolved_analyzer(), claude_model=s.model,
                              hosted_provider=s.hosted_llm if s.hosted_llm != "none" else None, hosted_model=s.llm_model,
                              local_model=s.local_llm_model if s.local_llm_url else None, escalate_below=s.escalate_below,
-                             claude_batch=s.claude_batch, previous={k: item.get(k) for k in ("title", "category", "canonical_url", "confidence")}):
+                             claude_batch=s.claude_batch, previous={k: item.get(k) for k in ("title", "category", "canonical_url", "confidence")},
+                             input={"kind": item.get("kind") or "screenshot", "source_url": item.get("source_url"), "note": item.get("note")},
+                             input_image=(s.uploads_dir / item["image_file"]) if item.get("image_file") and item.get("kind") != "url" else None):
             return await self._run_logged(item_id, purpose, work, corrected)
 
     async def _run_logged(self, item_id: str, purpose: str, work, corrected: bool) -> dict | None:
@@ -459,6 +469,7 @@ class Pipeline:
             convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"{type(e).__name__}: {e}")
         if stored:
+            convlog.event("card", card=card_snapshot(stored))
             convlog.event("result", title=stored.get("title"), category=stored.get("category"), confidence=stored.get("confidence"),
                           canonical_url=stored.get("canonical_url"), image_url=stored.get("image_url"), status=stored.get("status"),
                           verified=stored.get("verified"), sources=(stored.get("metadata") or {}).get("sources"),

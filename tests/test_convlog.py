@@ -176,3 +176,50 @@ async def test_claude_conversations_and_batches_are_logged(tmp_path):
     assert "base64" not in json.dumps(req)
     resp = next(e for e in lines if e["event"] == "llm_response")
     assert resp["content"][0]["text"] == "thinking aloud" and resp["usage"] if "usage" in resp else True
+
+
+def test_debug_mode_records_everything_and_tells_the_client(tmp_path):
+    app, s, _ = hosted_app(tmp_path, debug=True)   # no logging settings: debug implies them
+    with TestClient(app, headers=AUTH) as client:
+        assert client.get("/api/status").json()["debug"] is True and client.get("/api/health").json()["debug"] is True
+        item_id = upload(client)
+        listing = client.get("/api/logs").json()
+        assert listing["enabled"] and listing["debug"] and listing["images"]
+        [row] = listing["sessions"]
+        # the input capture, the model that was used and the card that came out are all in the history
+        assert row["input"]["kind"] == "screenshot" and row["input"]["file"].endswith(".input.png")
+        assert row["used"] == ["gemini:gemini-2.5-flash"] or row["used"][-1].startswith("gemini")
+        assert row["models"] == ["gemini:gemini-2.5-flash"]
+        assert row["card"]["title"] == GOOD["title"] and row["card"]["category"]
+        detail = client.get(f"/api/logs/{row['id']}").json()
+        card = detail["card"]
+        assert card["id"] == item_id and "analysis" not in card and card["status"] == "ready"
+        # the screenshot as it was sent in, still there once the item is gone
+        assert client.get(f"/api/logs/{row['id']}/image/{row['input']['file']}").content[:4] == b"\x89PNG"
+        client.delete(f"/api/items/{item_id}")
+        assert client.get(f"/api/logs/{row['id']}/image/{row['input']['file']}").status_code == 200
+
+
+def test_debug_mode_off_by_default(tmp_path):
+    app, s, _ = hosted_app(tmp_path)
+    with TestClient(app, headers=AUTH) as client:
+        assert client.get("/api/status").json()["debug"] is False
+        upload(client)
+        assert client.get("/api/logs").json()["total"] == 0
+
+
+def test_a_shared_link_is_logged_with_its_url(tmp_path):
+    page = '<html><head><title>Hello</title></head><body><p>' + "word " * 200 + '</p></body></html>'
+
+    def handler(request):
+        if request.url.host == "blog.example":
+            return httpx.Response(200, text=page, headers={"content-type": "text/html"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps({**GOOD, "category": "article", "title": "Hello"})}}]})
+    s = Settings(data_dir=tmp_path, api_token="tok", enrich=False, hosted_llm="gemini", gemini_api_key="k", analyzer="local", ocr_engine="off", debug=True)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    app = create_app(s, analyzer=AnalyzerRouter(s, http, ocr=FakeOcr(INSTAGRAM_POST)), http=http, start_batch_worker=False)
+    with TestClient(app, headers=AUTH) as client:
+        client.post("/api/items", data={"url": "https://blog.example/post"})
+        rows = client.get("/api/logs").json()["sessions"]
+        link = next(r for r in rows if (r["input"] or {}).get("source_url"))
+        assert link["input"]["kind"] == "url" and link["input"]["source_url"] == "https://blog.example/post" and "file" not in link["input"]

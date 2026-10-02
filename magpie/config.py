@@ -128,6 +128,10 @@ SPECS: list[Spec] = [
          "IMDb, Rotten Tomatoes and Metacritic scores. https://www.omdbapi.com/apikey.aspx"),
     Spec("github_token", "GITHUB_TOKEN", "secret", None, "Lookups", "GitHub token",
          "Raises the GitHub rate limit from 60 to 5000 requests/hour."),
+    Spec("debug", "MAGPIE_DEBUG", "bool", False, "Logging", "Debug mode",
+         "Records every conversation with the AI models, together with the screenshot or link that went in and the card that came "
+         "out, and adds a Debug view to the app to browse them. Implies the two logging settings below; for troubleshooting, "
+         "since the logs contain what is in your screenshots."),
     Spec("log_conversations", "MAGPIE_LOG_CONVERSATIONS", "bool", False, "Logging", "Save conversations with the AI models",
          "Keeps what Magpie sent to each model and what came back, one file per operation (analysis, correction, batch result), "
          "for debriefing and inspection. The logs contain what is in your screenshots; they never contain API keys."),
@@ -243,6 +247,7 @@ class Settings:
     local_cost_per_hour: float = field(default_factory=_from_env("local_cost_per_hour"))
 
     # Conversation logs: what was sent to each model and what came back (see magpie/convlog.py)
+    debug: bool = field(default_factory=_from_env("debug"))   # records everything and adds the app's Debug view
     log_conversations: bool = field(default_factory=_from_env("log_conversations"))
     log_images: bool = field(default_factory=_from_env("log_images"))
     log_retention_days: int = field(default_factory=_from_env("log_retention_days"))

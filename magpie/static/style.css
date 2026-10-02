@@ -555,3 +555,40 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
   .log-row { grid-template-columns: minmax(0, 1fr) auto; }
   .log-row .log-when, .log-row .log-model { grid-column: 1 / -1; }
 }
+
+/* Debug view: history | input, conversation, output card */
+#detail:has(.debug-panel) { width: min(1180px, calc(100vw - 24px)); height: min(860px, calc(100dvh - 32px)); margin: auto; border-radius: 16px; border-width: 1px; }
+.debug-panel { display: grid; grid-template-rows: auto 1fr; height: 100%; min-height: 0; padding: 16px 18px; gap: 10px; }
+.debug-panel .close { position: absolute; top: 12px; right: 12px; z-index: 2; border-radius: 50%; width: 34px; height: 34px; padding: 0; justify-content: center; }
+.dbg-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-right: 44px; }
+.dbg-head h2 { margin: 0 auto 0 0; font-size: 18px; }
+.dbg-head select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.dbg-body { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 14px; min-height: 0; }
+.dbg-list, .dbg-detail { overflow: auto; min-height: 0; }
+.dbg-list { display: grid; gap: 6px; align-content: start; }
+.dbg-row { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left; width: 100%; font: inherit; color: var(--text);
+  background: var(--surface-2); border: 0; border-radius: 10px; padding: 8px; cursor: pointer; }
+.dbg-row:hover { outline: 1px solid var(--border); } .dbg-row.active { outline: 2px solid var(--accent); }
+.dbg-thumb { width: 52px; height: 52px; border-radius: 8px; overflow: hidden; background: var(--surface); display: grid; place-items: center; position: relative; }
+.dbg-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; } .dbg-thumb i { font-style: normal; opacity: .6; }
+.dbg-main { display: grid; min-width: 0; gap: 1px; } .dbg-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.dbg-main small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .dbg-model { color: var(--accent) !important; }
+.dbg-detail { display: grid; gap: 14px; align-content: start; padding-right: 4px; }
+.dbg-detail section h3 { margin: 0 0 8px; font: 500 12px ui-monospace, Menlo, monospace; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.dbg-back { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dbg-model-box { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; } .dbg-model-box p { margin: 2px 0; }
+.dbg-input { max-width: min(100%, 360px); max-height: 420px; border-radius: 10px; border: 1px solid var(--border); display: block; }
+.dbg-card { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 14px; align-items: start; }
+.dbg-card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; } .dbg-card dt { color: var(--muted); }
+.dbg-card dd { margin: 0; overflow-wrap: anywhere; }
+.dbg-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace; background: var(--surface-2); border-radius: 6px; padding: 8px; max-height: 320px; overflow: auto; }
+.debug-btn { border-color: color-mix(in oklab, var(--accent) 50%, transparent); }
+.dbg-back { display: none; } .debug-panel[data-view="detail"] .dbg-back { display: flex; }
+@media (max-width: 760px) {
+  #detail:has(.debug-panel) { width: 100vw; height: 100dvh; max-height: none; border-radius: 0; margin: 0; }
+  .dbg-body { grid-template-columns: 1fr; }
+  .debug-panel[data-view="list"] .dbg-detail, .debug-panel[data-view="detail"] .dbg-list { display: none; }
+  .dbg-card { grid-template-columns: 1fr; } .dbg-card .card { max-width: 200px; }
+  .debug-btn .debug-text { display: none; }
+}
+@media (min-width: 761px) { .debug-panel[data-view="detail"] .dbg-back .btn[data-debug-back] { display: none; } }

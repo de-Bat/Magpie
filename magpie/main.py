@@ -215,14 +215,14 @@ def create_app(
         levels = {p["level"] for p in problems}
         status = "error" if "error" in levels else "warning" if "warning" in levels else "ok"
         return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer(),
-                "verified_confidence": settings.verified_confidence}
+                "verified_confidence": settings.verified_confidence, "debug": settings.debug}
 
     @app.get("/api/health")
     def health():
         report = status_report()
         return {
             "ok": True, "api_version": API_VERSION, "auth_required": bool(settings.api_tokens),
-            "analyzer": settings.resolved_analyzer(), "status": report["status"],
+            "analyzer": settings.resolved_analyzer(), "status": report["status"], "debug": settings.debug,
             "errors": sum(p["level"] == "error" for p in report["problems"]),
             "warnings": sum(p["level"] == "warning" for p in report["problems"]),
         }
@@ -462,7 +462,7 @@ def create_app(
     def logs_list(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
                   operation: str | None = None, item: str | None = None, outcome: str | None = None):
         require_settings_access(request)   # they contain what is in your screenshots
-        return {"enabled": convlog.enabled(), "images": settings.log_images, "retention_days": settings.log_retention_days,
+        return {"enabled": convlog.enabled(), "debug": settings.debug, "images": settings.log_images or settings.debug, "retention_days": settings.log_retention_days,
                 "usage": convlog.disk_usage(), **convlog.list_sessions(limit, offset, operation, item, outcome)}
 
     @app.get("/api/logs/{day}/{name}")
