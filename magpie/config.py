@@ -128,6 +128,13 @@ SPECS: list[Spec] = [
          "IMDb, Rotten Tomatoes and Metacritic scores. https://www.omdbapi.com/apikey.aspx"),
     Spec("github_token", "GITHUB_TOKEN", "secret", None, "Lookups", "GitHub token",
          "Raises the GitHub rate limit from 60 to 5000 requests/hour."),
+    Spec("log_conversations", "MAGPIE_LOG_CONVERSATIONS", "bool", False, "Logging", "Save conversations with the AI models",
+         "Keeps what Magpie sent to each model and what came back, one file per operation (analysis, correction, batch result), "
+         "for debriefing and inspection. The logs contain what is in your screenshots; they never contain API keys."),
+    Spec("log_images", "MAGPIE_LOG_IMAGES", "bool", False, "Logging", "Keep the screenshots in the logs",
+         "Saves the image that was sent next to each log file. Off: only its size and a hash are recorded."),
+    Spec("log_retention_days", "MAGPIE_LOG_RETENTION_DAYS", "int", 30, "Logging", "Delete logs older than (days)",
+         "0 = keep them until you delete them.", min=0),
     Spec("api_token", "MAGPIE_API_TOKEN", "secret", None, "Access", "Access tokens",
          "Required by every client when set. Separate several tokens with commas or spaces (e.g. one per device, so one can be revoked alone). Recommended whenever the server is reachable beyond localhost."),
 ]
@@ -234,6 +241,11 @@ class Settings:
     batch_poll_seconds: int = field(default_factory=_from_env("batch_poll_seconds"))
     # Running cost of your on-prem inference box, for the usage report (e.g. 350 W at $0.20/kWh = 0.07)
     local_cost_per_hour: float = field(default_factory=_from_env("local_cost_per_hour"))
+
+    # Conversation logs: what was sent to each model and what came back (see magpie/convlog.py)
+    log_conversations: bool = field(default_factory=_from_env("log_conversations"))
+    log_images: bool = field(default_factory=_from_env("log_images"))
+    log_retention_days: int = field(default_factory=_from_env("log_retention_days"))
 
     # Online metadata lookups (TMDB, GitHub, recipe pages...). Turn off for air-gapped installs.
     enrich: bool = field(default_factory=_from_env("enrich"))

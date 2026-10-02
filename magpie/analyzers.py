@@ -23,7 +23,7 @@ from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisE
 from .config import HOSTED_LLMS, Settings
 from .related import clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
-from . import limits
+from . import convlog, limits
 from .usage import Run, local_cost, record_limits, token_cost
 
 log = logging.getLogger(__name__)
@@ -280,10 +280,17 @@ class LocalLLMAnalyzer:
                     raise e
                 if hit:
                     await self._sleep(limits.wait_seconds(hit[0]))
+            convlog.log_request(self.name, self.model, "hosted" if self.hosted else "local", attempt=attempt + 1, url=self.url,
+                                messages=req.get("messages"),
+                                parameters={k: v for k, v in req.items() if k != "messages"})
+            started = time.monotonic()
             try:
                 r = await self.http.post(self.url, json=req, headers=self.headers, timeout=self.timeout)
             except httpx.HTTPError as e:
+                convlog.log_response(self.name, self.model, duration_ms=int((time.monotonic() - started) * 1000), error=repr(e))
                 raise AnalysisError(f"Can't reach the local LLM at {self.url}: {e!r}") from e
+            convlog.log_response(self.name, self.model, headers=r.headers, status=r.status_code,
+                                 duration_ms=int((time.monotonic() - started) * 1000), text=r.text)
             if self.hosted:
                 record_limits(self.name, r.headers, model=self.model, status=r.status_code)
                 if r.status_code in (402, 429):
@@ -400,6 +407,8 @@ class AnalyzerRouter:
         hints = hints_prompt(ocr, signals) + page_hints
         link = {"link_url": link_url, "web": web} if link_url else {}
         context: dict[str, Any] = {"used": [], "runs": [], "ocr_text": ocr.text if ocr and ocr.lines else ""}
+        convlog.event("ocr", engine=ocr.engine if ocr else None, lines=len(ocr.lines) if ocr else 0,
+                      text=(ocr.text[:4000] if ocr and ocr.lines else ""))
         if ocr and ocr.lines:
             context["used"].append("ocr")
             context["runs"].append(Run("ocr", model=ocr.engine, mode="local", requests=1,
@@ -458,6 +467,9 @@ class AnalyzerRouter:
                         self._local_down_until = time.monotonic() + self.LOCAL_RETRY_AFTER
                     log.warning("Local model failed, asking Claude: %s", e)
             if result is None or result.get("confidence", 0) < self.escalate_below:
+                convlog.event("decision", what="hybrid_escalate", local_confidence=None if result is None else result.get("confidence"),
+                              escalate_below=self.escalate_below, over_budget=self.over_budget(),
+                              fallback=self.fallback.label if self.fallback is not None else "claude")
                 if result is not None and self.over_budget():
                     log.info("Monthly budget reached: keeping the local answer")  # nothing paid is called
                 else:
@@ -471,6 +483,7 @@ class AnalyzerRouter:
                         if local is None:
                             raise
                         log.info("%s; keeping the local answer", e)   # a less sure answer beats none
+                        convlog.event("decision", what="fallback_rate_limited_kept_local_answer", reason=str(e))
                         context["runs"] = e.runs
                         result = local
         return self.finish(result, context)

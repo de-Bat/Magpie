@@ -15,7 +15,7 @@ from typing import Any
 
 import anthropic
 
-from . import limits
+from . import convlog, limits
 from .usage import Run, claude_cost, record_limits
 
 log = logging.getLogger(__name__)
@@ -383,9 +383,23 @@ class ScreenshotAnalyzer:
         fallback = self.model in FALLBACK_MODELS
         messages = self.client.beta.messages if fallback else self.client.messages
         kwargs = {**params, "betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"} if fallback else params
-        raw = getattr(messages, "with_raw_response", None)
-        if raw is None:
-            return await messages.create(**kwargs)
-        response = await raw.create(**kwargs)
-        record_limits("claude", response.headers, model=self.model, status=200)  # what's left in this rate-limit window
-        return response.parse()
+        convlog.log_request("claude", self.model, "realtime", system=params.get("system"), messages=params.get("messages"),
+                            parameters={k: v for k, v in params.items() if k not in ("system", "messages")})
+        started = time.monotonic()
+        try:
+            raw = getattr(messages, "with_raw_response", None)
+            if raw is None:
+                response, headers = await messages.create(**kwargs), None
+            else:
+                raw_response = await raw.create(**kwargs)
+                record_limits("claude", raw_response.headers, model=self.model, status=200)  # what's left in this rate-limit window
+                response, headers = raw_response.parse(), raw_response.headers
+        except Exception as e:
+            err = getattr(e, "response", None)
+            convlog.log_response("claude", self.model, headers=getattr(err, "headers", None), status=getattr(e, "status_code", None),
+                                 duration_ms=int((time.monotonic() - started) * 1000), error=f"{type(e).__name__}: {e}")
+            raise
+        convlog.log_response("claude", self.model, headers=headers, status=200, duration_ms=int((time.monotonic() - started) * 1000),
+                             model_used=getattr(response, "model", None), stop_reason=getattr(response, "stop_reason", None),
+                             content=getattr(response, "content", None), usage=getattr(response, "usage", None))
+        return response

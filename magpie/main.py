@@ -29,7 +29,7 @@ from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
 from .models import check_key
-from . import limits
+from . import convlog, limits
 from .db import Database
 from .pipeline import Pipeline
 
@@ -97,6 +97,7 @@ def create_app(
             settings.load_errors.append(f"Settings could not be loaded: {e}")
     rt = _Runtime(settings)
     rt.open_database()
+    convlog.configure(settings)   # read live: turning logging on in the app takes effect at once
 
     def log_setup_code() -> None:
         log.warning("No access token is set. Setup code for changing settings in the web app: %s "
@@ -454,6 +455,55 @@ def create_app(
     async def bulk_reanalyze(req: BulkRequest, request: Request):
         """Identify many items again with the configured analyzer (batched when Claude is used)."""
         return start_bulk("reanalyze", req, request)
+
+    # ---- conversation logs (what was said to each AI model; see convlog.py) ----------------------------------------
+
+    @app.get("/api/logs")
+    def logs_list(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+                  operation: str | None = None, item: str | None = None, outcome: str | None = None):
+        require_settings_access(request)   # they contain what is in your screenshots
+        return {"enabled": convlog.enabled(), "images": settings.log_images, "retention_days": settings.log_retention_days,
+                "usage": convlog.disk_usage(), **convlog.list_sessions(limit, offset, operation, item, outcome)}
+
+    @app.get("/api/logs/{day}/{name}")
+    def logs_get(day: str, name: str, request: Request, format: str = Query("json", pattern="^(json|jsonl|md)$")):
+        require_settings_access(request)
+        sid = f"{day}/{name}"
+        if format == "md":
+            text = convlog.render_markdown(sid)
+            if text is None:
+                raise HTTPException(404, "No such log")
+            return Response(text, media_type="text/markdown; charset=utf-8", headers={"Content-Disposition": f'inline; filename="{name}.md"'})
+        if format == "jsonl":
+            path = convlog.raw_session(sid)
+            if path is None:
+                raise HTTPException(404, "No such log")
+            return Response(path.read_text(encoding="utf-8"), media_type="application/x-ndjson",
+                            headers={"Content-Disposition": f'attachment; filename="{name}.jsonl"'})
+        data = convlog.read_session(sid)
+        if data is None:
+            raise HTTPException(404, "No such log")
+        return data
+
+    @app.get("/api/logs/{day}/{name}/image/{file}")
+    def logs_image(day: str, name: str, file: str, request: Request):
+        require_settings_access(request)
+        path = convlog.image_file(f"{day}/{name}", file)
+        if path is None:
+            raise HTTPException(404, "No such image")
+        return FileResponse(path)
+
+    @app.delete("/api/logs/{day}/{name}")
+    def logs_delete(day: str, name: str, request: Request):
+        require_settings_access(request)
+        if not convlog.delete_session(f"{day}/{name}"):
+            raise HTTPException(404, "No such log")
+        return {"ok": True}
+
+    @app.delete("/api/logs")
+    def logs_clear(request: Request):
+        require_settings_access(request)
+        return {"deleted": convlog.delete_all()}
 
     @app.post("/api/bulk/cancel")
     def bulk_cancel(request: Request):

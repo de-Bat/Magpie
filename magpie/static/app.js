@@ -1020,6 +1020,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
               <details class="advanced" ${hasLevel(advanced) ? "open" : ""}><summary>Advanced</summary>
                 ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
             ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
+              ${g.name === "Logging" ? logsHtml() : ""}
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
             ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
@@ -1037,6 +1038,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
 
 function selectSettingsTab(name) {
   settingsTab = name;
+  if (name === "Logging") loadLogs();
   document.querySelectorAll("[data-settings-tab],[data-load-models]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.settingsTab === name)));
   document.querySelectorAll(".settings-section").forEach((s) => { s.hidden = s.dataset.section !== name; });
   $(".settings-content")?.scrollTo({ top: 0 });
@@ -1120,6 +1122,148 @@ function libraryHtml() {
       <button class="btn" type="button" data-bulk="reanalyze">↻ Re-analyze…</button>
     </div>
     <div id="bulk-progress" class="bulk-progress" hidden aria-live="polite"></div>`;
+}
+
+// ---- conversation logs (Settings → Logging) -----------------------------------------------------------------------
+
+const OP_LABEL = { analyze: "Analysis", reanalyze: "Re-analysis", correct: "Correction", bulk: "Bulk re-analysis", batch_result: "Claude batch result" };
+let logsFilter = "";
+
+// Logs hold what is in your screenshots, so they need the same access as settings: the setup code, if there's no token.
+async function apiWithSetup(path, opts = {}) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const headers = { ...(opts.headers || {}) };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    try {
+      return await api(path, { ...opts, headers });
+    } catch (e) {
+      let detail = {};
+      try { detail = JSON.parse(e.message); } catch {}
+      if (!(e instanceof HttpError && e.status === 403 && detail.code === "setup_code_required")) throw e;
+      const code = prompt(`${setupCode ? "That setup code didn't match. " : ""}${detail.message}\n\nSetup code:`);
+      if (!code) throw new Error("Cancelled");
+      setupCode = code.trim();
+    }
+  }
+  throw new Error("The setup code didn't match.");
+}
+
+async function fetchLogFile(id, format) {
+  const token = await db.get("kv", "token");
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+  const res = await fetch(`/api/logs/${id}?format=${format}`, { headers, cache: "no-store" });
+  if (!res.ok) throw new Error(res.statusText);
+  return res.blob();
+}
+
+async function saveLogFile(id, format) {
+  try {
+    const blob = await fetchLogFile(id, format);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${id.replace("/", "_")}.${format === "md" ? "md" : "jsonl"}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  } catch (e) { toast(`Couldn't download: ${e.message}`); }
+}
+
+function logsHtml() {
+  return `<div id="logs-box" class="logs-box"><p class="meta-line">Loading…</p></div>`;
+}
+
+const fmtBytes = (n) => n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n >= 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`;
+
+async function loadLogs() {
+  const box = $("#logs-box");
+  if (!box) return;
+  let res;
+  try {
+    res = await apiWithSetup(`/api/logs?limit=200${logsFilter ? `&operation=${encodeURIComponent(logsFilter)}` : ""}`);
+  } catch (e) {
+    box.innerHTML = `<p class="meta-line">${esc(e.message === "Cancelled" ? "Enter the setup code to see the logs." : `Couldn't load the logs: ${errorMessage(e)}`)} <button class="link-btn" type="button" data-logs-reload>Try again</button></p>`;
+    return;
+  }
+  const rows = res.sessions.map((x) => {
+    const when = new Date(x.started);
+    const ok = x.outcome === "ok" ? "ok" : x.outcome === "queued_for_batch" || x.outcome === "running" ? "" : "bad";
+    return `<button type="button" class="log-row" data-log-open="${esc(x.id)}">
+      <span class="log-when">${esc(when.toLocaleDateString([], { month: "short", day: "numeric" }))} ${esc(when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }))}</span>
+      <span class="log-op">${esc(OP_LABEL[x.operation] || x.operation)}</span>
+      <span class="log-title">${esc(x.title || x.item_id || "—")}</span>
+      <span class="log-model">${esc(x.models.map((m) => m.replace(/^[^:]*:/, "")).join(", ") || "no model call")}${x.cost_usd ? ` · ${esc(formatUsd(x.cost_usd))}` : ""}</span>
+      <span class="pill ${ok}">${esc(x.outcome.replace(/_/g, " "))}</span></button>`;
+  }).join("");
+  box.innerHTML = `
+    <div class="logs-bar">
+      <span class="meta-line">${res.usage.files} session${res.usage.files === 1 ? "" : "s"} · ${esc(fmtBytes(res.usage.bytes))} · ${res.retention_days ? `kept ${res.retention_days} days` : "kept until deleted"}</span>
+      <select id="logs-op" aria-label="Operation"><option value="">All operations</option>${Object.entries(OP_LABEL).map(([k, v]) => `<option value="${k}" ${logsFilter === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
+      <button class="btn small" type="button" data-logs-reload>↻ Refresh</button>
+      ${res.usage.files ? `<button class="btn small" type="button" data-logs-clear>Delete all…</button>` : ""}
+    </div>
+    ${res.enabled ? "" : `<p class="setting-note">Logging is off. Turn on “Save conversations with the AI models” above, save, and each analysis from then on is recorded here.</p>`}
+    ${rows ? `<div class="log-list">${rows}</div>` : (res.enabled ? `<p class="meta-line">Nothing recorded yet. Save a screenshot, or re-analyze one.</p>` : "")}
+    <div id="log-detail" class="log-detail" hidden></div>`;
+}
+
+function logEventHtml(e) {
+  const d = new Date(e.t), t = isNaN(d) ? "" : `${d.toLocaleTimeString([], { hour12: false })}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+  const pre = (v) => `<pre>${esc(typeof v === "string" ? v : JSON.stringify(v, null, 1))}</pre>`;
+  const rest = (skip) => Object.fromEntries(Object.entries(e).filter(([k]) => !["t", "event", ...skip].includes(k)));
+  let title = e.event, body = "", open = false;
+  if (e.event === "llm_request") {
+    title = `→ ${e.provider} · ${e.model} (${e.mode})${e.attempt > 1 ? ` · attempt ${e.attempt}` : ""}`;
+    body = `${e.system ? `<h5>System</h5>${pre(e.system)}` : ""}${(e.messages || []).map((m) => `<h5>${esc(m.role)}</h5>${
+      typeof m.content === "string" ? pre(m.content) : (m.content || []).map((c) => c.type === "text" ? pre(c.text)
+        : c.type === "image" ? `<p class="meta-line">🖼 image ${esc(c.media_type || "")} ${esc(c.size || "")} · ${esc(fmtBytes(c.bytes))} · ${esc(c.sha256 || "")}</p>` : pre(c)).join("")}`).join("")}
+      <details><summary>parameters</summary>${pre(rest(["provider", "model", "mode", "system", "messages", "attempt"]))}</details>`;
+  } else if (e.event === "llm_response") {
+    title = `← ${e.provider} · ${e.model}${e.status ? ` · HTTP ${e.status}` : ""}${e.duration_ms != null ? ` · ${e.duration_ms} ms` : ""}${e.error ? " · error" : ""}`;
+    body = `${e.text != null ? pre(e.text) : ""}${e.content != null ? pre(e.content) : ""}${e.error ? `<p class="meta-line">${esc(typeof e.error === "string" ? e.error : JSON.stringify(e.error))}</p>` : ""}
+      <details><summary>usage and headers</summary>${pre(rest(["provider", "model", "text", "content", "status", "duration_ms", "error"]))}</details>`;
+    open = true;
+  } else if (e.event === "decision") {
+    title = `decision · ${(e.what || "").replace(/_/g, " ")}`;
+    body = pre(rest(["what"]));
+    open = true;
+  } else if (e.event === "session_start" || e.event === "session_end") {
+    title = e.event === "session_end" ? `end · ${e.outcome}${e.error ? ` · ${e.error}` : ""}` : "start";
+    body = pre(rest([]));
+  } else {
+    body = pre(rest([]));
+  }
+  return `<details class="log-event ev-${esc(e.event)}" ${open ? "open" : ""}><summary><time>${esc(t)}</time> ${esc(title)}</summary>${body}</details>`;
+}
+
+async function openLog(id) {
+  const box = $("#log-detail");
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = `<p class="meta-line">Loading…</p>`;
+  try {
+    const d = await apiWithSetup(`/api/logs/${id}`);
+    box.innerHTML = `
+      <div class="logs-bar"><h4>${esc(OP_LABEL[d.operation] || d.operation)} · ${esc(d.title || d.item_id || "")}</h4>
+        <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="md">⬇ Transcript (.md)</button>
+        <button class="btn small" type="button" data-log-save="${esc(id)}" data-format="jsonl">⬇ Raw (.jsonl)</button>
+        <button class="btn small" type="button" data-log-delete="${esc(id)}">Delete</button></div>
+      ${d.events.map(logEventHtml).join("")}
+      ${d.files.length ? `<p class="meta-line">Saved images: ${d.files.map((f) => `<a href="#" data-log-image="${esc(id)}/image/${esc(f)}">${esc(f.split(".").slice(-2).join("."))}</a>`).join(", ")}</p>` : ""}`;
+    box.scrollIntoView({ block: "nearest" });
+  } catch (e) { box.innerHTML = `<p class="meta-line">Couldn't open it: ${esc(errorMessage(e))}</p>`; }
+}
+
+async function showLogImage(path) {
+  try {
+    const token = await db.get("kv", "token");
+    const headers = {};
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    const res = await fetch(`/api/logs/${path}`, { headers });
+    if (!res.ok) throw new Error(res.statusText);
+    window.open(URL.createObjectURL(await res.blob()), "_blank");
+  } catch (e) { toast(`Couldn't open the image: ${e.message}`); }
 }
 
 let bulkTimer = null;
@@ -2007,6 +2151,7 @@ $("#search").addEventListener("input", (e) => {
 });
 $("#tag-filter").addEventListener("input", renderFilters);
 $("#detail").addEventListener("input", (e) => { if (e.target.id === "settings-search") searchSettings(e.target.value); });
+$("#detail").addEventListener("change", (e) => { if (e.target.id === "logs-op") { logsFilter = e.target.value; loadLogs(); } });
 $("#detail").addEventListener("keydown", (e) => {
   if (e.target.id !== "settings-search") return;
   if (e.key === "Enter") e.preventDefault();   // not "save settings"
@@ -2053,7 +2198,7 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-bulk],[data-bulk-cancel],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -2072,6 +2217,20 @@ document.addEventListener("click", async (e) => {
     return field?.focus();
   }
   if (t.dataset.verify !== undefined) return verifyItem(t.dataset.verify);
+  if (t.dataset.logOpen !== undefined) return openLog(t.dataset.logOpen);
+  if (t.dataset.logSave !== undefined) return saveLogFile(t.dataset.logSave, t.dataset.format);
+  if (t.dataset.logImage !== undefined) { e.preventDefault(); return showLogImage(t.dataset.logImage); }
+  if (t.dataset.logsReload !== undefined) return loadLogs();
+  if (t.dataset.logDelete !== undefined) {
+    if (!confirm("Delete this log?")) return;
+    try { await apiWithSetup(`/api/logs/${t.dataset.logDelete}`, { method: "DELETE" }); } catch (err) { return toast(`Couldn't delete: ${errorMessage(err)}`); }
+    return loadLogs();
+  }
+  if (t.dataset.logsClear !== undefined) {
+    if (!confirm("Delete every saved conversation log? This can't be undone.")) return;
+    try { await apiWithSetup("/api/logs", { method: "DELETE" }); } catch (err) { return toast(`Couldn't delete: ${errorMessage(err)}`); }
+    return loadLogs();
+  }
   if (t.dataset.bulk !== undefined) return startBulk(t.dataset.bulk);
   if (t.dataset.bulkCancel !== undefined) return cancelBulk();
   if (t.dataset.tab !== undefined) {

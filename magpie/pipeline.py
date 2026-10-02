@@ -15,7 +15,7 @@ import httpx
 from .analyzer import AnalysisError, RateLimited
 from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
-from . import links, readability
+from . import convlog, links, readability
 from .findlink import repair_link
 from .related import clean_related, drop_dead, same_site, text_related
 from .images import best_image
@@ -25,6 +25,11 @@ from .db import Database, normalize_tag
 from .enrich import Enrichment, run_enrichers
 
 log = logging.getLogger(__name__)
+
+
+def jsonable_error(result: Any) -> Any:
+    """Why a batch request didn't succeed, for the log."""
+    return None if getattr(result, "type", None) == "succeeded" else convlog.jsonable(getattr(result, "error", None) or getattr(result, "type", None))
 
 
 def _empty(v: Any) -> bool:
@@ -343,7 +348,13 @@ class Pipeline:
             if getattr(result, "type", None) == "succeeded":
                 self.db.record_runs(job["item_id"], [self._batch_only_run(result.message)], job["purpose"])
             return None
-        return await self._run(job["item_id"], job["purpose"], finish(), corrected=job["purpose"] == "correct")
+        with convlog.session("batch_result", job["item_id"], requested_as=job["purpose"], batch_id=job.get("batch_id")):
+            msg = getattr(result, "message", None)
+            convlog.log_response("claude", params.get("model"), mode="batch", batch_result=getattr(result, "type", None),
+                                 model_used=getattr(msg, "model", None), stop_reason=getattr(msg, "stop_reason", None),
+                                 content=getattr(msg, "content", None), usage=getattr(msg, "usage", None),
+                                 error=jsonable_error(result))
+            return await self._run(job["item_id"], job["purpose"], finish(), corrected=job["purpose"] == "correct")
 
     def _batch_only_run(self, message: Any) -> dict:
         run = Run("claude", model=getattr(message, "model", ""), mode="batch")
@@ -353,9 +364,17 @@ class Pipeline:
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
         if self.settings.enrich:
+            before = analysis.get("canonical_url")
             analysis = await repair_link(analysis, self.http)   # a made-up address becomes the real article's, or none
-            analysis = {**analysis, "related": await drop_dead(clean_related(analysis.get("related")), self.http, fetch_page, link_is_gone)}
+            if analysis.get("canonical_url") != before:
+                convlog.event("decision", what="link_repaired", model_gave=before, now=analysis.get("canonical_url"))
+            offered = clean_related(analysis.get("related"))
+            analysis = {**analysis, "related": await drop_dead(offered, self.http, fetch_page, link_is_gone)}
+            if len(analysis["related"]) != len(offered):
+                convlog.event("decision", what="dead_related_links_dropped", dropped=[r["url"] for r in offered if r not in analysis["related"]])
         enrichments = await run_enrichers(analysis, self.settings, self.http)
+        convlog.event("enrichment", sources=[e.source for e in enrichments], matched=[e.matched_title for e in enrichments if e.matched_title],
+                      canonical_url=[e.canonical_url for e in enrichments if e.canonical_url], images=[e.image_url for e in enrichments if e.image_url])
         fields = merge(analysis, enrichments)
         if fields["image_url"] and not any(e.image_url for e in enrichments):
             # Only the model suggested it, and models sometimes make up image links: keep it only if it isn't dead.
@@ -375,36 +394,73 @@ class Pipeline:
         )
 
     async def _run(self, item_id: str, purpose: str, work, corrected: bool) -> dict | None:
-        """Run an identification, record what it cost, and store the result or the error."""
+        """Run an identification, record what it cost, and store the result or the error. When conversation logging
+        is on, everything said to the models meanwhile goes into one log file for this operation."""
+        item = self.db.get_item(item_id) or {}
+        s = self.settings
+        with convlog.session(purpose, item_id, item_title=item.get("title"), item_kind=item.get("kind"), corrected=corrected,
+                             note=item.get("note"), analyzer=s.resolved_analyzer(), claude_model=s.model,
+                             hosted_provider=s.hosted_llm if s.hosted_llm != "none" else None, hosted_model=s.llm_model,
+                             local_model=s.local_llm_model if s.local_llm_url else None, escalate_below=s.escalate_below,
+                             claude_batch=s.claude_batch, previous={k: item.get(k) for k in ("title", "category", "canonical_url", "confidence")}):
+            return await self._run_logged(item_id, purpose, work, corrected)
+
+    async def _run_logged(self, item_id: str, purpose: str, work, corrected: bool) -> dict | None:
+        def record(runs: list[dict]) -> None:
+            self.db.record_runs(item_id, runs, purpose)
+            cost = sum(r.get("cost_usd") or 0 for r in runs)
+            if cost and convlog.current():
+                convlog.current().cost += cost
+
         try:
             analysis = await work
         except Deferred as d:
-            self.db.record_runs(item_id, d.context.get("runs", []), purpose)  # OCR / local runs so far
+            record(d.context.get("runs", []))  # OCR / local runs so far
             d.context["runs"] = []
             self.db.add_batch_job(item_id, purpose, d.params, d.context)
+            convlog.event("batch_queued", note="The Claude request was queued for the Message Batches API; its answer is logged as a batch_result session.",
+                          model=d.params.get("model"), system=d.params.get("system"), messages=d.params.get("messages"),
+                          parameters={k: v for k, v in d.params.items() if k not in ("system", "messages")})
+            convlog.set_outcome(outcome="queued_for_batch")
             return self.db.get_item(item_id)
         except RateLimited as e:
-            self.db.record_runs(item_id, e.runs, purpose)
+            record(e.runs)
+            convlog.set_outcome(outcome="rate_limited", error=str(e), retry_at=e.until.isoformat() if e.until else None)
             return self.db.update_item(item_id, status="error", error=str(e),
                                        retry_at=e.until.astimezone(timezone.utc).isoformat(timespec="microseconds") if e.until else None)
         except AnalysisError as e:
-            self.db.record_runs(item_id, e.runs, purpose)
+            record(e.runs)
+            convlog.set_outcome(outcome="error", error=str(e))
             return self.db.update_item(item_id, status="error", error=str(e))
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as e:
-            self.db.record_runs(item_id, getattr(e, "magpie_runs", []), purpose)
+            record(getattr(e, "magpie_runs", []))
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=(
                 "The server's Anthropic API key is missing or invalid. Set ANTHROPIC_API_KEY and re-analyze."
             ))
         except (anthropic.RateLimitError, anthropic.APIConnectionError, anthropic.InternalServerError) as e:
-            self.db.record_runs(item_id, getattr(e, "magpie_runs", []), purpose)
+            record(getattr(e, "magpie_runs", []))
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"Temporary problem reaching Claude ({type(e).__name__}). Try re-analyzing.")
         except Exception as e:  # keep the item; the user can retry
             log.exception("Processing %s failed", item_id)
-            self.db.record_runs(item_id, getattr(e, "magpie_runs", []), purpose)
+            record(getattr(e, "magpie_runs", []))
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"{type(e).__name__}: {e}")
-        self.db.record_runs(item_id, analysis.pop("_runs", []), purpose)
+        convlog.event("analysis", used=analysis.get("_analyzer"), title=analysis.get("title"), category=analysis.get("category"),
+                      confidence=analysis.get("confidence"), confidence_reason=analysis.get("confidence_reason"),
+                      canonical_url=analysis.get("canonical_url"), alternatives=analysis.get("alternatives"),
+                      related=analysis.get("related"), details=analysis.get("details"), summary=analysis.get("summary"))
+        record(analysis.pop("_runs", []))
         try:
-            return await self.apply_analysis(item_id, analysis, corrected=corrected)
+            stored = await self.apply_analysis(item_id, analysis, corrected=corrected)
         except Exception as e:
             log.exception("Storing the analysis for %s failed", item_id)
+            convlog.set_outcome(outcome="error", error=f"{type(e).__name__}: {e}")
             return self.db.update_item(item_id, status="error", error=f"{type(e).__name__}: {e}")
+        if stored:
+            convlog.event("result", title=stored.get("title"), category=stored.get("category"), confidence=stored.get("confidence"),
+                          canonical_url=stored.get("canonical_url"), image_url=stored.get("image_url"), status=stored.get("status"),
+                          verified=stored.get("verified"), sources=(stored.get("metadata") or {}).get("sources"),
+                          related=[r.get("url") for r in stored.get("related") or []])
+        return stored

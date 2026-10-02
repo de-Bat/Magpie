@@ -529,3 +529,29 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .segmented button[aria-pressed="true"] { background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
 
 .card .by-model { font-size: 10.5px; color: var(--muted, #8a8a8a); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; opacity: .85; }
+
+/* Settings -> Logging: the conversation log viewer */
+.logs-box { margin-top: 14px; display: grid; gap: 10px; }
+.logs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.logs-bar .meta-line { flex: 1 1 200px; margin: 0; }
+.logs-bar h4 { margin: 0; flex: 1 1 200px; font-size: 14px; }
+.logs-bar select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.log-list { display: grid; gap: 4px; max-height: 280px; overflow: auto; }
+.log-row { display: grid; grid-template-columns: 112px 120px minmax(0, 1fr) auto auto; gap: 10px; align-items: center; text-align: left; font: inherit; font-size: 13px; color: var(--text);
+  background: var(--surface-2); border: 0; border-radius: 8px; padding: 7px 10px; cursor: pointer; }
+.log-row:hover { outline: 1px solid var(--border); }
+.log-row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-when, .log-model { color: var(--muted); font-size: 12px; }
+.log-op { font-weight: 600; }
+.log-detail { display: grid; gap: 6px; border-top: 1px solid var(--border); padding-top: 10px; }
+.log-event { background: var(--surface-2); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.log-event > summary { cursor: pointer; font-weight: 500; }
+.log-event time { color: var(--muted); font: 11.5px ui-monospace, monospace; margin-right: 6px; }
+.log-event h5 { margin: 8px 0 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.log-event pre { margin: 4px 0; padding: 8px; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace;
+  background: var(--surface); border-radius: 6px; }
+.log-event.ev-llm_request > summary { color: var(--accent); } .log-event.ev-session_end > summary { color: var(--muted); }
+@media (max-width: 760px) {
+  .log-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .log-row .log-when, .log-row .log-model { grid-column: 1 / -1; }
+}
