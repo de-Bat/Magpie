@@ -104,6 +104,11 @@ SPECS: list[Spec] = [
     Spec("escalate_below", "MAGPIE_ESCALATE_BELOW", "int", 70, "Spending limits", "Escalate to the fallback below (confidence %)",
          "Hybrid mode: ask the fallback provider (Claude, OpenAI, Gemini, ...) when your own model is less sure than this.",
          min=0, max=100),
+    Spec("gemini_web_search", "MAGPIE_GEMINI_WEB_SEARCH", "bool", True, "Other AI providers", "Gemini: search the web (Google Search)",
+         "Lets Gemini models ground their identification in Google Search, as Claude does with web search: they find the "
+         "repository, the article's own page and related links themselves. Search queries are billed by Google "
+         "(Gemini 3: about $14 per 1,000; the free tier includes some). Off: Gemini answers from the screenshot, "
+         "and Magpie looks things up afterwards."),
     Spec("max_output_tokens", "MAGPIE_MAX_OUTPUT_TOKENS", "int", 0, "Spending limits", "Max output tokens",
          "0 = provider default. Caps the reply (and, for Claude, its thinking) of every request.", min=0),
     Spec("max_image_edge", "MAGPIE_MAX_IMAGE_EDGE", "int", 2000, "Spending limits", "Max image edge (px)",
@@ -215,6 +220,7 @@ class Settings:
     hosted_llm: str = field(default_factory=_from_env("hosted_llm"))
     openai_api_key: str | None = field(default_factory=_from_env("openai_api_key"))
     gemini_api_key: str | None = field(default_factory=_from_env("gemini_api_key"))
+    gemini_web_search: bool = field(default_factory=_from_env("gemini_web_search"))
     openrouter_api_key: str | None = field(default_factory=_from_env("openrouter_api_key"))
     groq_api_key: str | None = field(default_factory=_from_env("groq_api_key"))
     local_llm_url: str | None = field(default_factory=_from_env("local_llm_url"))

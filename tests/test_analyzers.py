@@ -1,3 +1,4 @@
+import asyncio
 import glob
 import io
 import json
@@ -378,3 +379,56 @@ def test_rate_limit_headers_are_normalized_and_key_check_reports_them(tmp_path):
     out = asyncio.run(check_key(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)), "openrouter"))
     assert out["models"][0]["id"] == "openai/gpt-4o-mini" and out["limits"]["credit"]["remaining"] == 4.5
     assert LIMITS["openrouter"]["credit"]["used"] == 5.5
+
+
+def test_gemini_searches_the_web_with_google_search_grounding(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        reply = {"candidates": [{"content": {"parts": [{"text": "```json\n" + json.dumps({**GOOD, "category": "github_repo", "title": "magpie",
+                                                                                          "details": {"github_full_name": "de-Bat/Magpie"}}) + "\n```"}]},
+                                 "groundingMetadata": {"webSearchQueries": ["magpie github", "de-Bat magpie"]}}],
+                 "usageMetadata": {"promptTokenCount": 1000, "candidatesTokenCount": 100, "thoughtsTokenCount": 50}}
+        return httpx.Response(200, json=reply)
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="g-key", analyzer="local", local_llm_url=None)
+    assert s.gemini_web_search   # on by default
+    a = LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    result = asyncio.run(a.analyze(png(), "image/png"))
+    [req] = seen
+    assert req.url.path.endswith("/models/gemini-2.5-flash:generateContent") and req.headers["x-goog-api-key"] == "g-key"
+    body = json.loads(req.content)
+    assert body["tools"] == [{"google_search": {}}] and "Use web search" in body["systemInstruction"]["parts"][0]["text"]
+    assert any("inlineData" in p for p in body["contents"][0]["parts"]) and "related" in body["contents"][0]["parts"][0]["text"]
+    assert result["title"] == "magpie" and result["details"]["github_full_name"] == "de-Bat/Magpie"
+    run = result["_runs"][0]
+    assert run["web_searches"] == 2 and run["input_tokens"] == 1000 and run["output_tokens"] == 150
+    assert run["cost_usd"] >= 2 * 0.014   # the searches are billed
+
+
+def test_gemini_without_search_support_falls_back_to_the_screenshot_alone(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if "generateContent" in request.url.path:
+            return httpx.Response(400, json={"error": {"message": "Search Grounding is not supported"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(GOOD)}}], "usage": {}})
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None)
+    a = LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert asyncio.run(a.analyze(png(), "image/png"))["title"] == GOOD["title"]
+    assert seen[0].endswith(":generateContent") and seen[1].endswith("/chat/completions")
+
+
+def test_gemini_search_can_be_turned_off(tmp_path):
+    seen = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(GOOD)}}], "usage": {}})
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None, gemini_web_search=False)
+    asyncio.run(LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler))).analyze(png(), "image/png"))
+    assert seen == ["/v1beta/openai/chat/completions"]

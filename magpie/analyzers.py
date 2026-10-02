@@ -142,6 +142,16 @@ def hints_prompt(ocr: OcrResult | None, signals: Signals | None) -> str:
     return out
 
 
+# Gemini searches the web through Google Search grounding on its native API: the full instructions, the `related` field,
+# and a JSON reply (a response schema can't be combined with the search tool on most Gemini models).
+GEMINI_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
+    "Finish by calling save_analysis once. Do not ask the user questions.",
+    "Reply with a single JSON object matching the requested schema. Do not ask the user questions.",
+)
+GEMINI_NATIVE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_SEARCH_USD = 0.014   # per search query (Gemini 3 list price)
+FULL_SCHEMA = SAVE_TOOL["input_schema"]
+
 class LocalLLMAnalyzer:
     """A model behind an OpenAI-compatible /chat/completions API: Ollama, vLLM, LM Studio,
     llama.cpp, hosted OpenAI-compatible providers, or NVIDIA NIM (self-hosted or build.nvidia.com)."""
@@ -174,6 +184,7 @@ class LocalLLMAnalyzer:
         self.url = url.rstrip("/") + "/chat/completions"
         self.model = model
         self.vision = settings.local_llm_vision
+        self.web_search = bool(hosted and self.name == "gemini" and settings.gemini_web_search)
         self.max_output_tokens = settings.max_output_tokens
         self.timeout = settings.local_llm_timeout
         self.headers = {"Authorization": f"Bearer {key}"} if key else {}
@@ -198,13 +209,19 @@ class LocalLLMAnalyzer:
         if correction:
             prompt += "\n\n" + correction_prompt(correction)
         prompt += hints
-        prompt += ("\n\nAnswer with JSON only, with these keys: " + ", ".join(SCHEMA["properties"]) +
+        search = self.web_search and web and self.vision
+        keys = FULL_SCHEMA["properties"] if search else SCHEMA["properties"]
+        prompt += ("\n\nAnswer with JSON only, with these keys: " + ", ".join(keys) +
                    ". confidence is an integer 0-100. details has these keys: " + ", ".join(DETAIL_KEYS) + ".")
 
         content: list[dict] = [{"type": "text", "text": prompt}]
         if self.vision and image is not None:
             data, mt = prepare_image(image, media_type, self.max_image_edge, self.image_types)
             content.append({"type": "image_url", "image_url": {"url": f"data:{mt};base64,{base64.b64encode(data).decode()}"}})
+        if search:
+            result = await self._analyze_with_search(prompt, content)
+            if result is not None:
+                return result
         body = {
             "model": self.model,
             "messages": [{"role": "system", "content": LOCAL_SYSTEM_PROMPT}, {"role": "user", "content": content}],
@@ -227,12 +244,60 @@ class LocalLLMAnalyzer:
         result["_runs"] = [self._finish_run(run, started, usage)]
         return result
 
+    async def _analyze_with_search(self, prompt: str, content: list[dict]) -> dict | None:
+        """Gemini with Google Search grounding on its native API. None when the model doesn't take the search tool,
+        so the caller falls back to answering from the screenshot alone."""
+        parts: list[dict] = [{"text": prompt}]
+        for c in content[1:]:
+            mt, _, data = c["image_url"]["url"][5:].partition(";base64,")
+            parts.append({"inlineData": {"mimeType": mt, "data": data}})
+        gen: dict = {"temperature": 0.1}
+        if self.max_output_tokens:
+            gen["maxOutputTokens"] = self.max_output_tokens
+        req = {"systemInstruction": {"parts": [{"text": GEMINI_SYSTEM_PROMPT}]}, "contents": [{"role": "user", "parts": parts}],
+               "tools": [{"google_search": {}}], "generationConfig": gen}
+        run = Run(self.name, model=self.model, mode="hosted")
+        started = time.monotonic()
+        try:
+            r = await self._post(req, url=GEMINI_NATIVE_URL.format(model=self.model.removeprefix("models/")),
+                                 headers={"x-goog-api-key": self.headers.get("Authorization", "").removeprefix("Bearer ")})
+            if r.status_code in (401, 403):
+                raise AnalysisError(f"The LLM server rejected the API key (GEMINI_API_KEY): {r.text[:200]}")
+            if r.status_code in (400, 404, 422):
+                log.info("Gemini model %s doesn't take Google Search (%s); answering without it", self.model, r.text[:200])
+                return None
+            if r.status_code >= 400:
+                raise AnalysisError(f"Gemini error {r.status_code}: {r.text[:300]}")
+            try:
+                data = r.json()
+                cand = data["candidates"][0]
+                text = "".join(p.get("text", "") for p in cand["content"]["parts"] if not p.get("thought"))
+            except (KeyError, IndexError, ValueError, TypeError) as e:
+                raise AnalysisError(f"Unexpected reply from Gemini: {r.text[:300]}") from e
+            queries = (cand.get("groundingMetadata") or {}).get("webSearchQueries") or []
+            convlog.event("web_search", queries=queries)
+            result = normalize(parse_json(text))
+        except AnalysisError as e:
+            run.ok = False
+            e.runs = [] if getattr(e, "unsent", False) else [self._finish_run(run, started, {})]
+            raise
+        u = data.get("usageMetadata") or {}
+        run.web_searches = len(queries)
+        result["_runs"] = [self._finish_run(run, started, {"prompt_tokens": u.get("promptTokenCount"),
+                                                           "completion_tokens": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)})]
+        return result
+
     def _finish_run(self, run: Run, started: float, usage: dict) -> dict:
         run.requests = 1
         run.duration_ms = int((time.monotonic() - started) * 1000)
         run.input_tokens = int(usage.get("prompt_tokens") or 0)
         run.output_tokens = int(usage.get("completion_tokens") or 0)
-        run.cost_usd = token_cost(run) if self.hosted else local_cost(run.duration_ms, self.cost_per_hour)
+        if self.hosted:
+            searches, run.web_searches = run.web_searches, 0   # Google's search price, not Claude's
+            run.cost_usd = token_cost(run) + searches * GEMINI_SEARCH_USD
+            run.web_searches = searches
+        else:
+            run.cost_usd = local_cost(run.duration_ms, self.cost_per_hour)
         return run.to_dict()
 
     FORMATS = ("json_schema", "json_object", "none")
@@ -267,7 +332,7 @@ class LocalLLMAnalyzer:
                 raise AnalysisError(f"Unexpected reply from the local LLM: {r.text[:300]}") from e
         raise AnalysisError("The local LLM rejected every request format.")
 
-    async def _post(self, req: dict) -> httpx.Response:
+    async def _post(self, req: dict, url: str | None = None, headers: dict | None = None) -> httpx.Response:
         """POST with retries on rate limits and temporary unavailability (the hosted NVIDIA API
         allows ~40 requests/minute; a self-hosted NIM answers 503 while the model loads). A hosted model that
         hit its limit is paused: short waits are waited out, longer ones fail fast with the time it's back."""
@@ -280,12 +345,12 @@ class LocalLLMAnalyzer:
                     raise e
                 if hit:
                     await self._sleep(limits.wait_seconds(hit[0]))
-            convlog.log_request(self.name, self.model, "hosted" if self.hosted else "local", attempt=attempt + 1, url=self.url,
-                                messages=req.get("messages"),
-                                parameters={k: v for k, v in req.items() if k != "messages"})
+            convlog.log_request(self.name, self.model, "hosted" if self.hosted else "local", attempt=attempt + 1, url=url or self.url,
+                                messages=req.get("messages") or req.get("contents"), system=req.get("systemInstruction"),
+                                parameters={k: v for k, v in req.items() if k not in ("messages", "contents", "systemInstruction")})
             started = time.monotonic()
             try:
-                r = await self.http.post(self.url, json=req, headers=self.headers, timeout=self.timeout)
+                r = await self.http.post(url or self.url, json=req, headers=headers or self.headers, timeout=self.timeout)
             except httpx.HTTPError as e:
                 convlog.log_response(self.name, self.model, duration_ms=int((time.monotonic() - started) * 1000), error=repr(e))
                 raise AnalysisError(f"Can't reach the local LLM at {self.url}: {e!r}") from e

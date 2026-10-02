@@ -117,6 +117,10 @@ def _redact_images(value: Any, session: "Session | None") -> Any:
     source = value.get("source")
     if value.get("type") == "image" and isinstance(source, dict) and source.get("type") == "base64":
         return {"type": "image", **_image_note(session, source.get("media_type"), _decode(source.get("data")))}
+    # Gemini native style: {"inlineData": {"mimeType": ..., "data": ...}}
+    inline = value.get("inlineData")
+    if isinstance(inline, dict) and "data" in inline:
+        return {"type": "image", **_image_note(session, inline.get("mimeType"), _decode(inline["data"]))}
     return {k: _redact_images(v, session) for k, v in value.items()}
 
 
