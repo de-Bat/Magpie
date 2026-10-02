@@ -1,6 +1,8 @@
 """Conversation logs: one file per operation, what was sent and what came back, never a key."""
 
+import base64
 import json
+import os
 from types import SimpleNamespace
 
 import httpx
@@ -223,3 +225,16 @@ def test_a_shared_link_is_logged_with_its_url(tmp_path):
         rows = client.get("/api/logs").json()["sessions"]
         link = next(r for r in rows if (r["input"] or {}).get("source_url"))
         assert link["input"]["kind"] == "url" and link["input"]["source_url"] == "https://blog.example/post" and "file" not in link["input"]
+
+
+def test_a_large_screenshot_does_not_break_the_log(tmp_path):
+    # a real screenshot's base64 is far over the field limit: it must be redacted before any truncation
+    big = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(os.urandom(300_000)).decode()}}
+    url = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(os.urandom(300_000)).decode()}}
+    s = Settings(data_dir=tmp_path, log_conversations=True)
+    convlog.configure(s)
+    with convlog.session("analyze", "abc12345"):
+        convlog.log_request("claude", "m", "realtime", messages=[{"role": "user", "content": [big, url, {"type": "text", "text": "héllo ✓"}]}])
+    [row] = convlog.list_sessions()["sessions"]
+    msgs = convlog.read_session(row["id"])["events"][1]["messages"][0]["content"]
+    assert msgs[0]["bytes"] == 300_000 and msgs[1]["bytes"] == 300_000 and msgs[2]["text"] == "héllo ✓"

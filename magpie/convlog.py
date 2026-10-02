@@ -75,24 +75,24 @@ def _cut(text: str) -> str:
     return text if len(text) <= MAX_FIELD else text[:MAX_FIELD] + f"… [{len(text) - MAX_FIELD} more characters not kept]"
 
 
-def jsonable(value: Any, depth: int = 0) -> Any:
+def jsonable(value: Any, depth: int = 0, raw: bool = False) -> Any:
     """Anything an SDK or an API returned, as plain JSON, with long strings cut."""
     if depth > 12:
         return "…"
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        return _cut(value)
+        return value if raw else _cut(value)
     if isinstance(value, bytes):
         return f"[{len(value)} bytes]"
     if isinstance(value, dict):
-        return {str(k): jsonable(v, depth + 1) for k, v in value.items()}
+        return {str(k): jsonable(v, depth + 1, raw) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
-        return [jsonable(v, depth + 1) for v in value]
+        return [jsonable(v, depth + 1, raw) for v in value]
     dump = getattr(value, "model_dump", None)
     if callable(dump):
         try:
-            return jsonable(dump(mode="json", exclude_none=True), depth + 1)
+            return jsonable(dump(mode="json", exclude_none=True), depth + 1, raw)
         except Exception:
             pass
     return _cut(repr(value))
@@ -112,12 +112,20 @@ def _redact_images(value: Any, session: "Session | None") -> Any:
     url = (value.get("image_url") or {}).get("url") if isinstance(value.get("image_url"), dict) else None
     if value.get("type") == "image_url" and _is_data_uri(url):
         media, _, data = url[5:].partition(";base64,")
-        return {"type": "image", **_image_note(session, media, base64.b64decode(data))}
+        return {"type": "image", **_image_note(session, media, _decode(data))}
     # Anthropic style: {"type": "image", "source": {"type": "base64", "media_type": ..., "data": ...}}
     source = value.get("source")
     if value.get("type") == "image" and isinstance(source, dict) and source.get("type") == "base64":
-        return {"type": "image", **_image_note(session, source.get("media_type"), base64.b64decode(source.get("data") or ""))}
+        return {"type": "image", **_image_note(session, source.get("media_type"), _decode(source.get("data")))}
     return {k: _redact_images(v, session) for k, v in value.items()}
+
+
+def _decode(data: Any) -> bytes:
+    """Image payloads are base64 text; anything else is noted as an empty image rather than breaking the call being logged."""
+    try:
+        return base64.b64decode(data if isinstance(data, (str, bytes)) else "")
+    except (ValueError, TypeError):
+        return b""
 
 
 def _image_note(session: "Session | None", media_type: str | None, data: bytes) -> dict:
@@ -241,15 +249,15 @@ def set_outcome(**data: Any) -> None:
         s.outcome = {**getattr(s, "outcome", {}), **jsonable(data)}
 
 
-def log_request(provider: str, model: str | None, mode: str, **payload: Any) -> None:
+def _log_request(provider: str, model: str | None, mode: str, **payload: Any) -> None:
     s = _session.get()
     if s is None:
         return
     s.llm_calls += 1
-    s.add("llm_request", provider=provider, model=model, mode=mode, **{k: _redact_images(jsonable(v), s) for k, v in payload.items()})
+    s.add("llm_request", provider=provider, model=model, mode=mode, **{k: jsonable(_redact_images(jsonable(v, raw=True), s)) for k, v in payload.items()})
 
 
-def log_response(provider: str, model: str | None, *, headers: Any = None, cost: float | None = None, **payload: Any) -> None:
+def _log_response(provider: str, model: str | None, *, headers: Any = None, cost: float | None = None, **payload: Any) -> None:
     s = _session.get()
     if s is None:
         return
@@ -437,3 +445,20 @@ def _content_md(content: Any) -> str:
         else:
             parts.append("```json\n" + json.dumps(c, ensure_ascii=False, indent=1) + "\n```")
     return "\n\n".join(parts)
+
+
+def _never_raises(fn):
+    """Logging is for looking at what happened; a bug in it must not fail the analysis it records."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception:
+            log.exception("Could not write the conversation log")
+    return wrapper
+
+
+log_request = _never_raises(_log_request)
+log_response = _never_raises(_log_response)
