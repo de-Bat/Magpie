@@ -989,7 +989,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
   const advanced = data.groups.filter((g) => ADVANCED_GROUPS.includes(g.name))
     .flatMap((g) => g.settings).filter((s) => !PROVIDER_ENVS.has(s.env));
   const others = data.groups.filter((g) => !ADVANCED_GROUPS.includes(g.name) && !HIDDEN_GROUPS.includes(g.name));
-  const names = ["AI provider", ...others.map((g) => g.name), "Library", "Appearance", "About"];
+  const names = ["AI provider", ...others.map((g) => g.name), "Plugins", "Library", "Appearance", "About"];
   if (!names.includes(settingsTab)) settingsTab = names[0];
   const hasLevel = (list) => list.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
     : list.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
@@ -1025,6 +1025,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
               ${g.name === "Logging" ? logsHtml() : ""}
               ${(data.plugins || []).filter((p) => p.label === g.name).map((p) => `<p class="setting-note"><button class="btn" type="button" data-test-plugin="${esc(p.id)}">Test connection</button> Uses what is typed above, or the saved values.</p>`).join("")}
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
+            ${section("Plugins", pluginsAdminHtml(data))}
             ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
             ${section("About", `<div class="about-in-settings">
@@ -2325,6 +2326,63 @@ async function runPlugin(pluginId, itemId, btn) {
   }
 }
 
+// Settings → Plugins: what is installed, and installing more from a git repository or a single file.
+function pluginsAdminHtml(data) {
+  const admin = data.plugin_admin || { allowed: false, env: "MAGPIE_ALLOW_PLUGIN_INSTALL", sources: [] };
+  const row = (title, sub, buttons = "") => `<div class="plugin-row"><div class="plugin-info"><strong>${title}</strong><div class="setting-help">${sub}</div></div><div class="plugin-btns">${buttons}</div></div>`;
+  const builtIn = (data.plugins || []).filter((p) => p.source === "built-in")
+    .map((p) => row(esc(p.label), `Built in · ${p.configured ? "set up" : `not set up yet (see the ${esc(p.label)} tab)`}`)).join("");
+  const sources = admin.sources.map((src) => row(
+    esc(src.url ? src.url.replace(/^https:\/\//, "") : `${src.id.replace(/^file-/, "")}.py`),
+    src.error ? `<span class="field-error">${esc(src.error)}</span>`
+      : `${src.type === "git" ? "Git repository" : "File"}${src.ref ? ` (${esc(src.ref)})` : ""} · ${src.plugins.length ? esc(src.plugins.join(", ")) : "no plugins"}`,
+    `${src.type === "git" || src.url ? `<button class="btn small" type="button" data-plugin-update="${esc(src.id)}">Update</button>` : ""}<button class="btn small danger" type="button" data-plugin-remove="${esc(src.id)}">Remove</button>`)).join("");
+  const install = admin.allowed ? `
+    <div class="plugin-install">
+      <label for="plugin-git">Install from a git repository <span class="setting-help">Every plugin in it is added.</span></label>
+      <div class="plugin-form"><input id="plugin-git" type="url" placeholder="https://github.com/owner/repo" autocomplete="off" spellcheck="false"><input id="plugin-ref" placeholder="branch or tag (optional)" autocomplete="off" spellcheck="false"><button class="btn" type="button" data-plugin-install="git">Install</button></div>
+      <label for="plugin-url">Install a single file</label>
+      <div class="plugin-form"><input id="plugin-url" type="url" placeholder="https://…/plugin.py" autocomplete="off" spellcheck="false"><button class="btn" type="button" data-plugin-install="url">Install</button><label class="btn">Upload .py<input id="plugin-upload" type="file" accept=".py,text/x-python" hidden></label></div>
+      <p class="setting-note">Plugins run code on this server with its full access. Only install ones you trust.</p>
+    </div>`
+    : `<p class="setting-note">Installing plugins from a git repository or a file runs their code on this server, so it is off. To turn it on, set <code>${esc(admin.env)}=true</code> in the server's environment (the <code>.env</code> file) and restart.</p>`;
+  return `<div class="plugin-list">${builtIn}${sources}</div>${install}`;
+}
+
+async function pluginAdminCall(btn, path, opts, done) {
+  const idle = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
+  try {
+    settingsData = await apiWithSetup(path, { timeout: 150000, ...opts });
+    pluginCatalog = null; pluginActions.clear(); pluginFetched.clear();
+    settingsTab = "Plugins";
+    toast(`✓ ${done}`);
+    await showSettings();
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = idle; }
+    toast(`✗ ${errorMessage(e)}`);
+  }
+}
+
+function installPlugin(kind, btn) {
+  const git = kind === "git";
+  const body = git ? { git: $("#plugin-git").value.trim(), ref: $("#plugin-ref").value.trim() || null } : { url: $("#plugin-url").value.trim() };
+  const from = git ? body.git : body.url;
+  if (!from) return toast(git ? "Enter the repository's URL." : "Enter the link to a .py file.");
+  if (!confirm(`This runs code from ${from} on your server. Only continue if you trust it.`)) return;
+  return pluginAdminCall(btn, "/api/plugins/install", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Installed.");
+}
+
+document.addEventListener("change", (e) => {
+  if (e.target.id !== "plugin-upload" || !e.target.files[0]) return;
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!confirm(`This runs the code in ${file.name} on your server. Only continue if you trust it.`)) return;
+  const body = new FormData();
+  body.append("file", file);
+  pluginAdminCall(null, "/api/plugins/upload", { method: "POST", body }, `Installed ${file.name}.`);
+});
+
 // Settings → Radarr / Sonarr: check the typed (or saved) URL and key.
 async function testPlugin(pluginId, btn) {
   const form = $("#settings-form");
@@ -2437,12 +2495,18 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
   if (t.dataset.testKey !== undefined) return testKey(t.dataset.testKey);
   if (t.dataset.testPlugin !== undefined) return testPlugin(t.dataset.testPlugin, t);
+  if (t.dataset.pluginInstall !== undefined) return installPlugin(t.dataset.pluginInstall, t);
+  if (t.dataset.pluginUpdate !== undefined) return pluginAdminCall(t, `/api/plugins/sources/${encodeURIComponent(t.dataset.pluginUpdate)}/update`, { method: "POST" }, "Updated.");
+  if (t.dataset.pluginRemove !== undefined) {
+    if (!confirm("Remove this plugin source? Its settings are removed too.")) return;
+    return pluginAdminCall(t, `/api/plugins/sources/${encodeURIComponent(t.dataset.pluginRemove)}`, { method: "DELETE" }, "Removed.");
+  }
   if (t.dataset.plugin !== undefined) return runPlugin(t.dataset.plugin, t.closest(".detail").dataset.id, t);
   if (t.dataset.settingsTab !== undefined) return selectSettingsTab(t.dataset.settingsTab);
   if (t.dataset.reset !== undefined) {

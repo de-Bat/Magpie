@@ -627,3 +627,13 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 /* Plugin actions (Radarr, Sonarr, ...) on a card */
 .plugin-slot { display: contents; }
 .plugin-added { color: var(--ok); text-decoration: none; }
+
+/* Settings → Plugins */
+.plugin-list { display: grid; gap: 8px; margin-bottom: 20px; }
+.plugin-row { display: flex; gap: 12px; align-items: center; justify-content: space-between; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.plugin-info { min-width: 0; overflow-wrap: anywhere; }
+.plugin-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.plugin-install label { display: block; margin: 14px 0 6px; font-weight: 500; font-size: 14px; }
+.plugin-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.plugin-form input { flex: 1 1 200px; min-width: 0; }
+@media (max-width: 760px) { .plugin-row { flex-direction: column; align-items: stretch; } .plugin-btns { justify-content: flex-end; } }

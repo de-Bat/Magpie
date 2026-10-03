@@ -5,8 +5,9 @@ WORKDIR /app
 
 # libgl/libglib: OpenCV (used by the bundled OCR). tesseract: optional OCR engine with
 # Hebrew/Arabic/... support (MAGPIE_OCR=tesseract); add more tesseract-ocr-<lang> packages as needed.
+# git: installing plugins from a repository (MAGPIE_ALLOW_PLUGIN_INSTALL).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        libgl1 libglib2.0-0 tesseract-ocr tesseract-ocr-eng tesseract-ocr-heb \
+        libgl1 libglib2.0-0 tesseract-ocr tesseract-ocr-eng tesseract-ocr-heb git \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

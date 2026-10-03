@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -28,9 +28,11 @@ from .analyzers import AnalyzerRouter
 from .bulk import BulkBusy, BulkRunner
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
-from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
+from . import config
+from .config import HOSTED_LLMS, SPEC_BY_ATTR, Settings, mask
 from .models import check_key
 from . import convlog, limits, plugins
+from .plugins import loader as plugin_loader
 from .db import Database
 from .pipeline import Pipeline
 
@@ -77,6 +79,12 @@ class ModelsRequest(BaseModel):
     key: str | None = None   # a key typed but not saved yet
 
 
+class PluginInstall(BaseModel):
+    git: str | None = None   # a git repository: every plugin module in it is installed
+    ref: str | None = None   # its branch or tag (default: the repository's default branch)
+    url: str | None = None   # a link to a single .py file
+
+
 class PluginTest(BaseModel):
     url: str | None = None   # typed but not saved yet
     key: str | None = None
@@ -101,6 +109,11 @@ def create_app(
             log.exception("Settings could not be loaded; using defaults")
             settings = Settings()
             settings.load_errors.append(f"Settings could not be loaded: {e}")
+    if plugin_loader.load_external(settings.data_dir):
+        # their settings only exist now: pick up what was saved for them
+        extra = {k: v for k, v in settings.read_overrides().items() if k not in settings.overrides}
+        if extra:
+            settings.apply_overrides({**settings.overrides, **extra})
     rt = _Runtime(settings)
     rt.open_database()
     convlog.configure(settings)   # read live: turning logging on in the app takes effect at once
@@ -254,7 +267,7 @@ def create_app(
     def settings_payload() -> dict:
         problems = {p["key"]: p for p in settings.problems() if p["key"]}
         groups: dict[str, list] = {}
-        for spec in SPECS:
+        for spec in config.SPECS:   # read live: plugins add settings while the server runs
             value = settings.value(spec.attr)
             entry = {
                 "env": spec.env, "label": spec.label, "help": spec.help, "kind": spec.kind,
@@ -273,6 +286,8 @@ def create_app(
             "status": server_status(),
             "providers": provider_choices(), "resolved_analyzer": settings.resolved_analyzer(),
             "plugins": [p.describe(settings) for p in plugins.all()],
+            "plugin_admin": {"allowed": plugin_loader.allowed(), "env": plugin_loader.ALLOW_ENV,
+                             "sources": plugin_loader.describe_sources(settings.data_dir)},
         }
 
     @app.get("/api/settings")
@@ -493,6 +508,86 @@ def create_app(
             return await plugin.test(settings, plugin_http(), url=req.url or None, key=req.key or None)
         except plugins.PluginError as e:
             raise HTTPException(e.status, str(e))
+
+    # ---- installing plugins from a git repository or a single file ----
+
+    async def fetch_plugin_file(url: str) -> tuple[str, str, bytes]:
+        url = re.sub(r"^https://github\.com/([^/]+/[^/]+)/blob/", r"https://raw.githubusercontent.com/\1/", url.strip())
+        parts = urlsplit(url)
+        if parts.scheme != "https" or not parts.hostname:
+            raise HTTPException(400, "Use an https:// link to a .py file.")
+        buf = bytearray()
+        try:
+            async with plugin_http().stream("GET", url, follow_redirects=True, timeout=20) as r:
+                if r.status_code != 200:
+                    raise HTTPException(502, f"The server answered {r.status_code} for that link.")
+                async for chunk in r.aiter_bytes():
+                    buf += chunk
+                    if len(buf) > plugin_loader.MAX_FILE_BYTES:
+                        raise HTTPException(400, "That file is too large to be a plugin.")
+        except httpx.HTTPError as e:
+            raise HTTPException(502, f"Couldn't download it: {e!r}")
+        return url, parts.path.rsplit("/", 1)[-1], bytes(buf)
+
+    def plugin_install_access(request: Request) -> None:
+        require_settings_access(request)
+        try:
+            plugin_loader.need_allowed()
+        except plugin_loader.LoaderError as e:
+            raise HTTPException(e.status, str(e))
+
+    @app.post("/api/plugins/install")
+    async def install_plugin(req: PluginInstall, request: Request):
+        """Install plugins from a git repository (every plugin module in it) or from a link to one .py file."""
+        plugin_install_access(request)
+        try:
+            if req.git:
+                await asyncio.to_thread(plugin_loader.install_git, settings.data_dir, req.git, req.ref)
+            elif req.url:
+                url, name, content = await fetch_plugin_file(req.url)
+                await asyncio.to_thread(plugin_loader.install_file, settings.data_dir, name, content, url)
+            else:
+                raise HTTPException(422, "Give a git repository URL or a link to a .py file.")
+        except plugin_loader.LoaderError as e:
+            raise HTTPException(e.status, str(e))
+        return settings_payload()
+
+    @app.post("/api/plugins/upload")
+    async def upload_plugin(request: Request, file: UploadFile = File(...)):
+        plugin_install_access(request)
+        content = await file.read(plugin_loader.MAX_FILE_BYTES + 1)
+        try:
+            await asyncio.to_thread(plugin_loader.install_file, settings.data_dir, file.filename or "", content)
+        except plugin_loader.LoaderError as e:
+            raise HTTPException(e.status, str(e))
+        return settings_payload()
+
+    @app.post("/api/plugins/sources/{source_id}/update")
+    async def update_plugin_source(source_id: str, request: Request):
+        plugin_install_access(request)
+        source = next((s for s in plugin_loader.read_sources(settings.data_dir) if s["id"] == source_id), None)
+        try:
+            if source and source["type"] == "file" and source.get("url"):   # a file from a link: download it again
+                url, name, content = await fetch_plugin_file(source["url"])
+                await asyncio.to_thread(plugin_loader.install_file, settings.data_dir, name, content, url, True)
+            else:
+                await asyncio.to_thread(plugin_loader.update, settings.data_dir, source_id)
+        except plugin_loader.LoaderError as e:
+            raise HTTPException(e.status, str(e))
+        return settings_payload()
+
+    @app.delete("/api/plugins/sources/{source_id}")
+    async def remove_plugin_source(source_id: str, request: Request):
+        plugin_install_access(request)
+        try:
+            # values saved for its settings go with it (they need the settings to still exist, so first)
+            saved = [e for e in plugin_loader.setting_names(source_id) if e in settings.overrides]
+            if saved:
+                settings.save_overrides({e: None for e in saved})
+            await asyncio.to_thread(plugin_loader.remove, settings.data_dir, source_id)
+        except plugin_loader.LoaderError as e:
+            raise HTTPException(e.status, str(e))
+        return settings_payload()
 
     @app.get("/api/bulk")
     def bulk_status():

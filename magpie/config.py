@@ -164,6 +164,16 @@ def register_specs(specs, url_key: tuple[str, str] | None = None) -> None:
         URL_KEY_PAIRS.append(url_key)
 
 
+def unregister_specs(specs, url_key: tuple[str, str] | None = None) -> None:
+    for spec in specs:
+        if SPEC_BY_ENV.get(spec.env) == spec:
+            SPECS.remove(spec)
+            SPEC_BY_ATTR.pop(spec.attr, None)
+            SPEC_BY_ENV.pop(spec.env, None)
+    if url_key in URL_KEY_PAIRS:
+        URL_KEY_PAIRS.remove(url_key)
+
+
 _FALSE = ("0", "false", "no", "off")
 _TRUE = ("1", "true", "yes", "on")
 
@@ -322,7 +332,9 @@ class Settings:
         """Apply UI-saved values; invalid ones are kept (so they can be fixed) but not used."""
         self.overrides = dict(overrides)
         for env, raw in self.overrides.items():
-            spec = SPEC_BY_ENV[env]
+            spec = SPEC_BY_ENV.get(env)
+            if spec is None:   # e.g. a plugin that was removed
+                continue
             try:
                 setattr(self, spec.attr, parse_value(spec, raw))
             except ValueError:

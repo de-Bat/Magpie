@@ -190,6 +190,7 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `GITHUB_TOKEN` | optional | Raises the GitHub API limit from 60 to 5000 requests/hour |
 | `RADARR_URL`, `RADARR_API_KEY` | optional | Adds an "Add to Radarr" button to film cards. Also `RADARR_ROOT_FOLDER`, `RADARR_QUALITY_PROFILE`, `RADARR_SEARCH`. See [Plugins](#plugins-radarr-sonarr) |
 | `SONARR_URL`, `SONARR_API_KEY` | optional | Adds an "Add to Sonarr" button to TV show cards. Also `SONARR_ROOT_FOLDER`, `SONARR_QUALITY_PROFILE`, `SONARR_MONITOR`, `SONARR_SEARCH` |
+| `MAGPIE_ALLOW_PLUGIN_INSTALL` | optional | `true` lets Settings → Plugins install plugins from a git repository or a file. Off by default: plugins run code on the server. See [docs/PLUGINS.md](docs/PLUGINS.md) |
 | `MAGPIE_REGION` | optional | Region for "where to watch" (default `US`) |
 | `MAGPIE_MODEL` | optional | Claude model (default `claude-opus-5`) |
 | `MAGPIE_DATA_DIR` | optional | Where data is stored (default `./data`, `/data` in Docker) |
@@ -207,7 +208,9 @@ Set one up under **Settings → Radarr** (or **Sonarr**): the server's URL and i
 
 Magpie finds the title in Radarr/Sonarr by IMDb or TMDB id when it has one, otherwise by title and year, and refuses to add a match whose title differs. Your API key is stored only on the server (never sent to the browser) and is dropped if you point the URL at a different server. Radarr and Sonarr are often on your LAN, so the server is allowed to reach private addresses for them.
 
-Writing another plugin means subclassing `magpie.plugins.Plugin` (see `magpie/plugins/radarr.py`): declare its settings and the categories it applies to, implement `status()` and `run()`, and `register()` it. Its settings get their own tab automatically.
+### More plugins: from a git repository or a single file
+
+**Settings → Plugins** installs more plugins from a public git repository (one repository can hold many) or from a single `.py` file (a link or an upload), and updates or removes them. Because a plugin runs code on the server, this is **off** until you set `MAGPIE_ALLOW_PLUGIN_INSTALL=true` in the server's environment (`.env`) and restart; it can't be switched on from the app. Only install plugins you trust. How to write one, with a full example: [docs/PLUGINS.md](docs/PLUGINS.md).
 
 ## iPhone: install as an app (PWA)
 
@@ -267,6 +270,8 @@ Before running on a device:
 | `POST` | `/api/items/{id}/correct` | JSON with any of `title`, `category`, `year`, `canonical_url` (re-enrich with these facts) and/or `hint` (Claude looks again with your description). Returns `202` |
 | `GET` | `/api/plugins` | The plugins and whether each is set up |
 | `GET` / `POST` | `/api/items/{id}/plugins`, `/api/items/{id}/plugins/{plugin}` | GET: the plugin actions that apply to the item and their state (`available`, `added`, `unavailable`). POST: run one (e.g. add the film to Radarr) |
+| `POST` | `/api/plugins/install`, `/api/plugins/upload` | Install plugins from `{"git", "ref"?}` or `{"url"}` (one `.py` file), or a multipart `file`. Needs settings access and `MAGPIE_ALLOW_PLUGIN_INSTALL` |
+| `POST` / `DELETE` | `/api/plugins/sources/{id}/update`, `/api/plugins/sources/{id}` | Update or remove an installed source |
 | `POST` | `/api/plugins/{plugin}/test` | Check a plugin's connection, with `{"url", "key"}` typed but not saved yet (needs settings access) |
 | `GET` | `/api/sync?since=` | Delta sync: `{server_time, items, deleted}`. Pass `server_time` back as the next `since` |
 | `GET` | `/api/tags`, `/api/categories` | Counts for filters |
