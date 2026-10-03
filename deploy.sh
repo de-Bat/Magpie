@@ -2,6 +2,7 @@
 # Deploy script for Magpie: stop → pull → build → start (with optional tagging)
 
 set -e  # Exit on any error
+set -o pipefail  # a failing command in `cmd | tee` must fail the script too (e.g. tagging)
 
 LOG_FILE="deploy_$(date +%Y%m%d_%H%M%S).log"
 TAG_TYPE=""
