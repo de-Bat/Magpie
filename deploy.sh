@@ -7,6 +7,7 @@ set -o pipefail  # a failing command in `cmd | tee` must fail the script too (e.
 LOG_FILE="deploy_$(date +%Y%m%d_%H%M%S).log"
 TAG_TYPE=""
 TAG_MESSAGE=""
+TAG_EXTRA=()   # credential options handed on to tag.sh
 SHOW_LOGS=false
 
 show_usage() {
@@ -18,6 +19,9 @@ Options:
   --tag-minor        Bump minor version and tag after deploy
   --tag-patch        Bump patch version and tag after deploy
   -m, --message MSG  Custom tag message
+  Credentials for pushing the tag (read from outside, see ./tag.sh --help):
+    -u, --user NAME | --user-secret NAME | --user-cmd CMD
+    -s, --secret NAME | --secret-cmd CMD
   --foreground       Show logs in foreground (default: start in background)
   --logs             Alias for --foreground
   -h, --help         Show this help message
@@ -64,6 +68,11 @@ while [[ $# -gt 0 ]]; do
       TAG_MESSAGE="$2"
       shift 2
       ;;
+    -u|--user|--user-secret|--user-cmd|-s|--secret|--secret-cmd)
+      [ $# -ge 2 ] || error "$1 needs a value"
+      TAG_EXTRA+=("$1" "$2")
+      shift 2
+      ;;
     --foreground|--logs)
       SHOW_LOGS=true
       shift
@@ -106,6 +115,7 @@ if [ -n "$TAG_TYPE" ]; then
   if [ -n "$TAG_MESSAGE" ]; then
     tag_args+=("-m" "$TAG_MESSAGE")
   fi
+  tag_args+=("${TAG_EXTRA[@]}")
 
   if bash ./tag.sh "${tag_args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
     log "✅ Deployment and tagging complete!"
