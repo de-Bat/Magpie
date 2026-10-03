@@ -112,24 +112,47 @@ command -v git &> /dev/null || error "git not found"
 
 valid_name() { [[ "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; }
 
-# Sets REPLY (the value) and REPLY_SOURCE (where it came from; never the value) for the secret called $1:
-# $NAME, the file named by $NAME_FILE, a Docker/Kubernetes secret, or ~/.secrets/NAME.
+# Sets REPLY (the value), REPLY_SOURCE (where it came from; never the value) and REPLY_TRIED (what was checked, for
+# the "not found" message) for the secret called $1: $NAME, the file named by $NAME_FILE, a Docker/Kubernetes
+# secret, or ~/.secrets/NAME (also the home of the user who ran sudo, since $HOME is then root's).
 lookup_secret() {
-  local name="$1" file_var="${1}_FILE" file
+  local name="$1" file_var="${1}_FILE" file dirs=() value owner_mode sudo_home
   valid_name "$name" || error "'$name' isn't a usable secret name (letters, digits, underscore)"
-  REPLY=""; REPLY_SOURCE=""
+  REPLY=""; REPLY_SOURCE=""; REPLY_TRIED=""
   if [ -n "${!name:-}" ]; then
     REPLY="${!name}"; REPLY_SOURCE="environment variable $name"
-  elif [ -n "${!file_var:-}" ]; then
+    return 0
+  fi
+  REPLY_TRIED="  environment variable $name: not set"
+  if [ -n "${!file_var:-}" ]; then
     file="${!file_var}"
     [ -r "$file" ] || error "$file_var points to $file, which can't be read"
     REPLY=$(<"$file"); REPLY_SOURCE="file $file (from $file_var)"
-  else
-    for file in "/run/secrets/$name" "$HOME/.secrets/$name"; do
-      if [ -r "$file" ]; then REPLY=$(<"$file"); REPLY_SOURCE="file $file"; break; fi
-    done
+    REPLY="${REPLY%$'\r'}"
+    return 0
   fi
-  REPLY="${REPLY%$'\r'}"
+  REPLY_TRIED+=$'\n'"  environment variable $file_var: not set"
+  dirs=("/run/secrets" "$HOME/.secrets")
+  if [ -n "${SUDO_USER:-}" ]; then
+    sudo_home=$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)
+    if [ -n "$sudo_home" ] && [ "$sudo_home/.secrets" != "$HOME/.secrets" ]; then dirs+=("$sudo_home/.secrets"); fi
+  fi
+  for file in "${dirs[@]/%//$name}"; do
+    if [ ! -e "$file" ]; then
+      REPLY_TRIED+=$'\n'"  $file: doesn't exist"
+    elif [ ! -r "$file" ]; then
+      owner_mode=$(stat -c '%U, mode %a' "$file" 2>/dev/null || stat -f '%Su, mode %Lp' "$file" 2>/dev/null || echo "unknown owner")
+      REPLY_TRIED+=$'\n'"  $file: exists but $(id -un) can't read it (owner $owner_mode)"
+    else
+      value=$(<"$file")
+      if [ -z "${value//[[:space:]]/}" ]; then
+        REPLY_TRIED+=$'\n'"  $file: is empty"
+      else
+        REPLY="${value%$'\r'}"; REPLY_SOURCE="file $file"
+        return 0
+      fi
+    fi
+  done
 }
 
 # Sets REPLY from a command's output (a secret manager, `gh auth token`, ...).
@@ -141,7 +164,7 @@ run_secret_command() {
 
 GIT_USER=""; GIT_PASS=""
 resolve_credentials() {
-  local user_source="" pass_source=""
+  local user_source="" pass_source="" token_tried=""
   if [ -n "$USER_OPT" ]; then
     GIT_USER="$USER_OPT"; user_source="--user"
   elif [ -n "$USER_CMD" ]; then
@@ -152,12 +175,20 @@ resolve_credentials() {
   if [ -n "$SECRET_CMD" ]; then
     run_secret_command "$SECRET_CMD" "token"; GIT_PASS="$REPLY"; pass_source="$REPLY_SOURCE"
   else
-    lookup_secret "$SECRET_NAME"; GIT_PASS="$REPLY"; pass_source="$REPLY_SOURCE"
+    lookup_secret "$SECRET_NAME"; GIT_PASS="$REPLY"; pass_source="$REPLY_SOURCE"; token_tried="$REPLY_TRIED"
   fi
 
   if [ -z "$GIT_PASS" ]; then
     GIT_USER=""
-    log "No token found ($SECRET_NAME); git will use its own credentials"
+    log "No token found ($SECRET_NAME); git will use its own credentials."
+    if [ -n "$SECRET_CMD" ]; then
+      echo "  The --secret-cmd/TAG_SECRET_CMD command printed nothing." >&2
+    else
+      echo "  Looked in (as $(id -un), HOME=$HOME):" >&2
+      printf '%s\n' "$token_tried" >&2
+      echo "  Create it with:  umask 077; mkdir -p ~/.secrets; printf '%s\\n' 'YOUR_TOKEN' > ~/.secrets/$SECRET_NAME" >&2
+      echo "  or point to it with:  ${SECRET_NAME}_FILE=/path/to/file" >&2
+    fi
     return 0
   fi
   if [ -z "$GIT_USER" ]; then GIT_USER="x-access-token"; user_source="default"; fi
