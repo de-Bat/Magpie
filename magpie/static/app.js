@@ -1694,11 +1694,11 @@ function cardFacts(item) {
   const facts = [];
   if (m.year && !["github_repo", "recipe"].includes(item.category)) facts.push(String(m.year));
   if (m.imdb_rating) facts.push(`★ ${String(m.imdb_rating).replace("/10", "")}`);
-  else if (m.tmdb_rating) facts.push(`★ ${m.tmdb_rating.replace("/10", "")}`);
+  else if (m.tmdb_rating) facts.push(`★ ${String(m.tmdb_rating).replace("/10", "")}`);
   if (m.stars != null) facts.push(`★ ${Number(m.stars).toLocaleString()}`);
   if (m.programming_language) facts.push(m.programming_language);
   if (m.total_time) facts.push(m.total_time);
-  if (m.reading_time) facts.push(m.reading_time.replace(" read", ""));
+  if (m.reading_time) facts.push(String(m.reading_time).replace(" read", ""));
   if (m.rating && item.category === "recipe") facts.push(`★ ${m.rating}`);
   return facts;
 }
