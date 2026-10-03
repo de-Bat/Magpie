@@ -618,3 +618,8 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 /* About in Settings */
 .about-in-settings { padding: 16px 0; text-align: center; }
 .about-in-settings p { font-size: 14px; color: var(--text-secondary); margin: 0 0 16px 0; line-height: 1.5; }
+
+/* Hide about icon in PWA mode */
+@media (display-mode: standalone) {
+  #about-btn { display: none; }
+}
