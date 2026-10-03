@@ -616,13 +616,10 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .about-links .separator { color: var(--border); font-weight: 300; }
 
 /* About in Settings */
-.about-in-settings { padding: 16px 0; text-align: center; }
-.about-in-settings p { font-size: 14px; color: var(--text-secondary); margin: 0 0 16px 0; line-height: 1.5; }
-
-/* Hide about icon in PWA mode */
-@media (display-mode: standalone), (display-mode: fullscreen), (display-mode: window-controls-overlay) {
-  #about-btn { display: none !important; }
-}
-
-/* JavaScript-based PWA detection fallback */
-body.pwa-mode #about-btn { display: none !important; }
+.about-in-settings { padding: 32px 0; text-align: center; }
+.about-in-settings .logo-badge { margin: 0 auto 20px; }
+.about-in-settings h4 { margin: 0 0 16px 0; font-size: 20px; font-weight: 600; color: var(--text); }
+.about-in-settings p { font-size: 14px; color: var(--text-secondary); margin: 0 0 24px 0; line-height: 1.6; max-width: 280px; margin-left: auto; margin-right: auto; }
+.about-in-settings .features-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0; text-align: left; }
+.about-in-settings .feature-item { padding: 10px; border-radius: 8px; background: var(--surface-1); display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
+.about-in-settings .feature-item i { font-size: 16px; color: var(--accent); min-width: 16px; }

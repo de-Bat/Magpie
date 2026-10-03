@@ -1026,7 +1026,22 @@ function settingsHtml(data, errors = {}, typed = {}) {
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
             ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
-            ${section("About", `<div class="about-in-settings"><p>Learn more about Magpie, its features, and how to contribute.</p><button class="btn primary" type="button" data-action="about">About Magpie</button></div>`)}
+            ${section("About", `<div class="about-in-settings">
+              <div class="logo-badge">
+                <img src="/static/icons/logo-96.png" alt="Magpie" width="56" height="56">
+              </div>
+              <h4>Magpie</h4>
+              <p>Save screenshots of recommendations. Magpie identifies them and looks up the details.</p>
+              <div class="features-mini">
+                <div class="feature-item"><i class="material-icons">screenshot_monitor</i> <span>Screenshot capture</span></div>
+                <div class="feature-item"><i class="material-icons">smart_toy</i> <span>AI identification</span></div>
+                <div class="feature-item"><i class="material-icons">local_offer</i> <span>Auto tagging</span></div>
+                <div class="feature-item"><i class="material-icons">storage</i> <span>Offline library</span></div>
+                <div class="feature-item"><i class="material-icons">link</i> <span>Rich metadata</span></div>
+                <div class="feature-item"><i class="material-icons">search</i> <span>Smart search</span></div>
+              </div>
+              <button class="btn primary" type="button" data-action="about">View Full About</button>
+            </div>`)}
             <p id="settings-none" class="setting-note" hidden></p>
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>
@@ -2510,12 +2525,6 @@ setInterval(pollChanges, 8000);  // captures added on other devices show up, wit
 
 async function boot() {
   applyTheme(getTheme());
-  // Detect PWA mode and hide about icon
-  if (window.matchMedia("(display-mode: standalone)").matches ||
-      window.matchMedia("(display-mode: fullscreen)").matches ||
-      window.navigator.standalone === true) {
-    document.body.classList.add("pwa-mode");
-  }
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("Service worker not registered:", e));
   }
