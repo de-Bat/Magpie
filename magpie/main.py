@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
+from . import catalog
 from .bulk import BulkBusy, BulkRunner
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
@@ -55,6 +56,21 @@ class Correction(BaseModel):
     year: int | None = None
     canonical_url: str | None = None
     hint: str | None = None  # e.g. "it's the 2019 remake, not the original" -> Claude looks again
+
+
+class EntryIn(BaseModel):
+    """Something added by name: a movie, TV show or book, normally as returned by /api/catalog/search."""
+    category: str
+    title: str
+    year: int | None = None
+    author: str | None = None
+    overview: str | None = None
+    image_url: str | None = None
+    tmdb: list[Any] | None = None       # ["movie" | "tv", id]
+    imdb_id: str | None = None
+    id: str | None = None
+    note: str | None = None
+    tags: list[str] = []
 
 
 class ItemPatch(BaseModel):
@@ -409,6 +425,34 @@ def create_app(
             item_id=item_id, created_at=_normalize_time(created_at), kind="url", source_url=normalized,
         )
         background.add_task(state["pipeline"].process, item["id"])
+        return item
+
+    @app.get("/api/catalog/search")
+    async def catalog_search(kind: str, q: str = Query("", max_length=200)):
+        """Candidates for something to add by name (movie, TV show or book), for the user to choose from."""
+        try:
+            return await catalog.search(kind, q, settings, state["pipeline"].http)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+
+    @app.post("/api/items/entry", status_code=202)
+    async def add_entry(body: EntryIn, background: BackgroundTasks):
+        """Add a movie, TV show or book by name (usually one picked from /api/catalog/search); it is looked up, not read from a screenshot."""
+        if body.id is not None:
+            if not CLIENT_ID_RE.match(body.id):
+                raise HTTPException(422, "id must be 8-64 characters of [A-Za-z0-9_-]")
+            existing = db.get_item(body.id)
+            if existing:
+                return existing
+        if body.category not in catalog.KINDS:
+            raise HTTPException(422, f"category must be one of {sorted(catalog.KINDS)}")
+        title = body.title.strip()
+        if not title:
+            raise HTTPException(422, "title is required")
+        spec = {**body.model_dump(), "title": title}
+        item = db.create_item("", note=body.note or None, tags=[t for t in body.tags if t.strip()], item_id=body.id, kind="entry")
+        item = db.update_item(item["id"], title=title, category=body.category, analysis=catalog.entry_analysis(spec))
+        background.add_task(state["pipeline"].process, item["id"], None, "add")
         return item
 
     @app.get("/api/items")

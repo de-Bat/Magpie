@@ -476,6 +476,80 @@ async function addLink(raw, note) {
   requestSync();
 }
 
+// ---- add by name: movie, TV show, book ---------------------------------------
+
+const FIND = {
+  movie: { title: "Add a movie", placeholder: "Movie title", icon: "🎬" },
+  tv_show: { title: "Add a TV show", placeholder: "TV show title", icon: "📺" },
+  book: { title: "Add a book", placeholder: "Book title (and author)", icon: "📚" },
+};
+let findKind = null, findSeq = 0, findResults = [];
+
+function setAddMenu(open) {
+  $("#add-menu").hidden = !open;
+  $("#fab").setAttribute("aria-expanded", String(open));
+  if (open) $("#add-menu button")?.focus();
+}
+
+function openFind(kind) {
+  if (!FIND[kind]) return;
+  setAddMenu(false);
+  findKind = kind;
+  $("#find-title").textContent = FIND[kind].title;
+  $("#find-input").placeholder = FIND[kind].placeholder;
+  $("#find-input").value = "";
+  $("#find-results").innerHTML = navigator.onLine ? "" : `<p class="find-hint">Searching needs a connection.</p>`;
+  $("#find-dialog").showModal();
+  $("#find-input").focus();
+}
+
+function findRowHtml(r, i) {
+  const pic = r.image_url ? `<img src="${esc(r.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="find-ph" aria-hidden="true">${FIND[r.category]?.icon || ""}</span>`;
+  return `<button type="button" class="find-row" data-find-pick="${i}">${pic}<span><b>${esc(r.title)}</b><small>${esc(r.subtitle || "")}</small>${r.overview ? `<span class="find-ov">${esc(r.overview)}</span>` : ""}</span></button>`;
+}
+
+async function runFind(query) {
+  const q = query.trim();
+  const box = $("#find-results");
+  if (!q) return;
+  if (!navigator.onLine) { box.innerHTML = `<p class="find-hint">Searching needs a connection.</p>`; return; }
+  const seq = ++findSeq;
+  box.innerHTML = `<p class="find-hint">Searching…</p>`;
+  let data;
+  try {
+    data = await api(`/api/catalog/search?kind=${encodeURIComponent(findKind)}&q=${encodeURIComponent(q)}`);
+  } catch (e) {
+    if (seq === findSeq) box.innerHTML = `<p class="find-hint">Couldn't search: ${esc(errorMessage(e))}</p>${typedRowHtml(q)}`;
+    return;
+  }
+  if (seq !== findSeq) return;   // a newer search is under way
+  findResults = data.results || [];
+  // exactly one match is not a choice: add it
+  if (findResults.length === 1) return addEntry(findResults[0]);
+  box.innerHTML = (findResults.length ? findResults.map(findRowHtml).join("") : `<p class="find-hint">${esc(data.note || "Nothing found.")}</p>`) + typedRowHtml(q);
+  box.querySelector("button")?.focus();
+}
+
+function typedRowHtml(q) {
+  return `<button type="button" class="find-row find-typed" data-find-typed="${esc(q)}"><span class="find-ph" aria-hidden="true">＋</span><span><b>Add “${esc(q)}” as typed</b><small>Look it up after adding</small></span></button>`;
+}
+
+async function addEntry(spec) {
+  $("#find-dialog").close();
+  if (!navigator.onLine) return toast("Adding by name needs a connection.");
+  const id = newId();
+  const body = { id, category: spec.category, title: spec.title, year: spec.year || null, author: spec.author || null,
+    overview: spec.overview || null, image_url: spec.image_url || null, tmdb: spec.tmdb || null, imdb_id: spec.imdb_id || null, };
+  try {
+    const item = await api("/api/items/entry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    await putItem(item);
+    render();
+    requestSync();
+  } catch (e) {
+    toast(`Couldn't add it: ${errorMessage(e)}`);
+  }
+}
+
 function sameLink(a, b) {
   const norm = (u) => { try { const x = new URL(u); return (x.hostname.replace(/^www\./, "") + x.pathname.replace(/\/$/, "")).toLowerCase(); } catch { return u; } };
   return norm(a) === norm(b);
@@ -2742,6 +2816,8 @@ document.addEventListener("paste", (e) => {
   if (looksLikeUrl(text)) { e.preventDefault(); addLink(text, $("#note").value.trim()); $("#note").value = ""; }
 });
 
+$("#find-form").addEventListener("submit", (e) => { e.preventDefault(); runFind($("#find-input").value); });
+
 $("#link-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const value = $("#link-input").value;
@@ -2784,10 +2860,11 @@ $("#cols-select").addEventListener("change", (e) => {
 
 // Keyboard: / searches, N adds, Esc closes the tag list, arrows move between cards.
 document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#add-menu").hidden) { setAddMenu(false); $("#fab").focus(); }
   if (e.key === "Escape") { $("#tag-pop").hidden = true; $("#tag-btn").setAttribute("aria-expanded", "false"); }
   if (e.target.matches("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
   if (e.key === "/") { e.preventDefault(); $("#search").focus(); return; }
-  if (e.key.toLowerCase() === "n") { e.preventDefault(); $("#add-dialog").showModal(); return; }
+  if (e.key.toLowerCase() === "n") { e.preventDefault(); setAddMenu(true); return; }
   const card = e.target.closest?.(".card");
   if (!card) return;
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); card.click(); return; }
@@ -2816,8 +2893,9 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
+  if (!e.target.closest("#add-menu, #fab")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-find],[data-find-pick],[data-find-typed]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -2865,6 +2943,9 @@ document.addEventListener("click", async (e) => {
     try { await apiWithSetup("/api/logs", { method: "DELETE" }); } catch (err) { return toast(`Couldn't delete: ${errorMessage(err)}`); }
     return loadLogs();
   }
+  if (t.dataset.find !== undefined) return openFind(t.dataset.find);
+  if (t.dataset.findPick !== undefined) return addEntry(findResults[Number(t.dataset.findPick)]);
+  if (t.dataset.findTyped !== undefined) return addEntry({ category: findKind, title: t.dataset.findTyped });
   if (t.dataset.bulk !== undefined) return startBulk(t.dataset.bulk);
   if (t.dataset.bulkCancel !== undefined) return cancelBulk();
   if (t.dataset.tab !== undefined) {
@@ -2919,7 +3000,9 @@ document.addEventListener("click", async (e) => {
         return deleteItem(id);
       case "token": return askToken();
       case "usage": return showUsage();
-      case "add": return $("#add-dialog").showModal();
+      case "add": return setAddMenu($("#add-menu").hidden);
+      case "add-upload": setAddMenu(false); return $("#add-dialog").showModal();
+      case "close-find": return $("#find-dialog").close();
       case "close-add": return $("#add-dialog").close();
       case "settings": return showSettings();
       case "debug": return showDebug();

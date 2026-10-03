@@ -20,6 +20,7 @@ from .findlink import repair_link
 from .related import clean_related, drop_dead, same_site, text_related
 from .images import best_image, picture_is_opaque
 from .enrich import fetch_page, link_is_gone
+from .catalog import entry_analysis
 from .config import Settings
 from .db import Database, normalize_tag
 from .enrich import Enrichment, run_enrichers
@@ -223,6 +224,7 @@ def corrected_analysis(previous: dict, correction: dict) -> dict:
         "confidence": 100,
         "confidence_reason": "Corrected by you.",
         "alternatives": [],
+        **({"_tmdb": previous["_tmdb"]} if same_thing and previous.get("_tmdb") else {}),
     }
 
 
@@ -237,6 +239,8 @@ class Pipeline:
             return None
         if item.get("kind") == "url":
             return await self.process_url(item_id, correction, purpose)
+        if item.get("kind") == "entry":
+            return await self.process_entry(item_id, correction, purpose)
         path = self.settings.uploads_dir / item["image_file"]
         media_type = mimetypes.guess_type(path.name)[0] or "image/png"
         context = None
@@ -258,6 +262,24 @@ class Pipeline:
             return analysis
 
         return await self._run(item_id, purpose, identify(), corrected=bool(correction))
+
+    async def process_entry(self, item_id: str, correction: dict | None = None, purpose: str = "add") -> dict | None:
+        """Something the user added by name (a movie, TV show or book): no screenshot to read, just the metadata lookups."""
+        item = self.db.get_item(item_id)
+        if not item:
+            return None
+        previous = item.get("analysis") if isinstance(item.get("analysis"), dict) else {}
+        spec = {**previous, **{k: v for k, v in (correction or {}).items() if k in CORRECTABLE and v not in (None, "")}}
+        spec["author"] = (previous.get("details") or {}).get("author")
+        spec["imdb_id"] = (previous.get("details") or {}).get("imdb_id")
+        spec["tmdb"] = previous.get("_tmdb") if not correction or not {"title", "category"} & set(correction) else None
+        spec["category"] = spec.get("category") or item.get("category") or "other"
+        spec["title"] = spec.get("title") or item.get("title") or ""
+
+        async def lookup() -> dict:
+            return entry_analysis(spec)
+
+        return await self._run(item_id, purpose, lookup(), corrected=True)
 
     async def process_url(self, item_id: str, correction: dict | None = None, purpose: str = "analyze") -> dict | None:
         """Identify a shared link: by URL pattern / structured data if possible (no model, free),

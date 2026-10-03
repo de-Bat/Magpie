@@ -69,7 +69,15 @@
     <p id="empty" class="empty" hidden>Nothing here yet.</p>
   </main>
 
-  <button id="fab" class="fab" type="button" data-action="add"><span aria-hidden="true">＋</span> Add</button>
+  <div class="fab-wrap">
+    <div id="add-menu" class="add-menu" role="menu" aria-label="Add" hidden>
+      <button type="button" role="menuitem" data-action="add-upload"><span aria-hidden="true">🖼</span> Screenshot or link</button>
+      <button type="button" role="menuitem" data-find="movie"><span aria-hidden="true">🎬</span> Movie</button>
+      <button type="button" role="menuitem" data-find="tv_show"><span aria-hidden="true">📺</span> TV show</button>
+      <button type="button" role="menuitem" data-find="book"><span aria-hidden="true">📚</span> Book</button>
+    </div>
+    <button id="fab" class="fab" type="button" data-action="add" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu"><span aria-hidden="true">＋</span> Add</button>
+  </div>
   <div id="dropveil" class="dropveil" hidden><div>Drop screenshots or a link to add them</div></div>
 
   <dialog id="add-dialog" class="sheet-dialog">
@@ -84,6 +92,15 @@
       </form>
       <input id="note" type="text" placeholder="Note for this one (optional), e.g. Dana recommended it" aria-label="Note">
     </div>
+  </dialog>
+
+  <dialog id="find-dialog" class="sheet-dialog find-dialog">
+    <div class="sheet-head"><h2 id="find-title">Add</h2><button class="btn close" type="button" data-action="close-find" aria-label="Close">✕</button></div>
+    <form id="find-form" class="find-form" autocomplete="off">
+      <input id="find-input" type="search" enterkeyhint="search" autocapitalize="off" spellcheck="false" aria-label="Name">
+      <button class="btn primary" type="submit">Search</button>
+    </form>
+    <div id="find-results" class="find-results" aria-live="polite"></div>
   </dialog>
 
   <dialog id="detail"></dialog>

@@ -49,3 +49,14 @@ def test_the_activity_tray_follows_every_async_operation_and_cleans_up_after_its
     assert "ACTIVITY_FADE = { done: 6000, warn: 12000, failed: 15000 }" in js
     assert "data-activity-dismiss" in js and "data-activity-retry" in js and "ACTIVITY_MAX = 5" in js
     assert ".act-failed" in css and ".act.leaving" in css and "prefers-reduced-motion" in css
+
+
+def test_add_button_opens_a_menu_and_names_are_searched_before_adding():
+    js, css, html = source()
+    assert 'id="add-menu"' in html and 'aria-haspopup="menu"' in html and 'id="find-dialog"' in html
+    for kind in ("movie", "tv_show", "book"):
+        assert f'data-find="{kind}"' in html, kind
+    assert 'data-action="add-upload"' in html            # the old screenshot/link dialog stays one click away
+    assert "/api/catalog/search?kind=" in js and '"/api/items/entry"' in js
+    assert "findResults.length === 1" in js and "data-find-typed" in js and "data-find-pick" in js
+    assert ".add-menu" in css and ".find-row" in css
