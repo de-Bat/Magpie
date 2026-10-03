@@ -6,6 +6,7 @@
   <a href="https://github.com/de-Bat/Magpie/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/de-Bat/Magpie/tests.yml?branch=main&amp;label=tests" alt="Tests"></a>
   <a href="https://github.com/de-Bat/Magpie/tags"><img src="https://img.shields.io/github/v/tag/de-Bat/Magpie?label=version&amp;sort=semver" alt="Latest version"></a>
   <a href="https://github.com/de-Bat/Magpie/commits/main"><img src="https://img.shields.io/github/last-commit/de-Bat/Magpie" alt="Last commit"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/de-Bat/Magpie" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/python-3.10%2B-3776ab?logo=python&amp;logoColor=white" alt="Python 3.10+">
   <img src="https://img.shields.io/badge/docker-ready-2496ed?logo=docker&amp;logoColor=white" alt="Docker ready">
   <img src="https://img.shields.io/badge/PWA-installable-5a0fc8" alt="Installable PWA">
@@ -309,3 +310,7 @@ pytest
 ```
 
 The tests mock Claude and every external API, so they need no keys or network.
+
+## License
+
+[MIT](LICENSE) © 2026 de-Bat.

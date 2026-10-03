@@ -3,6 +3,7 @@ name = "magpie"
 dynamic = ["version"]
 description = "Save screenshots of recommendations; Magpie identifies the source, enriches it with metadata, and makes it searchable."
 requires-python = ">=3.10"
+license = { text = "MIT" }
 dependencies = [
     "anthropic>=1.8.0",
     "fastapi>=0.115",
