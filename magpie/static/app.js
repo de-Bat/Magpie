@@ -989,7 +989,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
   const advanced = data.groups.filter((g) => ADVANCED_GROUPS.includes(g.name))
     .flatMap((g) => g.settings).filter((s) => !PROVIDER_ENVS.has(s.env));
   const others = data.groups.filter((g) => !ADVANCED_GROUPS.includes(g.name) && !HIDDEN_GROUPS.includes(g.name));
-  const names = ["AI provider", ...others.map((g) => g.name), "Library", "Appearance"];
+  const names = ["AI provider", ...others.map((g) => g.name), "Library", "Appearance", "About"];
   if (!names.includes(settingsTab)) settingsTab = names[0];
   const hasLevel = (list) => list.some((s) => errors[s.env] || (s.problem && s.problem.level === "error")) ? "error"
     : list.some((s) => s.problem && s.problem.level === "warning") ? "warning" : "";
@@ -1026,6 +1026,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
             ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
+            ${section("About", `<div class="about-in-settings"><p>Learn more about Magpie, its features, and how to contribute.</p><button class="btn primary" type="button" data-action="about">About Magpie</button></div>`)}
             <p id="settings-none" class="setting-note" hidden></p>
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>

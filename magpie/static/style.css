@@ -605,8 +605,8 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .about-features { margin: 24px 0; text-align: left; padding: 16px; background: var(--surface-1); border-radius: 12px; border: 1px solid var(--border); }
 .about-features h4 { margin: 0 0 14px 0; font-size: 12px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 1px; }
 .about-features ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.about-features li { margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; display: flex; align-items: center; gap: 8px; }
-.about-features .icon { font-size: 16px; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; }
+.about-features li { margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; display: flex; align-items: center; gap: 10px; }
+.about-features i.material-icons { font-size: 20px; color: var(--accent); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
 .about-footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
 .about-footer p { margin: 8px 0; font-size: 13px; }
 .about-footer p strong { color: var(--text); font-weight: 600; }
@@ -614,3 +614,7 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .about-links a { color: var(--accent); text-decoration: none; font-weight: 500; font-size: 13px; transition: opacity 0.2s; }
 .about-links a:hover { opacity: 0.8; text-decoration: underline; }
 .about-links .separator { color: var(--border); font-weight: 300; }
+
+/* About in Settings */
+.about-in-settings { padding: 16px 0; text-align: center; }
+.about-in-settings p { font-size: 14px; color: var(--text-secondary); margin: 0 0 16px 0; line-height: 1.5; }
