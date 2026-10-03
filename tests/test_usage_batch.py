@@ -18,9 +18,12 @@ from magpie.ocr import OcrLine, OcrResult
 from magpie.usage import Run, claude_cost, price_for
 
 
+_N = __import__("itertools").count()
+
+
 def png():
     buf = io.BytesIO()
-    Image.new("RGB", (40, 60), "white").save(buf, format="PNG")
+    Image.new("RGB", (40 + next(_N), 60), "white").save(buf, format="PNG")
     return buf.getvalue()
 
 

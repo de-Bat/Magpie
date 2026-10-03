@@ -469,6 +469,7 @@ async function pushOps() {
         await dropOp(op);
         if (saved.id !== op.id) await removeItem(op.id);  // the link was already saved (maybe from another device)
         await mergeServerItem(saved);
+        if (saved.duplicate) toast(`Already saved${saved.title ? ` as “${saved.title}”` : ""} — opened the existing card.`);
       } else if (op.type === "patch") {
         const saved = await api(`/api/items/${encodeURIComponent(op.id)}`, {
           method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(op.patch),

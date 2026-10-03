@@ -42,8 +42,15 @@ def hosted_app(tmp_path, token="tok", **kw):
     return create_app(s, analyzer=router, http=http, start_batch_worker=False), s, sent
 
 
+_N = __import__("itertools").count(1)
+
+
 def upload(client, name="s.png"):
-    return client.post("/api/items", files={"file": (name, png(), "image/png")}).json()["id"]
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (40 + next(_N), 60), "white").save(buf, format="PNG")   # distinct each time: identical images are recognised as duplicates
+    return client.post("/api/items", files={"file": (name, buf.getvalue(), "image/png")}).json()["id"]
 
 
 def test_nothing_is_written_while_logging_is_off(tmp_path):

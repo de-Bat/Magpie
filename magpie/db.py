@@ -92,7 +92,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS items_fts USING fts5(
 );
 """
 
-JSON_COLUMNS = ("metadata", "links", "analysis", "alternatives", "related")
+JSON_COLUMNS = ("metadata", "links", "analysis", "alternatives", "related", "captures")
 
 # Columns added after the first release; created on startup for existing databases.
 MIGRATIONS = {
@@ -106,6 +106,7 @@ MIGRATIONS = {
     "related": "TEXT NOT NULL DEFAULT '[]'",     # worth-a-look links: [{kind, label, url, why?}]
     "retry_at": "TEXT",                          # failed because a model hit its limit: retried automatically then
     "image_hash": "TEXT",                        # SHA256 hash for duplicate screenshot detection
+    "captures": "TEXT NOT NULL DEFAULT '[]'",    # further screenshots of the same thing: [{image_file, image_hash, created_at}]
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -116,7 +117,7 @@ VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "sche
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related", "retry_at",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related", "retry_at", "captures",
 }
 
 
@@ -281,7 +282,29 @@ class Database:
         if not image_hash:
             return None
         row = self.conn.execute("SELECT id FROM items WHERE image_hash = ? ORDER BY created_at LIMIT 1", (image_hash,)).fetchone()
+        if not row:   # a screenshot merged into another card earlier
+            row = self.conn.execute("SELECT id FROM items WHERE captures LIKE ? ORDER BY created_at LIMIT 1",
+                                    (f'%"image_hash": "{image_hash}"%',)).fetchone()
         return self.get_item(row["id"]) if row else None
+
+    def merge_capture(self, new_id: str, into_id: str) -> dict | None:
+        """The new item shows something already in the library: its screenshot joins the existing card
+        (the image file is kept) and the new item goes away."""
+        new, target = self.get_item(new_id), self.get_item(into_id)
+        if not new or not target:
+            return target
+        captures = list(target.get("captures") or [])
+        if new.get("image_file"):
+            captures.append({"image_file": new["image_file"], "image_hash": new.get("image_hash"), "created_at": new["created_at"]})
+            captures += new.get("captures") or []
+        with self.conn:
+            self.conn.execute("DELETE FROM items WHERE id = ?", (new_id,))
+            self.conn.execute("DELETE FROM items_fts WHERE item_id = ?", (new_id,))
+            self.conn.execute("INSERT OR REPLACE INTO tombstones (id, deleted_at) VALUES (?, ?)", (new_id, now()))
+            self.conn.execute("DELETE FROM batch_jobs WHERE item_id = ? AND batch_id IS NULL", (new_id,))
+        self.set_tags(into_id, sorted({*target.get("tags", []), *new.get("tags", [])}))
+        note = "\n".join(n for n in dict.fromkeys([target.get("note"), new.get("note")]) if n) or None
+        return self.update_item(into_id, captures=captures, note=note)
 
     def find_by_canonical_url(self, url: str) -> dict | None:
         """First analyzed item with the same canonical URL, if any."""

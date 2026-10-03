@@ -1095,11 +1095,19 @@ def _wait_bulk(client, timeout=10):
 
 def test_refresh_and_reanalyze_the_whole_library(settings):
     stars = {"n": 100}
-    routes = {"https://api.github.com/repos/astral-sh/uv": lambda request: httpx.Response(200, json={**GITHUB_REPO, "stargazers_count": stars["n"]})}
-    client, analyzer = make_client(settings, analysis(), routes)
+
+    def repo(request):
+        name = request.url.path.split("/repos/")[1].split("/")
+        full = "/".join(name[:2])
+        return httpx.Response(200, json={**GITHUB_REPO, "full_name": full, "html_url": f"https://github.com/{full}", "stargazers_count": stars["n"]})
+    client, analyzer = make_client(settings, analysis(), {"https://api.github.com/repos/astral-sh/": repo})
     with client:
         auth = {"X-Magpie-Setup-Code": client.app.state.runtime.setup_code}
-        ids = [client.post("/api/items", files={"file": (f"{n}.png", png_bytes((40 + n, 60)), "image/png")}).json()["id"] for n in range(3)]
+        ids = []
+        for n, name in enumerate(["uv", "ruff", "rye"]):   # three different things, so none merges into another
+            analyzer.result = analysis(canonical_url=f"https://github.com/astral-sh/{name}", title=f"astral-sh/{name}",
+                                       details=blank_details(github_full_name=f"astral-sh/{name}"))
+            ids.append(client.post("/api/items", files={"file": (f"{n}.png", png_bytes((40 + n, 60)), "image/png")}).json()["id"])
         assert client.post("/api/bulk/refresh-metadata", json={"scope": "all"}).status_code == 403   # needs the setup code, like settings
         assert client.post("/api/bulk/refresh-metadata", json={"scope": "bogus"}, headers=auth).status_code == 422
 
@@ -1406,3 +1414,19 @@ def test_uploading_the_same_screenshot_twice_returns_the_existing_item_marked_du
         item = r2.json()
         assert item["id"] == item_id_1   # same item
         assert item["duplicate"] is True
+
+
+def test_a_new_capture_of_something_already_saved_joins_the_existing_card(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)}
+    client, _ = make_client(settings, analysis(), routes)
+    with client:
+        first = client.post("/api/items", files={"file": ("a.png", png_bytes((40, 60)), "image/png")}, data={"tags": "one"}).json()["id"]
+        second_png = png_bytes((50, 70))
+        second = client.post("/api/items", files={"file": ("b.png", second_png, "image/png")}, data={"tags": "two"}).json()["id"]
+        assert client.get(f"/api/items/{second}").status_code == 404        # no second card
+        card = client.get(f"/api/items/{first}").json()
+        assert len(card["captures"]) == 1 and {"one", "two"} <= set(card["tags"])
+        assert (settings.uploads_dir / card["captures"][0]["image_file"]).exists()   # the screenshot is kept
+        again = client.post("/api/items", files={"file": ("b.png", second_png, "image/png")}).json()
+        assert again["id"] == first and again["duplicate"] is True          # and recognised by its image next time
+        assert len(client.get("/api/items").json()) == 1
