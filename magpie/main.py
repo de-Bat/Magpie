@@ -5,6 +5,7 @@ import csv
 import io
 import hmac
 import logging
+import hashlib
 import mimetypes
 import re
 import secrets
@@ -353,11 +354,15 @@ def create_app(
             raise HTTPException(413, "Screenshot is larger than 20 MB")
         if not data:
             raise HTTPException(400, "Empty file")
+        image_hash = hashlib.sha256(data).hexdigest()
+        existing = db.find_by_image_hash(image_hash)
+        if existing:
+            return {**existing, "duplicate": True}
         name = uuid.uuid4().hex + IMAGE_TYPES[media_type]
         (settings.uploads_dir / name).write_bytes(data)
         item = db.create_item(
             name, note=note or None, tags=[t for t in (tags or "").split(",") if t.strip()],
-            item_id=id, created_at=_normalize_time(created_at),
+            item_id=id, created_at=_normalize_time(created_at), image_hash=image_hash,
         )
         background.add_task(state["pipeline"].process, item["id"])
         return item

@@ -1391,3 +1391,18 @@ def test_a_category_you_corrected_is_not_overridden_by_the_link(settings):
         item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
         client.post(f"/api/items/{item_id}/correct", json={"category": "article", "title": "My review of uv"})
         assert client.get(f"/api/items/{item_id}").json()["category"] == "article"
+
+
+def test_uploading_the_same_screenshot_twice_returns_the_existing_item_marked_duplicate(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)}
+    client, _ = make_client(settings, analysis(), routes)
+    with client:
+        r1 = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")})
+        assert r1.status_code == 202
+        item_id_1 = r1.json()["id"]
+        
+        r2 = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")})
+        assert r2.status_code == 202
+        item = r2.json()
+        assert item["id"] == item_id_1   # same item
+        assert item["duplicate"] is True

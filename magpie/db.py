@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS items (
     status          TEXT NOT NULL,          -- processing | ready | error
     error           TEXT,
     image_file      TEXT NOT NULL,
+    image_hash      TEXT,                   -- SHA256 hash of the screenshot, for duplicate detection
     note            TEXT,
     category        TEXT,                   -- movie | tv_show | github_repo | recipe | ...
     source_platform TEXT,                   -- facebook | instagram | web | ...
@@ -104,6 +105,7 @@ MIGRATIONS = {
     "confirmed": "INTEGER NOT NULL DEFAULT 0",   # the user marked this identification as correct
     "related": "TEXT NOT NULL DEFAULT '[]'",     # worth-a-look links: [{kind, label, url, why?}]
     "retry_at": "TEXT",                          # failed because a model hit its limit: retried automatically then
+    "image_hash": "TEXT",                        # SHA256 hash for duplicate screenshot detection
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -146,6 +148,7 @@ class Database:
                 if column not in existing:
                     self.conn.execute(f"ALTER TABLE items ADD COLUMN {column} {ddl}")
             self.conn.execute("CREATE INDEX IF NOT EXISTS items_source_url ON items(source_url)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS items_image_hash ON items(image_hash)")
 
     def fail_interrupted(self, message: str) -> int:
         """Items left 'processing' by a previous run (the server stopped mid-analysis) would wait
@@ -167,6 +170,7 @@ class Database:
         created_at: str | None = None,
         kind: str = "screenshot",
         source_url: str | None = None,
+        image_hash: str | None = None,
     ) -> dict:
         """Create an item. Clients may supply the id (so offline uploads can be retried safely)
         and the original capture time."""
@@ -174,9 +178,9 @@ class Database:
         ts = now()
         with self.conn:
             self.conn.execute(
-                "INSERT INTO items (id, created_at, updated_at, status, image_file, note, kind, source_url) "
-                "VALUES (?, ?, ?, 'processing', ?, ?, ?, ?)",
-                (item_id, created_at or ts, ts, image_file, note, kind, source_url),
+                "INSERT INTO items (id, created_at, updated_at, status, image_file, image_hash, note, kind, source_url) "
+                "VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, ?)",
+                (item_id, created_at or ts, ts, image_file, image_hash, note, kind, source_url),
             )
             self.conn.execute("DELETE FROM tombstones WHERE id = ?", (item_id,))
         if tags:
@@ -271,6 +275,13 @@ class Database:
             return found[offset:offset + limit]
         rows = self.conn.execute(sql, (*params, limit, offset)).fetchall()
         return [self._row_to_item(r) for r in rows]
+
+    def find_by_image_hash(self, image_hash: str) -> dict | None:
+        """Item with the same screenshot, if any."""
+        if not image_hash:
+            return None
+        row = self.conn.execute("SELECT id FROM items WHERE image_hash = ? ORDER BY created_at LIMIT 1", (image_hash,)).fetchone()
+        return self.get_item(row["id"]) if row else None
 
     def find_by_source_url(self, url: str) -> dict | None:
         row = self.conn.execute("SELECT id FROM items WHERE source_url = ? ORDER BY created_at LIMIT 1", (url,)).fetchone()
