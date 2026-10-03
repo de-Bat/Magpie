@@ -32,3 +32,20 @@ def test_plugin_test_connection_shows_an_inline_result_and_offers_dropdowns():
         assert f".test-result.{state}" in css
     assert "function fillPluginOptions" in js and "_ROOT_FOLDER" in js and "_QUALITY_PROFILE" in js
     assert "(not found on the server)" in js and "autoCheckPlugin();" in js
+
+
+def test_the_activity_tray_follows_every_async_operation_and_cleans_up_after_itself():
+    js, css, html = source()
+    assert 'id="activity" class="activity" popover="manual"' in html
+    # item operations are noticed from status changes, wherever they started; removing an item drops its row
+    assert "trackItem(prev, item);" in js and "activityDrop(id);" in js
+    for kind in ("analyze", "reanalyze", "correct", "refresh"):
+        assert f'{kind}: [' in js, kind
+    assert 'pendingKind.set(id, "reanalyze")' in js and 'pendingKind.set(id, "correct")' in js
+    # refresh and library-wide jobs report their own start and finish, including failure
+    assert 'activityStart("refresh", id,' in js and 'activityFinish(`refresh:${op.id}`, "done"' in js and '"failed", activityText("refresh"' in js
+    assert "trackBulk();" in js and "async function trackBulk()" in js
+    # finished rows fade (failures later), can be dismissed, and a failed analysis can be retried
+    assert "ACTIVITY_FADE = { done: 6000, warn: 12000, failed: 15000 }" in js
+    assert "data-activity-dismiss" in js and "data-activity-retry" in js and "ACTIVITY_MAX = 5" in js
+    assert ".act-failed" in css and ".act.leaving" in css and "prefers-reduced-motion" in css

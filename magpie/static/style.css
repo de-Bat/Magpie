@@ -656,3 +656,34 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .test-detail { opacity: .8; }
 .test-result.busy::before { content: ""; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 @media (prefers-reduced-motion: reduce) { .test-result.busy::before { animation: none; } }
+
+/* Activity tray: what is being analyzed / refreshed, and how it ended */
+.activity { position: fixed; z-index: 45; left: calc(20px + env(safe-area-inset-left)); bottom: calc(20px + env(safe-area-inset-bottom)); width: min(360px, calc(100vw - 24px));
+  inset-block-start: auto; margin: 0; padding: 0; border: 0; background: transparent; overflow: visible; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.activity[hidden], .activity[popover]:not(:popover-open) { display: none; }
+.activity > * { pointer-events: auto; }
+.act { position: relative; overflow: hidden; display: flex; align-items: flex-start; gap: 10px; padding: 10px 10px 10px 12px; border-radius: 12px; font-size: 13.5px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: 0 6px 22px rgb(0 0 0 / .28); transition: opacity .3s, transform .3s; }
+.act.enter { animation: act-in .22s ease-out; }
+.act.leaving { opacity: 0; transform: translateX(-14px); }
+@keyframes act-in { from { opacity: 0; transform: translateY(10px); } }
+.act-icon { flex: none; width: 20px; height: 20px; margin-top: 1px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: var(--accent); }
+.act-running .act-icon { border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; }
+.act-done .act-icon { background: color-mix(in oklab, var(--ok) 18%, transparent); color: var(--ok); }
+.act-warn .act-icon { background: color-mix(in oklab, var(--warn) 20%, transparent); color: var(--warn); }
+.act-failed .act-icon { background: color-mix(in oklab, var(--err) 18%, transparent); color: var(--err); }
+.act-failed { border-color: color-mix(in oklab, var(--err) 45%, var(--border)); }
+.act-main { flex: 1; min-width: 0; display: grid; gap: 2px; text-align: left; background: none; border: 0; padding: 0; margin: 0; color: inherit; font: inherit; }
+button.act-main { cursor: pointer; }
+button.act-main:hover .act-text { text-decoration: underline; }
+.act-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.act-note { color: var(--muted); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.act-retry, .act-x { flex: none; background: none; border: 0; color: var(--accent); font: inherit; cursor: pointer; padding: 0 4px; border-radius: 6px; }
+.act-retry { font-weight: 600; font-size: 12.5px; padding: 2px 8px; border: 1px solid var(--border); }
+.act-x { color: var(--muted); font-size: 20px; line-height: 1; padding: 0 6px; }
+.act-x:hover, .act-retry:hover { color: var(--text); background: var(--surface-2); }
+.act-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--surface-2); }
+.act-bar > i { display: block; height: 100%; background: var(--accent); transition: width .5s ease; }
+.act-more { align-self: flex-start; padding: 3px 10px; border-radius: 999px; font-size: 12px; color: var(--muted); background: var(--surface); border: 1px solid var(--border); }
+@media (max-width: 760px) { .activity { left: 12px; right: 12px; width: auto; bottom: calc(84px + env(safe-area-inset-bottom)); } }
+@media (prefers-reduced-motion: reduce) { .act, .act.enter { animation: none; transition: none; } .act-running .act-icon { animation: none; } .act-bar > i { transition: none; } }

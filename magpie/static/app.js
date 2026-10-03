@@ -208,11 +208,14 @@ async function loadLocal() {
 }
 
 async function putItem(item) {
+  const prev = state.items.get(item.id);
   state.items.set(item.id, item);
+  trackItem(prev, item);
   await db.put("items", item);
 }
 
 async function removeItem(id, { keepDeleteOp = false } = {}) {
+  activityDrop(id);
   state.items.delete(id);
   await db.del("items", id);
   await db.del("blobs", id);
@@ -239,6 +242,192 @@ async function mergeServerItem(server) {
   await db.del("blobs", server.id);
 }
 
+// ---- activity tray: what is being analyzed / refreshed right now, and how it ended ----------------------------
+// A stack at the bottom-left. A running row spins; a finished one shows the outcome, fades after a while (failures stay
+// longer, hovering keeps it) and has an × to dismiss it. Item operations are noticed from the item's status changing
+// (so work started on another device shows up too); refreshing and library-wide jobs report their own start and end.
+
+const activities = new Map();   // key -> { key, kind, itemId, state: running|done|warn|failed, text, note, progress, startedAt }
+const pendingKind = new Map();  // item id -> what the user just asked for (reanalyze / correct), until its row exists
+const ACTIVITY_MAX = 5;
+const ACTIVITY_FADE = { done: 6000, warn: 12000, failed: 15000 };
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const itemName = (item) => (item?.title ? `“${item.title}”` : item?.kind === "url" ? "link" : "screenshot");
+const isBusy = (i) => !!i && (i.status === "queued" || i.status === "processing");
+const bulkRunning = () => activities.get("bulk")?.state === "running";
+
+function activityStart(kind, itemId, text, note = "") {
+  const key = itemId ? `${kind}:${itemId}` : kind;
+  const old = activities.get(key);
+  clearTimeout(old?.timer);
+  activities.set(key, { key, kind, itemId, state: "running", text, note, progress: null, startedAt: Date.now() });
+  renderActivity();
+}
+
+function activityUpdate(key, fields) {
+  const a = activities.get(key);
+  if (!a || a.state !== "running") return;
+  Object.assign(a, fields);
+  renderActivity();
+}
+
+function activityFinish(key, state, text, note = "") {
+  const old = activities.get(key);
+  clearTimeout(old?.timer);
+  const [kind, itemId] = key.split(/:(.*)/s);
+  const a = Object.assign(old || { key, kind, itemId: itemId || null, startedAt: Date.now() }, { state, text, note, progress: null, leaving: false });
+  activities.set(key, a);
+  scheduleFade(a);
+  renderActivity();
+}
+
+function scheduleFade(a) {
+  clearTimeout(a.timer);
+  if (document.visibilityState !== "visible") { a.waiting = true; return; }   // not seen yet: the clock starts when you are back
+  a.waiting = false;
+  a.timer = setTimeout(() => activityDismiss(a.key), ACTIVITY_FADE[a.state] || 6000);
+}
+
+function activityDismiss(key) {
+  const a = activities.get(key);
+  if (!a) return;
+  clearTimeout(a.timer);
+  if (reducedMotion()) { activities.delete(key); return renderActivity(); }
+  a.leaving = true;
+  renderActivity();
+  setTimeout(() => { if (activities.get(key) === a) { activities.delete(key); renderActivity(); } }, 320);
+}
+
+function activityDrop(itemId) {   // the item is gone (deleted, or merged into another card): nothing left to report
+  for (const [key, a] of activities) if (a.itemId === itemId) { clearTimeout(a.timer); activities.delete(key); }
+  renderActivity();
+}
+
+// Called for every change to an item, wherever it came from.
+function trackItem(prev, next) {
+  const now = isBusy(next), waiting = next.status === "error" && !!next.retry_at;   // an AI limit: it retries by itself
+  const open = ["analyze", "reanalyze", "correct"].map((k) => `${k}:${next.id}`).find((k) => activities.get(k)?.state === "running");
+  if (now || waiting) {
+    const note = next.pending_upload ? "Waiting to upload" : next.batch_pending ? "Queued in a Claude batch (cheaper; can take up to an hour)"
+      : waiting ? `The AI limit was reached; trying again ${untilText(next.retry_at)}` : "";
+    if (open) return activityUpdate(open, { note, text: activityText(activities.get(open).kind, next) });
+    const explicit = pendingKind.get(next.id);
+    pendingKind.delete(next.id);
+    if (bulkRunning() && !explicit) return;   // a library-wide job has its own row
+    const kind = explicit || (prev && !isBusy(prev) ? "reanalyze" : "analyze");
+    return activityStart(kind, next.id, activityText(kind, next), note);
+  }
+  if (!open) return;
+  const kind = open.split(":")[0];
+  if (next.status === "ready") {
+    const unsure = next.needs_review && !next.corrected;
+    activityFinish(open, unsure ? "warn" : "done", activityText(kind, next, unsure ? "unsure" : "done"),
+      unsure ? "Magpie isn't sure about this one. Open it to check." : "");
+  } else {
+    activityFinish(open, "failed", activityText(kind, next, "failed"), next.error || "");
+  }
+}
+
+function activityText(kind, item, outcome = "running") {
+  const name = itemName(item);
+  const verbs = { analyze: ["Analyzing", "Identified", "identify"], reanalyze: ["Re-analyzing", "Re-analyzed", "re-analyze"],
+    correct: ["Applying your correction to", "Updated", "apply the correction to"], refresh: ["Refreshing metadata for", "Refreshed metadata for", "refresh metadata for"] }[kind];
+  if (outcome === "running") return `${verbs[0]} ${name}…`;
+  if (outcome === "failed") return `Couldn't ${verbs[2]} ${name}`;
+  const type = (kind === "analyze" || kind === "reanalyze") && item.category ? ` · ${typeName(item.category)}` : "";
+  return `${verbs[1]} ${name}${type}`;
+}
+
+// Library-wide refresh / re-analyze: one row with progress.
+let bulkWatch = null;
+async function trackBulk() {
+  clearTimeout(bulkWatch);
+  let st;
+  try { st = await api("/api/bulk", { timeout: 8000 }); } catch { return; }
+  if (st.running) {
+    const label = `${BULK_LABEL[st.kind] || "Working"}: ${st.done} of ${st.total}${st.failed ? ` · ${st.failed} failed` : ""}`;
+    if (activities.get("bulk")?.state === "running") activityUpdate("bulk", { text: label, progress: st.total ? st.done / st.total : null });
+    else { activityStart("bulk", null, label); activityUpdate("bulk", { progress: st.total ? st.done / st.total : null }); }
+    bulkWatch = setTimeout(trackBulk, 1500);
+  } else if (activities.get("bulk")?.state === "running") {
+    const what = st.kind === "refresh" ? "refreshed" : "sent for analysis";
+    const text = `${st.cancelled ? "Stopped" : "Done"}: ${st.done} of ${st.total} ${what}`;
+    activityFinish("bulk", st.failed ? "warn" : "done", st.failed ? `${text}, ${st.failed} failed` : text,
+      st.kind === "reanalyze" ? "Claude batches can take up to an hour; the library updates by itself." : "");
+    requestSync();
+  }
+}
+
+const ACTIVITY_ICON = { done: "✓", warn: "!", failed: "✗" };
+
+function activityRow(a) {
+  const el = document.createElement("div");
+  el.dataset.key = a.key;
+  el.classList.add("enter");
+  el.addEventListener("animationend", () => el.classList.remove("enter"));
+  el.addEventListener("mouseenter", () => clearTimeout(activities.get(a.key)?.timer));
+  el.addEventListener("mouseleave", () => { const cur = activities.get(a.key); if (cur && cur.state !== "running") { clearTimeout(cur.timer); cur.timer = setTimeout(() => activityDismiss(cur.key), 3000); } });
+  return el;
+}
+
+function fillActivityRow(el, a) {
+  const sig = JSON.stringify([a.state, a.text, a.note, a.progress, a.leaving]);
+  if (el.dataset.sig === sig) return;
+  el.dataset.sig = sig;
+  el.className = `act act-${a.state}${a.leaving ? " leaving" : ""}${el.classList.contains("enter") ? " enter" : ""}`;
+  const item = a.itemId && state.items.get(a.itemId);
+  const finished = a.state !== "running";
+  const retry = a.state === "failed" && item && !item.pending_upload && (a.kind === "analyze" || a.kind === "reanalyze");
+  const main = `<span class="act-text">${esc(a.text)}</span>${a.note ? `<span class="act-note">${esc(a.note)}</span>` : ""}`;
+  el.innerHTML = `<span class="act-icon" aria-hidden="true">${finished ? ACTIVITY_ICON[a.state] : ""}</span>
+    ${item ? `<button type="button" class="act-main" data-open-item="${esc(a.itemId)}" title="Open it">${main}</button>` : `<span class="act-main">${main}</span>`}
+    ${retry ? `<button type="button" class="act-retry" data-activity-retry="${esc(a.itemId)}">Retry</button>` : ""}
+    ${finished ? `<button type="button" class="act-x" data-activity-dismiss="${esc(a.key)}" aria-label="Dismiss">×</button>` : ""}
+    ${a.progress != null ? `<i class="act-bar"><i style="width:${Math.round(a.progress * 100)}%"></i></i>` : ""}`;
+}
+
+function renderActivity() {
+  const tray = $("#activity");
+  const rows = [...activities.values()].sort((x, y) => x.startedAt - y.startedAt);
+  const shown = rows.slice(-ACTIVITY_MAX), extra = rows.slice(0, rows.length - shown.length);
+  const wanted = new Map(shown.map((a) => [a.key, a]));
+  for (const el of [...tray.querySelectorAll(".act[data-key]")]) if (!wanted.has(el.dataset.key)) el.remove();
+  let more = tray.querySelector(".act-more");
+  if (extra.length) {
+    const working = extra.filter((a) => a.state === "running").length, failed = extra.filter((a) => a.state === "failed").length;
+    if (!more) { more = document.createElement("div"); more.className = "act-more"; tray.prepend(more); }
+    more.textContent = `+${extra.length} more${working ? ` · ${working} still working` : ""}${failed ? ` · ${failed} failed` : ""}`;
+  } else more?.remove();
+  let order = more ? [more] : [];
+  for (const a of shown) {
+    let el = tray.querySelector(`.act[data-key="${CSS.escape(a.key)}"]`);
+    if (!el) el = activityRow(a);
+    fillActivityRow(el, a);
+    order.push(el);
+  }
+  if (order.some((el, i) => tray.children[i] !== el)) tray.append(...order);
+  const visible = shown.length > 0;
+  if (tray.showPopover) {
+    try {
+      if (visible && !tray.matches(":popover-open")) tray.showPopover();
+      else if (!visible && tray.matches(":popover-open")) tray.hidePopover();
+    } catch {}
+  } else tray.hidden = !visible;
+}
+
+// A popover is stacked in the order it was shown, so a dialog opened later would cover the tray: show it again on top.
+function raiseActivity() {
+  const tray = $("#activity");
+  if (!tray.showPopover || !tray.matches(":popover-open")) return;
+  try { tray.hidePopover(); tray.showPopover(); } catch {}
+}
+const showModalOriginal = HTMLDialogElement.prototype.showModal;
+HTMLDialogElement.prototype.showModal = function (...args) { const r = showModalOriginal.apply(this, args); raiseActivity(); return r; };
+if (!$("#activity").showPopover) $("#activity").hidden = true;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") for (const a of activities.values()) if (a.waiting && a.state !== "running") scheduleFade(a);
+});
+
 // ---- local changes (all work offline) --------------------------------------
 
 async function addScreenshots(files, note) {
@@ -258,9 +447,8 @@ async function addScreenshots(files, note) {
     });
     await enqueue({ type: "upload", id });
   }
-  toast(navigator.onLine
-    ? `Added ${images.length} screenshot${images.length > 1 ? "s" : ""} — analyzing…`
-    : `Saved ${images.length} screenshot${images.length > 1 ? "s" : ""} offline — will upload when you're back online`);
+  // online, the activity tray shows the analysis; offline there is nothing running, so say where they are
+  if (!navigator.onLine) toast(`Saved ${images.length} screenshot${images.length > 1 ? "s" : ""} offline — will upload when you're back online`);
   render();
   requestSync();
 }
@@ -316,6 +504,7 @@ async function editItem(id, patch) {
 async function reanalyzeItem(id) {
   const item = state.items.get(id);
   if (!item || item.pending_upload) return;
+  pendingKind.set(id, "reanalyze");
   await putItem({ ...item, status: "processing", error: null });
   await enqueue({ type: "reanalyze", id });
   render();
@@ -327,7 +516,7 @@ async function refreshItemMetadata(id) {
   const item = state.items.get(id);
   if (!item || item.pending_upload) return;
   await enqueue({ type: "refresh", id });
-  toast("Refreshing metadata…");
+  activityStart("refresh", id, activityText("refresh", item), navigator.onLine ? "" : "Waiting for the connection");
   requestSync();
 }
 
@@ -337,6 +526,7 @@ async function correctItem(id, correction) {
   if (!item) return;
   const fix = Object.fromEntries(Object.entries(correction).filter(([, v]) => v !== "" && v != null));
   if (!Object.keys(fix).length) return toast("Enter what it really is, or describe it.");
+  pendingKind.set(id, "correct");
   await putItem({
     ...item, ...("title" in fix ? { title: fix.title } : {}), ...("category" in fix ? { category: fix.category } : {}),
     status: item.pending_upload ? item.status : "processing", error: null,
@@ -495,9 +685,12 @@ async function pushOps() {
         await dropOp(op);
         if (!hasPendingOps(op.id)) await mergeServerItem(saved);
       } else if (op.type === "refresh") {
+        const before = state.items.get(op.id);
         const saved = await api(`/api/items/${encodeURIComponent(op.id)}/refresh-metadata`, { method: "POST", timeout: 60000 });
         await dropOp(op);
         if (!hasPendingOps(op.id)) await mergeServerItem(saved);
+        activityFinish(`refresh:${op.id}`, "done", activityText("refresh", saved, "done"),
+          saved.image_url && saved.image_url !== before?.image_url ? "Found a new cover" : "");
       } else if (op.type === "delete") {
         try {
           await api(`/api/items/${encodeURIComponent(op.id)}`, { method: "DELETE" });
@@ -509,7 +702,11 @@ async function pushOps() {
         await dropOp(op);
       }
     } catch (e) {
-      if (!(e instanceof HttpError && e.permanent)) throw e;
+      if (!(e instanceof HttpError && e.permanent)) {
+        if (op.type === "refresh") activityUpdate(`refresh:${op.id}`, { note: "Waiting for the connection" });
+        throw e;
+      }
+      if (op.type === "refresh") activityFinish(`refresh:${op.id}`, "failed", activityText("refresh", state.items.get(op.id), "failed"), e.message);
       // Retrying would fail forever. 410: deleted on another device while we were offline.
       if (e.status === 410) await removeItem(op.id);
       else toast(`A change was rejected by the server: ${e.message}`);
@@ -1462,6 +1659,7 @@ async function startBulk(kind) {
       const headers = { "Content-Type": "application/json" };
       if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
       await api(`/api/bulk/${kind === "refresh" ? "refresh-metadata" : "reanalyze"}`, { method: "POST", headers, body });
+      trackBulk();
       return pollBulk();
     } catch (e) {
       let detail = {};
@@ -2619,11 +2817,13 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
   if (t.dataset.testKey !== undefined) return testKey(t.dataset.testKey);
+  if (t.dataset.activityDismiss !== undefined) return activityDismiss(t.dataset.activityDismiss);
+  if (t.dataset.activityRetry !== undefined) { activityDismiss(`analyze:${t.dataset.activityRetry}`); activityDismiss(`reanalyze:${t.dataset.activityRetry}`); return reanalyzeItem(t.dataset.activityRetry); }
   if (t.dataset.testPlugin !== undefined) return testPlugin(t.dataset.testPlugin, t);
   if (t.dataset.pluginInstall !== undefined) return installPlugin(t.dataset.pluginInstall, t);
   if (t.dataset.pluginUpdate !== undefined) return pluginAdminCall(t, `/api/plugins/sources/${encodeURIComponent(t.dataset.pluginUpdate)}/update`, { method: "POST" }, "Updated.");
@@ -2802,6 +3002,8 @@ async function boot() {
   if (cookieToken && !(await db.get("kv", "token"))) await setToken(decodeURIComponent(cookieToken.split("=")[1]));
 
   await loadLocal();
+  for (const item of state.items.values()) if (isBusy(item)) trackItem(undefined, item);   // still working from before
+  trackBulk();   // a library-wide job that is already running
   render();
   if (new URLSearchParams(location.search).has("shared")) history.replaceState(null, "", "/");
   requestSync();
