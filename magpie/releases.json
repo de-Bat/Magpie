@@ -1,6 +1,6 @@
 [
   {
-    "version": "next",
+    "version": "0.20.0",
     "features": [
       {
         "title": "Tidier card on phones",
@@ -10,7 +10,8 @@
         "title": "Compact main link",
         "text": "On a phone the card's source link is the site's icon and an arrow instead of 'Open …'."
       }
-    ]
+    ],
+    "date": "2026-10-03"
   },
   {
     "version": "0.19.0",
