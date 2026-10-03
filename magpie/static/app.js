@@ -2510,6 +2510,12 @@ setInterval(pollChanges, 8000);  // captures added on other devices show up, wit
 
 async function boot() {
   applyTheme(getTheme());
+  // Detect PWA mode and hide about icon
+  if (window.matchMedia("(display-mode: standalone)").matches ||
+      window.matchMedia("(display-mode: fullscreen)").matches ||
+      window.navigator.standalone === true) {
+    document.body.classList.add("pwa-mode");
+  }
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("Service worker not registered:", e));
   }
