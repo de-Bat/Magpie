@@ -57,6 +57,7 @@ USER_OPT=""
 USER_CMD="${TAG_USER_CMD:-}"
 SECRET_CMD="${TAG_SECRET_CMD:-}"
 PUSH_TAGS=true
+VERSION_FILE="${TAG_VERSION_FILE:-magpie/VERSION}"   # where the app reads its version from
 
 need_value() { [ "$1" -ge 2 ] || error "$2 needs a value"; }
 
@@ -284,6 +285,7 @@ case $COMMAND in
 
   major|minor|patch)
     git rev-parse --git-dir > /dev/null 2>&1 || error "Not inside a git repository"
+    root=$(git rev-parse --show-toplevel)
 
     resolve_credentials
     setup_askpass
@@ -295,34 +297,56 @@ case $COMMAND in
     new_version=$(bump_version "$current" "$COMMAND")
     git rev-parse -q --verify "refs/tags/$new_version" > /dev/null && error "Tag $new_version already exists"
 
-    # The tag is pushed to the remote, so the commit it marks has to be there too
-    if [ "$PUSH_TAGS" = true ] && [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
-      error "HEAD isn't on the remote yet. Push your commits first, or use --no-push."
+    branch=$(git symbolic-ref -q --short HEAD || true)
+    if [ "$PUSH_TAGS" = true ]; then
+      [ -n "$branch" ] || error "HEAD isn't on a branch. Check one out, or use --no-push."
+      # The release commit goes up with the tag, so what is already committed has to be on the remote first
+      if [ -z "$(git branch -r --contains HEAD 2>/dev/null)" ]; then
+        error "HEAD isn't on the remote yet. Push your commits first, or use --no-push."
+      fi
     fi
 
     log "Bumping $COMMAND: $current → $new_version"
-
     tag_message="${MESSAGE:-Release $new_version}"
+
+    # The version is recorded in the code (the app shows it under Settings → About), in a release commit that the tag marks
+    version_file="$root/$VERSION_FILE"
+    committed=false
+    undo_release() {
+      git tag -d "$new_version" > /dev/null 2>&1 || true
+      if [ "$committed" = true ]; then git reset -q --mixed HEAD~1; fi
+      if git ls-files --error-unmatch -- "$version_file" > /dev/null 2>&1; then git checkout -q -- "$version_file"; else rm -f "$version_file"; fi
+    }
+    # (replaced rather than rewritten in place, so it works even if an earlier sudo run left the file owned by root)
+    printf '%s\n' "${new_version#v}" > "$version_file.new" && mv -f "$version_file.new" "$version_file" || error "Couldn't write $VERSION_FILE"
+    git add -- "$version_file"
+    if git diff --cached --quiet -- "$version_file"; then
+      log "$VERSION_FILE already says ${new_version#v}"
+    else
+      git commit -q -m "Release $new_version" -- "$version_file" || { undo_release; error "Couldn't commit the new version (is your git user.name / user.email set?)"; }
+      committed=true
+      log "Recorded the version in $VERSION_FILE"
+    fi
     log "Creating tag: $new_version"
-    git tag -a "$new_version" -m "$tag_message"
+    git tag -a "$new_version" -m "$tag_message" || { undo_release; error "Couldn't create the tag"; }
 
     if [ "$PUSH_TAGS" = true ]; then
-      log "🚀 Pushing $new_version to origin..."
+      log "🚀 Pushing $branch and $new_version to origin..."
       push_ok=true
-      git_auth push origin "refs/tags/$new_version" || push_ok=false
+      git_auth push --atomic origin "HEAD:refs/heads/$branch" "refs/tags/$new_version" || push_ok=false
 
       if [ "$push_ok" = true ] && git_auth ls-remote --exit-code --tags origin "refs/tags/$new_version" > /dev/null 2>&1; then
-        log "✅ Tag $new_version is on the remote"
+        log "✅ $new_version is on the remote"
       else
-        git tag -d "$new_version" > /dev/null
-        error "Couldn't push $new_version to origin, so the local tag was removed too. Check the git user and token ($SECRET_NAME, see --help for where they are read from) and that the token can push, then try again."
+        undo_release
+        error "Couldn't push $new_version to origin, so the release commit and tag were undone. Check the git user and token ($SECRET_NAME, see --help for where they are read from), that the token can push, and that origin has no newer commits (git pull), then try again."
       fi
     else
-      log "⏭️  Tag created locally (not pushed)"
-      log "To push it later: git push origin refs/tags/$new_version"
+      log "⏭️  Committed and tagged locally (not pushed)"
+      log "To push it later: git push --atomic origin HEAD:refs/heads/${branch:-<branch>} refs/tags/$new_version"
     fi
 
-    log "✅ Tagging complete!"
+    log "✅ Tagging complete! The app will show $new_version after it is rebuilt."
     ;;
 
   *)

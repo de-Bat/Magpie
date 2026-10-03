@@ -593,36 +593,21 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 }
 @media (min-width: 761px) { .debug-panel[data-view="detail"] .dbg-back .btn[data-debug-back] { display: none; } }
 
-/* About Dialog */
-.about-body { padding: 24px; }
-.about-content { text-align: center; }
-.about-header { margin-bottom: 24px; }
+/* Settings → About */
+.about { padding: 28px 0 8px; text-align: center; }
 .logo-badge { display: inline-flex; align-items: center; justify-content: center; width: 80px; height: 80px; margin: 0 auto 16px; border-radius: 20px; background: linear-gradient(135deg, var(--accent) 0%, color-mix(in oklab, var(--accent) 80%, transparent) 100%); box-shadow: 0 8px 16px color-mix(in oklab, var(--accent) 40%, transparent); }
-.logo-badge img { display: block; width: 64px; height: 64px; border-radius: 16px; }
-.about-header h3 { margin: 0 0 8px 0; font-size: 28px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
-.about-header .version { margin: 0; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; }
-.about-desc { margin: 20px 0 24px 0; font-size: 15px; line-height: 1.6; color: var(--text-secondary); }
-.about-features { margin: 24px 0; text-align: left; padding: 16px; background: var(--surface-1); border-radius: 12px; border: 1px solid var(--border); }
-.about-features h4 { margin: 0 0 14px 0; font-size: 12px; font-weight: 700; color: var(--text); text-transform: uppercase; letter-spacing: 1px; }
-.about-features ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.about-features li { margin: 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; display: flex; align-items: center; gap: 10px; }
-.about-features i.material-icons { font-size: 20px; color: var(--accent); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
-.about-footer { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); }
-.about-footer p { margin: 8px 0; font-size: 13px; }
-.about-footer p strong { color: var(--text); font-weight: 600; }
-.about-links { display: flex; justify-content: center; align-items: center; gap: 12px; margin-top: 12px; }
-.about-links a { color: var(--accent); text-decoration: none; font-weight: 500; font-size: 13px; transition: opacity 0.2s; }
-.about-links a:hover { opacity: 0.8; text-decoration: underline; }
-.about-links .separator { color: var(--border); font-weight: 300; }
-
-/* About in Settings */
-.about-in-settings { padding: 32px 0; text-align: center; }
-.about-in-settings .logo-badge { margin: 0 auto 20px; }
-.about-in-settings h4 { margin: 0 0 16px 0; font-size: 20px; font-weight: 600; color: var(--text); }
-.about-in-settings p { font-size: 14px; color: var(--text-secondary); margin: 0 0 24px 0; line-height: 1.6; max-width: 280px; margin-left: auto; margin-right: auto; }
-.about-in-settings .features-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0; text-align: left; }
-.about-in-settings .feature-item { padding: 10px; border-radius: 8px; background: var(--surface-1); display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
-.about-in-settings .feature-item i { font-size: 16px; color: var(--accent); min-width: 16px; }
+.logo-badge img { display: block; width: 56px; height: 56px; border-radius: 14px; }
+.about h4 { margin: 0 0 6px; font-size: 24px; font-weight: 700; color: var(--text); letter-spacing: -0.5px; }
+.about .version { margin: 0; font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; }
+.about .about-desc { margin: 18px auto 22px; max-width: 320px; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.features-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 auto 22px; max-width: 440px; text-align: left; }
+.feature-item { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text); }
+.feature-item svg { color: var(--accent); flex-shrink: 0; }
+.about-links { display: flex; justify-content: center; align-items: center; gap: 12px; margin: 0; padding-top: 16px; border-top: 1px solid var(--border); font-size: 13px; }
+.about-links a { color: var(--accent); text-decoration: none; font-weight: 500; }
+.about-links a:hover { text-decoration: underline; }
+.about-links .separator { color: var(--muted); }
+@media (max-width: 420px) { .features-mini { grid-template-columns: 1fr; } }
 
 /* Plugin actions (Radarr, Sonarr, ...) on a card */
 .plugin-slot { display: contents; }

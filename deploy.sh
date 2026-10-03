@@ -98,6 +98,26 @@ sudo docker compose down || error "Failed to stop containers"
 log "📥 Pulling latest changes..."
 sudo git pull || error "Failed to pull latest changes"
 
+# Tag before building: tag.sh records the version in the code (Settings → About shows it), so the image has to be
+# built after it. If tagging fails the site still comes back up, then the deploy reports the failure.
+TAG_FAILED=false
+if [ -n "$TAG_TYPE" ]; then
+  log "🏷️  Tagging (before the build, so the app shows the new version)..."
+
+  tag_args=("$TAG_TYPE")
+  if [ -n "$TAG_MESSAGE" ]; then
+    tag_args+=("-m" "$TAG_MESSAGE")
+  fi
+  tag_args+=("${TAG_EXTRA[@]}")
+
+  if ! bash ./tag.sh "${tag_args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+    TAG_FAILED=true
+    log "⚠️  Tagging failed; deploying the current version anyway"
+  fi
+else
+  log "⏭️  Skipping tagging (use --tag-major/minor/patch to tag)"
+fi
+
 log "🔨 Building Docker image..."
 sudo docker compose build || error "Failed to build image"
 
@@ -106,24 +126,8 @@ sudo docker compose up -d || error "Failed to start services"
 
 log "✅ Deploy complete!"
 log "Magpie is running at http://localhost:8000"
-
-# Handle tagging if requested
-if [ -n "$TAG_TYPE" ]; then
-  log "🏷️  Tagging deployment..."
-
-  tag_args=("$TAG_TYPE")
-  if [ -n "$TAG_MESSAGE" ]; then
-    tag_args+=("-m" "$TAG_MESSAGE")
-  fi
-  tag_args+=("${TAG_EXTRA[@]}")
-
-  if bash ./tag.sh "${tag_args[@]}" 2>&1 | tee -a "$LOG_FILE"; then
-    log "✅ Deployment and tagging complete!"
-  else
-    error "Tagging failed after successful deployment"
-  fi
-else
-  log "⏭️  Skipping tagging (use --tag-major/minor/patch to tag)"
+if [ "$TAG_FAILED" = true ]; then
+  log "❌ ...but the tag was not created (see the tag.sh output above). Fix it and run: ./tag.sh $TAG_TYPE, then rebuild"
 fi
 
 log "Logs saved to $LOG_FILE"
@@ -136,3 +140,5 @@ else
   log "🎯 Running in background (use 'sudo docker compose logs -f magpie' to view logs)"
   log "✅ Ready to accept requests at http://localhost:8000"
 fi
+
+[ "$TAG_FAILED" = false ] || exit 1

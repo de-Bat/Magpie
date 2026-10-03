@@ -1028,22 +1028,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
             ${section("Plugins", pluginsAdminHtml(data))}
             ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
-            ${section("About", `<div class="about-in-settings">
-              <div class="logo-badge">
-                <img src="/static/icons/logo-96.png" alt="Magpie" width="56" height="56">
-              </div>
-              <h4>Magpie</h4>
-              <p>Save screenshots of recommendations. Magpie identifies them and looks up the details.</p>
-              <div class="features-mini">
-                <div class="feature-item"><i class="material-icons">screenshot_monitor</i> <span>Screenshot capture</span></div>
-                <div class="feature-item"><i class="material-icons">smart_toy</i> <span>AI identification</span></div>
-                <div class="feature-item"><i class="material-icons">local_offer</i> <span>Auto tagging</span></div>
-                <div class="feature-item"><i class="material-icons">storage</i> <span>Offline library</span></div>
-                <div class="feature-item"><i class="material-icons">link</i> <span>Rich metadata</span></div>
-                <div class="feature-item"><i class="material-icons">search</i> <span>Smart search</span></div>
-              </div>
-              <button class="btn primary" type="button" data-action="about">View Full About</button>
-            </div>`)}
+            ${section("About", aboutHtml(data))}
             <p id="settings-none" class="setting-note" hidden></p>
             <p class="setting-note">Saved in <code>${esc(data.settings_file)}</code>; overrides environment variables. Changes apply immediately.</p>
           </div>
@@ -2326,6 +2311,34 @@ async function runPlugin(pluginId, itemId, btn) {
   }
 }
 
+// Material Design icons, inline so they work offline and without calling out to a font host.
+const MATERIAL_ICONS = {
+  screenshot_monitor: "M20 3H4c-1.1 0-2 .9-2 2v11c0 1.1.9 2 2 2h3l-1 1v2h12v-2l-1-1h3c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 13H4V5h16v11zM6.5 7.5H9V6H5v4h1.5zM19 12h-1.5v2.5H15V16h4z",
+  smart_toy: "M20 9V7c0-1.1-.9-2-2-2h-3c0-1.66-1.34-3-3-3S9 3.34 9 5H6c-1.1 0-2 .9-2 2v2c-1.66 0-3 1.34-3 3s1.34 3 3 3v4c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4c1.66 0 3-1.34 3-3s-1.34-3-3-3zM7.5 11.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5S9.83 13 9 13s-1.5-.67-1.5-1.5zM16 17H8v-2h8v2zm-1-4c-.83 0-1.5-.67-1.5-1.5S14.17 10 15 10s1.5.67 1.5 1.5S15.83 13 15 13z",
+  local_offer: "M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z",
+  storage: "M2 20h20v-4H2v4zm2-3h2v2H4v-2zM2 4v4h20V4H2zm4 3H4V5h2v2zm-4 7h20v-4H2v4zm2-3h2v2H4v-2z",
+  link: "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z",
+  search: "M15.5 14h-.79l-.28-.27A6.471 6.471 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z",
+};
+
+// Settings → About: the one place that describes Magpie (and says which version is running).
+function aboutHtml(data) {
+  const v = data.status?.version;
+  const icon = (path) => `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="${path}"/></svg>`;
+  const feature = (name, text) => `<div class="feature-item">${icon(MATERIAL_ICONS[name])}<span>${text}</span></div>`;
+  return `<div class="about">
+    <div class="logo-badge"><img src="/static/icons/logo-96.png" alt="" width="56" height="56"></div>
+    <h4>Magpie</h4>
+    <p class="version">${v && v !== "dev" ? `Version ${esc(v)}` : "Development build"}</p>
+    <p class="about-desc">Save screenshots of recommendations. Magpie identifies them and looks up the details.</p>
+    <div class="features-mini">
+      ${feature("screenshot_monitor", "Screenshot capture")}${feature("smart_toy", "AI identification")}${feature("local_offer", "Auto tagging")}
+      ${feature("storage", "Offline library")}${feature("link", "Rich metadata")}${feature("search", "Smart search")}
+    </div>
+    <p class="about-links"><a href="https://github.com/de-Bat/Magpie" target="_blank" rel="noopener">GitHub</a><span class="separator">•</span><a href="https://github.com/de-Bat/Magpie/issues" target="_blank" rel="noopener">Report an issue</a></p>
+  </div>`;
+}
+
 // Settings → Plugins: what is installed, and installing more from a git repository or a single file.
 function pluginsAdminHtml(data) {
   const admin = data.plugin_admin || { allowed: false, env: "MAGPIE_ALLOW_PLUGIN_INSTALL", sources: [] };
@@ -2597,8 +2610,6 @@ document.addEventListener("click", async (e) => {
       case "usage": return showUsage();
       case "add": return $("#add-dialog").showModal();
       case "close-add": return $("#add-dialog").close();
-      case "about": return $("#about-dialog").showModal();
-      case "close-about": return $("#about-dialog").close();
       case "settings": return showSettings();
       case "debug": return showDebug();
       case "sync": return requestSync();

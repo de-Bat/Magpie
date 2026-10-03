@@ -28,7 +28,7 @@ from .analyzers import AnalyzerRouter
 from .bulk import BulkBusy, BulkRunner
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
-from . import config
+from . import __version__, config
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, Settings, mask
 from .models import check_key
 from . import convlog, limits, plugins
@@ -234,13 +234,13 @@ def create_app(
         levels = {p["level"] for p in problems}
         status = "error" if "error" in levels else "warning" if "warning" in levels else "ok"
         return {"status": status, "problems": problems, "analyzer": settings.resolved_analyzer(),
-                "verified_confidence": settings.verified_confidence, "debug": settings.debug}
+                "verified_confidence": settings.verified_confidence, "debug": settings.debug, "version": __version__}
 
     @app.get("/api/health")
     def health():
         report = status_report()
         return {
-            "ok": True, "api_version": API_VERSION, "auth_required": bool(settings.api_tokens),
+            "ok": True, "api_version": API_VERSION, "version": __version__, "auth_required": bool(settings.api_tokens),
             "analyzer": settings.resolved_analyzer(), "status": report["status"], "debug": settings.debug,
             "errors": sum(p["level"] == "error" for p in report["problems"]),
             "warnings": sum(p["level"] == "warning" for p in report["problems"]),

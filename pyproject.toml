@@ -1,6 +1,6 @@
 [project]
 name = "magpie"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Save screenshots of recommendations; Magpie identifies the source, enriches it with metadata, and makes it searchable."
 requires-python = ">=3.10"
 dependencies = [
@@ -20,3 +20,6 @@ dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.setuptools.dynamic]
+version = { file = "magpie/VERSION" }
