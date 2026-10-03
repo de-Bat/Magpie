@@ -67,3 +67,11 @@ def test_plugins_can_add_a_section_to_the_card():
     js, css, _ = source()
     assert "function pluginSectionsHtml(" in js and 'class="plugin-sections"' in js and "function dateRowHtml(" in js
     assert 'data-plugin-section=' in js and 'data-jump-section' in js and ".psec" in css and ".when-due" in css
+
+
+def test_plugin_sections_sit_after_the_card_content_just_above_the_original():
+    js, _, _ = source()
+    detail = js[js.index("relatedHtml(item)}"):]
+    assert detail.index('class="plugin-sections"') < detail.index("<h3>Original</h3>")
+    assert detail.index('class="plugin-sections"') - detail.index("relatedHtml(item)}") < 120   # directly after the last content section
+    assert js.index('class="plugin-sections"') > js.index("<h3>About</h3>")

@@ -2517,7 +2517,6 @@ function renderDetail(item) {
           <button class="btn danger" data-action="delete">Delete</button>
         </div></details>
       </div>
-      <div class="plugin-sections">${pluginSectionsHtml(item.id)}</div>
       ${fixing === item.id ? `<section>${correctionFormHtml(item)}</section>` : ""}
       <section><h3>About</h3>${about.length ? about.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="meta-line">No description yet.${item.pending_upload ? "" : " Refresh metadata may find one."}</p>`}</section>
       ${facts.length ? `<section><h3>${esc(TYPE_BLOCK[item.category] || "Details")}</h3><dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(humanize(k))}</dt><dd>${
@@ -2527,6 +2526,7 @@ function renderDetail(item) {
       ${m.instructions?.length ? `<section><h3>Steps</h3><ol>${m.instructions.map((i) => `<li>${esc(i)}</li>`).join("")}</ol></section>` : ""}
       ${links.length ? `<section><div class="links">${links.map((l) => `<a class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join("")}</div></section>` : ""}
       ${relatedHtml(item)}
+      <div class="plugin-sections">${pluginSectionsHtml(item.id)}</div>
       <section><h3>Original</h3>${originalHtml(item)}</section>
       ${item.status === "ready" && fixing !== item.id ? `<section><h3>How sure Magpie is</h3>${confidenceHtml(item, { fixButton: false })}</section>` : ""}
       <section><h3>Your note</h3>
