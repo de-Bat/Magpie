@@ -2,6 +2,16 @@
 
 <h1 align="center">Magpie</h1>
 
+<p align="center">
+  <a href="https://github.com/de-Bat/Magpie/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/de-Bat/Magpie/tests.yml?branch=main&amp;label=tests" alt="Tests"></a>
+  <a href="https://github.com/de-Bat/Magpie/tags"><img src="https://img.shields.io/github/v/tag/de-Bat/Magpie?label=version&amp;sort=semver" alt="Latest version"></a>
+  <a href="https://github.com/de-Bat/Magpie/commits/main"><img src="https://img.shields.io/github/last-commit/de-Bat/Magpie" alt="Last commit"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776ab?logo=python&amp;logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/docker-ready-2496ed?logo=docker&amp;logoColor=white" alt="Docker ready">
+  <img src="https://img.shields.io/badge/PWA-installable-5a0fc8" alt="Installable PWA">
+  <img src="https://img.shields.io/badge/self--hosted-yes-2ea44f" alt="Self-hosted">
+</p>
+
 <p align="center"><i>Grab the shiny things you see online. Magpie works out what they are and files them for later.</i></p>
 
 Self-hosted, single-user capture for things people recommend. **Share a screenshot or a link** (a Facebook post about a TV show, an Instagram reel with a recipe, a GitHub repo, an IMDb page, an article). Magpie works out **what it actually is**, finds the **original source**, adds **metadata for that type of thing**, and files it by **category and tags** so you can find it later.
