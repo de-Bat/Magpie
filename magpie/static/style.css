@@ -761,3 +761,12 @@ button.act-main:hover .act-text { text-decoration: underline; }
 .lbl-short { display: none; }
 @media (max-width: 400px) { .subbar .lbl-short { display: inline; } }
 .fab-split { direction: ltr; }   /* the arrow stays on the right-hand end, also in right-to-left languages */
+
+/* GitHub repo badges */
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
+.lang-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.badge-fresh { color: var(--ok); }
+.badge-aging { color: var(--warn); }
+.badge-stale, .badge-archived { color: var(--err); }
+.badge-release { color: var(--accent); }

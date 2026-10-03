@@ -2392,6 +2392,26 @@ function showInstallHint() {
   return iOS && !isStandalone();
 }
 
+// GitHub repository badges (language, license, release, activity, forks, issues) as small capsules under the title.
+const LANGUAGE_COLORS = { JavaScript: "#f1e05a", TypeScript: "#3178c6", Python: "#3572a5", Rust: "#dea584", Go: "#00add8", Java: "#b07219",
+  C: "#555555", "C++": "#f34b7d", "C#": "#178600", Ruby: "#701516", PHP: "#4f5d95", Swift: "#f05138", Kotlin: "#a97bff", Shell: "#89e051",
+  HTML: "#e34c26", CSS: "#563d7c", Dart: "#00b4ab", Lua: "#000080", Scala: "#c22d40", Zig: "#ec915c" };
+function repoBadgesHtml(item) {
+  const m = item.metadata || {};
+  if (item.category !== "github_repo") return "";
+  const n = (v) => Number(v).toLocaleString(uiLanguage);
+  const days = m.last_push ? Math.floor((Date.now() - new Date(m.last_push).getTime()) / 864e5) : null;
+  const badges = [];
+  if (m.archived) badges.push(["archived", `🗄 ${esc(tr("Archived"))}`, ""]);
+  if (m.programming_language) badges.push(["lang", `<i class="lang-dot" style="background:${LANGUAGE_COLORS[m.programming_language] || "var(--muted)"}"></i>${esc(m.programming_language)}`, ""]);
+  if (m.license && m.license !== "NOASSERTION") badges.push(["license", `⚖ ${esc(m.license)}`, ""]);
+  if (m.latest_release) badges.push(["release", `🏷 ${esc(m.latest_release)}`, m.released ? esc(m.released) : ""]);
+  if (days != null && !m.archived) badges.push([days <= 90 ? "fresh" : days <= 365 ? "aging" : "stale", `⟳ ${esc(tr("Updated {when}", { when: relativeDays(-Math.max(0, days)) }))}`, esc(String(m.last_push).slice(0, 10))]);
+  if (m.forks != null && m.forks !== "") badges.push(["forks", `⑂ ${esc(n(m.forks))}`, esc(tr("Forks"))]);
+  if (m.open_issues != null && m.open_issues !== "") badges.push(["issues", `◌ ${esc(n(m.open_issues))}`, esc(tr("Open issues"))]);
+  return badges.length ? `<div class="badges">${badges.map(([kind, html, tip]) => `<span class="badge badge-${kind}"${tip ? ` title="${tip}"` : ""}>${html}</span>`).join("")}</div>` : "";
+}
+
 function scoresHtml(m) {
   const scores = [
     ["IMDb", m.imdb_rating, m.imdb_votes ? `${m.imdb_votes} votes` : ""],
@@ -2529,7 +2549,7 @@ function renderDetail(source) {
           ${item.subtitle ? `<div class="sub">${esc(item.subtitle)}</div>` : ""}
         </div>
       </div>
-      ${scoresHtml(m)}
+      ${scoresHtml(m)}${repoBadgesHtml(item)}
       ${statusHtml(item)}${notice}
       <div class="actions primary-actions">
         ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}" title="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span><span class="open-text">${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}</span> ↗</a>` : ""}

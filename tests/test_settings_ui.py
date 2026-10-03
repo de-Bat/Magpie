@@ -109,3 +109,9 @@ def test_every_translated_row_is_complete():
       console.log(JSON.stringify([keys.length, missing]));"""], capture_output=True, text=True, check=True).stdout
     count, missing = json.loads(out)
     assert count > 90 and missing == []
+
+
+def test_github_repo_cards_show_badges():
+    js, css, _ = source()
+    assert "function repoBadgesHtml(" in js and "${scoresHtml(m)}${repoBadgesHtml(item)}" in js
+    assert ".badge-fresh" in css and ".badge-stale" in css and ".lang-dot" in css

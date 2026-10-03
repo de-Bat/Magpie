@@ -13,6 +13,10 @@
       {
         "title": "Languages",
         "text": "The app speaks English, Hebrew, Spanish, German and French (Settings → Appearance; right-to-left for Hebrew). Movie and TV titles, descriptions and genres are fetched from TMDB in your content language (Settings → Lookups) and shown to anyone using that language."
+      },
+      {
+        "title": "GitHub repo badges",
+        "text": "A repository card shows its language, license, latest release, how recently it was updated (green, amber, red), forks, open issues and whether it is archived."
       }
     ],
     "date": "2026-10-03"
