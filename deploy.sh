@@ -38,6 +38,12 @@ error() {
   exit 1
 }
 
+# Show help if no arguments provided (after first run setup)
+if [ $# -eq 0 ] && [ -f "docker-compose.yml" ]; then
+  log "ℹ️  No options provided. Running default deploy..."
+  log "For help, run: $0 --help"
+fi
+
 # Parse options
 while [[ $# -gt 0 ]]; do
   case $1 in
