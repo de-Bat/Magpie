@@ -1,12 +1,13 @@
 [
   {
-    "version": "next",
+    "version": "0.18.0",
     "features": [
       {
         "title": "Release notes in About",
         "text": "Settings → About lists the main features of each release, newest first."
       }
-    ]
+    ],
+    "date": "2026-10-03"
   },
   {
     "version": "0.17.0",
