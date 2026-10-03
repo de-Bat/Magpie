@@ -183,6 +183,19 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .grid.list .cover.has-img .cover-img, .grid.list .cover.wide-img .cover-img { top: 0; height: 100%; object-fit: cover; filter: none; }
 .grid.list .cover.logo-img .cover-img { inset: 0; left: 0; top: 0; width: 100%; height: 100%; transform: none; border-radius: 0; box-shadow: none; padding: 12%; }
 .grid.list .cover.logo-img .glyph { display: none; }
+/* Wide pictures (banners, charts, repo previews) known to be fully opaque (.bd): shown whole and sharp over a blurred,
+   enlarged copy of themselves, so the cover takes on the picture's own colours instead of a flat box. Transparent logos
+   and pictures not checked yet keep the plain themed cover. Pictures that fill the cover (posters) only get the edge. */
+.cover-bd { position: absolute; left: -25%; top: -25%; width: 150%; height: 150%; object-fit: cover; z-index: 0; pointer-events: none;
+  filter: blur(26px) saturate(1.5) brightness(.6); opacity: .92; }
+.cover.wide-img.bd .cover-img { inset: auto; left: 50%; top: 50%; transform: translate(-50%, -50%); width: auto; height: auto; max-width: 88%; max-height: 62%;
+  object-fit: contain; z-index: 2; border-radius: 10px;
+  filter: drop-shadow(0 8px 18px rgb(0 0 0 / .45)) drop-shadow(0 0 1px rgb(255 255 255 / .4)); }
+.cover.has-img::before, .cover.wide-img.bd::before { display: block; opacity: 1; z-index: 2; border-radius: inherit;
+  background: linear-gradient(to top, rgb(0 0 0 / .32), transparent 38%); box-shadow: inset 0 0 0 1px rgb(255 255 255 / .09); }
+.cover.wide-img.bd::before { z-index: 1; }   /* under the sharp picture, over the backdrop */
+.grid.list .cover-bd, .grid.list .cover.has-img::before, .grid.list .cover.wide-img.bd::before { display: none; }
+.grid.list .cover.wide-img.bd .cover-img { inset: 0; transform: none; width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; object-fit: cover; filter: none; }
 .grid.list .card .title { min-height: 0; -webkit-line-clamp: 1; }
 .verify-btn { z-index: 3; position: absolute; right: 8px; top: 38px; border: 0; border-radius: 999px; padding: 5px 11px; font: 600 12px system-ui, sans-serif; cursor: pointer;
   background: rgb(255 255 255 / .94); color: #14181f; box-shadow: 0 1px 6px rgb(0 0 0 / .35); }

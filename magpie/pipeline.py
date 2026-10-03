@@ -18,7 +18,7 @@ from .usage import Run, claude_cost
 from . import convlog, links, readability
 from .findlink import repair_link
 from .related import clean_related, drop_dead, same_site, text_related
-from .images import best_image
+from .images import best_image, picture_is_opaque
 from .enrich import fetch_page, link_is_gone
 from .config import Settings
 from .db import Database, normalize_tag
@@ -322,6 +322,14 @@ class Pipeline:
 
         return await self._run(item_id, "correct", fixed(), corrected=True)
 
+    async def _mark_opaque(self, metadata: dict, image_url: str | None) -> None:
+        """Record whether the cover picture is fully opaque (the card then adds a blurred backdrop behind it)."""
+        metadata.pop("image_opaque", None)
+        if image_url and self.settings.enrich:
+            opaque = await picture_is_opaque(self.http, image_url)
+            if opaque is not None:
+                metadata["image_opaque"] = opaque
+
     async def refresh_metadata(self, item_id: str) -> dict | None:
         """Look the item up again in the metadata sources (posters, covers, ratings, links) without asking a
         model anything: free, and nothing the user edited or the model decided (title, category, tags,
@@ -359,6 +367,7 @@ class Pipeline:
             changes["metadata"].pop("image_kind", None)
             if fresh["metadata"].get("image_kind"):
                 changes["metadata"]["image_kind"] = fresh["metadata"]["image_kind"]
+        await self._mark_opaque(changes["metadata"], changes["image_url"])
         return self.db.update_item(item_id, **changes)
 
     async def complete_batch_job(self, job: dict, result: Any) -> dict | None:
@@ -411,6 +420,7 @@ class Pipeline:
         if fields["image_url"] and not any(e.image_url for e in enrichments):
             # Only the model suggested it, and models sometimes make up image links: keep it only if it isn't dead.
             fields["image_url"] = await best_image(self.http, [fields["image_url"]])
+        await self._mark_opaque(fields["metadata"], fields["image_url"])
 
         # Replace the tags generated for the previous identification, keep the user's own.
         item = self.db.get_item(item_id) or {}

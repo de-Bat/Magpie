@@ -66,7 +66,7 @@ const HIDDEN_META = new Set([
   "article_text", "excerpt", "word_count", "page_description",
   "screenshot_text", "sources", "confidence", "ingredients", "instructions", "imdb_rating", "rotten_tomatoes",
   "metacritic", "tmdb_rating", "stars", "rating", "rating_count", "description", "post_url", "imdb_votes", "tmdb_id",
-  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "found_by",
+  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "image_opaque", "found_by",
 ]);
 
 const state = {
@@ -1985,16 +1985,19 @@ function coverHtml(item, { chip = true } = {}) {
   // only the site's logo (no picture of the article): shown whole on a tile, with the title still on the cover
   const logo = !!pic && item.metadata?.image_kind === "logo";
   const wide = !!pic && !logo && WIDE_CATEGORIES.has(item.category);
+  const backdrop = wide && item.metadata?.image_opaque === true;   // a transparent logo keeps the plain themed cover
   const busy = ["queued", "processing"].includes(item.status) || item.batch_pending || item.pending_upload;
   const flag = item.status === "error" && item.retry_at ? `<span class="flag warn" title="The AI model hit its limit; retried automatically ${esc(untilText(item.retry_at))}">⏳</span>`
     : item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
   const label = item.status === "error" ? (item.retry_at ? "Waiting" : "Failed") : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
-  return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? "wide-img" : "has-img") : ""} ${busy ? "busy" : ""}">${
+  return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? `wide-img${backdrop ? " bd" : ""}` : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
     `${typeIcon(themeOf(item.category), "glyph")}${coverTitleHtml(item)}`}${
     // no-referrer: many sites refuse images to pages on other sites but serve them without a Referer
+    // wide pictures are shown whole, over a blurred, enlarged copy of themselves (the same URL, so no extra download)
+    backdrop ? `<img class="cover-bd" src="${esc(pic)}" alt="" aria-hidden="true" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
 }

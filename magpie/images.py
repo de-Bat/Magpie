@@ -99,6 +99,36 @@ async def _verify(http: httpx.AsyncClient, url: str) -> bool | None:
     return min(w, h) >= MIN_SIDE and max(w, h) / max(1, min(w, h)) <= MAX_ASPECT
 
 
+PROBE_BYTES = 1_500_000
+
+
+async def picture_is_opaque(http: httpx.AsyncClient, url: str) -> bool | None:
+    """Whether a cover picture has no transparent areas, so the card can show it whole over a blurred copy of itself.
+    A logo with a transparent background looks wrong that way and keeps the plain themed cover. None: couldn't tell."""
+    try:
+        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/*,*/*;q=0.5",
+                                                "Range": f"bytes=0-{PROBE_BYTES - 1}"}, timeout=8)
+    except (httpx.HTTPError, BlockedURL) as e:
+        log.info("Couldn't probe image %s: %s", url, e)
+        return None
+    if r.status_code not in (200, 206):
+        return None
+    try:
+        from PIL import Image, ImageFile
+        ImageFile.LOAD_TRUNCATED_IMAGES = True   # the top of a large picture is enough to see its transparency
+        with Image.open(io.BytesIO(r.content[:PROBE_BYTES])) as im:
+            if im.format == "JPEG":
+                return True
+            if im.mode in ("RGBA", "LA", "PA"):
+                small = im.convert("RGBA")
+                small.thumbnail((64, 64))
+                return small.getchannel("A").getextrema()[0] >= 250
+            return "transparency" not in im.info   # a palette or colour-key PNG/GIF with a transparent entry
+    except Exception as e:   # Pillow missing, or not a picture it can read
+        log.info("Couldn't read image %s: %s", url, e)
+        return None
+
+
 async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], base: str | None = None,
                      last_resort: str | None = None, verified_only: bool = False) -> str | None:
     """The first candidate that is a real picture. When none could be checked, the first that
