@@ -37,7 +37,7 @@ class FakeArr:
         if path == "/api/v3/system/status":
             return httpx.Response(200, json={"version": "5.0.0"})
         if path == "/api/v3/rootfolder":
-            return httpx.Response(200, json=[{"path": "/media/a"}, {"path": "/media/b/"}])
+            return httpx.Response(200, json=[{"path": "/media/a", "freeSpace": 500_000_000_000}, {"path": "/media/b/"}])
         if path == "/api/v3/qualityprofile":
             return httpx.Response(200, json=[{"id": 4, "name": "Any"}, {"id": 7, "name": "HD-1080p"}])
         if path == "/api/v3/languageprofile":
@@ -229,7 +229,8 @@ def test_the_connection_test_uses_typed_values_and_guards_the_saved_key(tmp_path
         r = client.post("/api/plugins/radarr/test", json={"url": RADARR, "key": "typed-key"}, headers=code)
         assert r.status_code == 200, r.text
         assert r.json() == {"ok": True, "message": "Connected to Radarr 5.0.0", "root_folders": ["/media/a", "/media/b/"],
-                            "quality_profiles": ["Any", "HD-1080p"]}
+                            "free_space": {"/media/a": 500_000_000_000}, "quality_profiles": ["Any", "HD-1080p"],
+                            "quality_profile_ids": {"Any": 4, "HD-1080p": 7}}
         assert client.post("/api/plugins/radarr/test", json={"url": RADARR}, headers=code).status_code == 400  # stored key is wrong
         # the stored key is never sent to a server it wasn't saved for
         r = client.post("/api/plugins/radarr/test", json={"url": "http://evil:7878"}, headers=code)

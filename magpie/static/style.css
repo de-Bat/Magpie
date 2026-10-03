@@ -298,6 +298,7 @@ dialog::backdrop { background: rgb(8 10 14 / .45); }
 .provenance summary, details summary { cursor: pointer; color: var(--muted); font-size: 14px; }
 details pre { white-space: pre-wrap; font-size: 12px; background: var(--surface-2); padding: 10px; border-radius: 8px; }
 .toast { position: fixed; bottom: calc(20px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px; z-index: 40; }
+.toast[popover] { inset: auto auto calc(20px + env(safe-area-inset-bottom)) 50%; margin: 0; border: 0; overflow: visible; max-width: min(92vw, 560px); text-align: center; box-shadow: 0 6px 24px rgb(0 0 0 / .3); }
 
 /* ---- Usage & cost ---- */
 .usage-panel { padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 20px; position: relative; }
@@ -645,3 +646,13 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .plugin-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .plugin-form input { flex: 1 1 200px; min-width: 0; }
 @media (max-width: 760px) { .plugin-row { flex-direction: column; align-items: stretch; } .plugin-btns { justify-content: flex-end; } }
+
+/* Settings → Radarr / Sonarr: the Test connection result */
+.plugin-test { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 6px; }
+.test-result { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.test-result.ok { color: var(--ok); background: color-mix(in oklab, var(--ok) 14%, transparent); }
+.test-result.err { color: var(--err); background: color-mix(in oklab, var(--err) 13%, transparent); border-radius: 12px; }
+.test-icon { font-weight: 700; }
+.test-detail { opacity: .8; }
+.test-result.busy::before { content: ""; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .test-result.busy::before { animation: none; } }

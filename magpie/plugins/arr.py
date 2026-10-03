@@ -160,7 +160,9 @@ class ArrPlugin(Plugin):
         version = (status or {}).get("version", "")
         return {"ok": True, "message": f"Connected to {self.label} {version}".strip(),
                 "root_folders": [f.get("path") for f in folders],
-                "quality_profiles": [p.get("name") for p in profiles]}
+                "free_space": {f["path"]: f["freeSpace"] for f in folders if f.get("path") and f.get("freeSpace") is not None},
+                "quality_profiles": [p.get("name") for p in profiles],
+                "quality_profile_ids": {p["name"]: p["id"] for p in profiles if p.get("name") and p.get("id") is not None}}
 
     # ---- what to add --------------------------------------------------------------------------
 

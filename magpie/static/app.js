@@ -105,13 +105,21 @@ function fmtValue(v) {
   if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v)) return new Date(v).toLocaleDateString();
   return String(v);
 }
+// A popover lives in the browser's top layer, so a toast shows above an open dialog (Settings) instead of behind it.
 function toast(msg) {
   const t = $("#toast");
   t.textContent = msg;
-  t.hidden = false;
   clearTimeout(toast._t);
-  toast._t = setTimeout(() => (t.hidden = true), 3500);
+  if (t.showPopover) {
+    try { if (t.matches(":popover-open")) t.hidePopover(); t.showPopover(); } catch {}
+  } else {
+    t.hidden = false;
+  }
+  toast._t = setTimeout(() => {
+    if (t.hidePopover) { try { t.hidePopover(); } catch {} } else { t.hidden = true; }
+  }, Math.max(3500, String(msg).length * 55));
 }
+if (!$("#toast").showPopover) $("#toast").hidden = true;
 function newId() {
   // crypto.randomUUID needs a secure context; getRandomValues works on plain-http LAN servers too.
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -1023,7 +1031,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
                 ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
             ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
               ${g.name === "Logging" ? logsHtml() : ""}
-              ${(data.plugins || []).filter((p) => p.label === g.name).map((p) => `<p class="setting-note"><button class="btn" type="button" data-test-plugin="${esc(p.id)}">Test connection</button> Uses what is typed above, or the saved values.</p>`).join("")}
+              ${(data.plugins || []).filter((p) => p.label === g.name).map((p) => `<div class="plugin-test"><button class="btn" type="button" data-test-plugin="${esc(p.id)}">Test connection</button><span class="test-result" data-test-result="${esc(p.id)}" role="status" aria-live="polite">Uses what is typed above, or the saved values.</span></div>`).join("")}
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
             ${section("Plugins", pluginsAdminHtml(data))}
             ${section("Library", libraryHtml())}
@@ -1047,6 +1055,7 @@ function selectSettingsTab(name) {
   document.querySelectorAll("[data-settings-tab],[data-load-models]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.settingsTab === name)));
   document.querySelectorAll(".settings-section").forEach((s) => { s.hidden = s.dataset.section !== name; });
   $(".settings-content")?.scrollTo({ top: 0 });
+  autoCheckPlugin();
 }
 
 // ---- appearance (per device) --------------------------------------------------
@@ -1552,6 +1561,7 @@ async function showSettings(errors = {}, typed = {}) {
     if (settingEntry(settingsData, shown.key_env)?.is_set || shown.id === "local") loadModels("ot", true);
     if ($('[data-block="local"]:not([hidden])') && $("#lc-url").value) loadModels("lc", true);
   }
+  autoCheckPlugin();
   const firstBad = Object.keys(errors).map((env) => document.getElementById(focusIdFor(env))).find(Boolean);
   if (firstBad) { selectSettingsTab(firstBad.closest(".settings-section").dataset.section); firstBad.scrollIntoView({ block: "center" }); firstBad.focus(); }
 }
@@ -1573,8 +1583,8 @@ async function saveSettings(form) {
       if (value !== current) changes[s.env] = value === "" ? null : value;
     }
   }
-  if (!Object.keys(changes).length) { toast("Nothing changed."); return; }
-  await putSettings(changes);
+  if (!Object.keys(changes).length) { toast("No changes to save."); $("#detail").close(); return; }
+  await putSettings(changes, { close: true });
 }
 
 // A key that was just saved is tested straight away, so a typo shows up now rather than on the next screenshot.
@@ -1582,21 +1592,23 @@ const KEY_PROVIDER = { ANTHROPIC_API_KEY: "claude", OPENAI_API_KEY: "openai", GE
   OPENROUTER_API_KEY: "openrouter", GROQ_API_KEY: "groq", LOCAL_LLM_API_KEY: "local" };
 
 async function verifyChangedKeys(changes) {
+  const results = [];
   for (const env of Object.keys(changes)) {
     const p = KEY_PROVIDER[env] && changes[env] && settingsData.providers.find((x) => x.id === KEY_PROVIDER[env]);
     if (!p) continue;
     try {
       const res = await verifyKey(p);
-      toast(`✓ ${p.label}: the key works${res.limits ? " — " + limitsText(res.limits) : ""}.`);
+      results.push({ ok: true, text: `✓ ${p.label}: the key works${res.limits ? " — " + limitsText(res.limits) : ""}.` });
     } catch (e) {
-      toast(`✗ ${p.label}: ${e.message}`);
+      results.push({ ok: false, text: `✗ ${p.label}: ${e.message}` });
     }
   }
+  return results;
 }
 
 let setupCode = null;  // this server's setup code (only needed while it has no access token)
 
-async function putSettings(changes) {
+async function putSettings(changes, { close = false } = {}) {
   try {
     const headers = { "Content-Type": "application/json" };
     if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
@@ -1611,7 +1623,7 @@ async function putSettings(changes) {
         const code = prompt(`${again}${detail.message}\n\nSetup code:`);
         if (!code) return toast("Settings not saved.");
         setupCode = code.trim();
-        return putSettings(changes);
+        return putSettings(changes, { close });
       }
     }
     if (e instanceof HttpError && e.status === 422) {
@@ -1622,8 +1634,7 @@ async function putSettings(changes) {
     }
     return toast(`Couldn't save settings: ${e.message}`);
   }
-  for (const notice of settingsData.notices || []) toast(notice);
-  await verifyChangedKeys(changes);
+  const checks = await verifyChangedKeys(changes);
   // A new access token applies to this device too.
   // (several tokens may be listed: this device uses the first)
   const firstToken = (changes.MAGPIE_API_TOKEN || "").split(/[,\s]+/).find(Boolean);
@@ -1632,7 +1643,9 @@ async function putSettings(changes) {
   render();   // e.g. a new verification threshold changes which cards need checking
   renderServerStatus();
   renderSyncStatus();
-  if (!(settingsData.notices || []).length) toast("Settings saved.");
+  toast(["Settings saved.", ...(settingsData.notices || []), ...checks.map((c) => c.text)].join("  "));
+  // Closing is for "Save changes". A key the provider rejected keeps the panel open, which shows which one.
+  if (close && checks.every((c) => c.ok)) { $("#detail").close(); return; }
   showSettings();
 }
 
@@ -2435,24 +2448,83 @@ document.addEventListener("change", (e) => {
   pluginAdminCall(null, "/api/plugins/upload", { method: "POST", body }, `Installed ${file.name}.`);
 });
 
-// Settings → Radarr / Sonarr: check the typed (or saved) URL and key.
-async function testPlugin(pluginId, btn) {
+// Settings → Radarr / Sonarr: check the typed (or saved) URL and key, show the result next to the button, and offer the
+// server's root folders and quality profiles as dropdowns.
+function showTestResult(pluginId, state, text, detail = "") {
+  const el = document.querySelector(`[data-test-result="${pluginId}"]`);
+  if (!el) return;
+  el.className = `test-result ${state}`;
+  el.dataset.checked = state === "ok" || state === "err" ? "1" : "";
+  const icon = state === "ok" ? "✓" : state === "err" ? "✗" : "";
+  el.innerHTML = `${icon ? `<span class="test-icon" aria-hidden="true">${icon}</span>` : ""}<span>${esc(text)}${detail ? ` <span class="test-detail">${esc(detail)}</span>` : ""}</span>`;
+}
+
+const trimSlash = (v) => String(v || "").replace(/[\\/]+$/, "");
+const sizeText = (bytes) => (bytes >= 1e12 ? `${(bytes / 1e12).toFixed(1)} TB` : `${Math.round(bytes / 1e9)} GB`);
+
+// A text box becomes a dropdown once the server has told us what it offers; with no answer it stays a text box.
+function fillPluginOptions(pluginId, res) {
   const form = $("#settings-form");
-  const plugin = settingsData.plugins.find((p) => p.id === pluginId);
   const env = pluginId.toUpperCase();
+  const fields = [
+    [`${env}_ROOT_FOLDER`, res.root_folders || [], (v) => `${v}${res.free_space?.[v] ? ` · ${sizeText(res.free_space[v])} free` : ""}`,
+      (list, cur) => list.find((v) => trimSlash(v) === trimSlash(cur))],
+    [`${env}_QUALITY_PROFILE`, res.quality_profiles || [], (v) => v,
+      (list, cur) => list.find((v) => v.toLowerCase() === cur.toLowerCase() || String(res.quality_profile_ids?.[v]) === cur)],
+  ];
+  for (const [name, list, label, match] of fields) {
+    const el = form.elements[name];
+    if (!el || !list.length) continue;
+    const current = el.value.trim();
+    const sel = document.createElement("select");
+    sel.id = el.id; sel.name = name;
+    const add = (value, text, selected = false) => sel.append(Object.assign(document.createElement("option"), { value, textContent: text, selected }));
+    add("", `Default: ${label(list[0])}`, !current);
+    const found = current ? match(list, current) : null;
+    list.forEach((v) => add(v === found ? current : v, label(v), v === found));   // a match keeps what is saved: opening and saving changes nothing
+    if (current && !found) add(current, `${current} (not found on the server)`, true);
+    el.replaceWith(sel);
+  }
+}
+
+let testSeq = 0;
+async function checkPlugin(pluginId, { typed }) {
+  const form = $("#settings-form");
+  if (!form) return;
+  const env = pluginId.toUpperCase();
+  const seq = ++testSeq;
+  showTestResult(pluginId, "busy", "Testing…");
+  try {
+    const body = JSON.stringify({ url: typed ? form.elements[`${env}_URL`]?.value.trim() || null : null,
+                                  key: typed ? form.elements[`${env}_API_KEY`]?.value.trim() || null : null });
+    const path = `/api/plugins/${encodeURIComponent(pluginId)}/test`;
+    const headers = { "Content-Type": "application/json" };
+    if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
+    // Pressing the button may ask for the setup code; opening the tab never interrupts with a prompt.
+    const res = typed ? await apiWithSetup(path, { method: "POST", headers, body }) : await api(path, { method: "POST", headers, body });
+    if (seq !== testSeq) return;
+    fillPluginOptions(pluginId, res);
+    const n = (list, one) => `${list.length} ${one}${list.length === 1 ? "" : "s"}`;
+    showTestResult(pluginId, "ok", res.message, `${n(res.root_folders || [], "root folder")} · ${n(res.quality_profiles || [], "quality profile")}`);
+  } catch (e) {
+    if (seq !== testSeq) return;
+    if (!typed && e instanceof HttpError && e.status === 403) return showTestResult(pluginId, "idle", "Press Test connection to load the options.");
+    showTestResult(pluginId, "err", errorMessage(e));
+  }
+}
+
+async function testPlugin(pluginId, btn) {
   const idle = btn.textContent;
   btn.disabled = true; btn.textContent = "Testing…";
-  try {
-    const res = await apiWithSetup(`/api/plugins/${encodeURIComponent(pluginId)}/test`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: form.elements[`${env}_URL`].value.trim() || null, key: form.elements[`${env}_API_KEY`].value.trim() || null }),
-    });
-    toast(`✓ ${res.message}. Root folders: ${res.root_folders.join(", ") || "none"}. Quality profiles: ${res.quality_profiles.join(", ") || "none"}.`);
-  } catch (e) {
-    toast(`✗ ${plugin.label}: ${errorMessage(e)}`);
-  } finally {
-    btn.disabled = false; btn.textContent = idle;
-  }
+  try { await checkPlugin(pluginId, { typed: true }); } finally { btn.disabled = false; btn.textContent = idle; }
+  document.querySelector(`[data-test-result="${pluginId}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });   // the panel may be scrolled
+}
+
+// Opening a configured plugin's tab checks it by itself, which also fills the dropdowns.
+function autoCheckPlugin() {
+  const plugin = settingsData?.plugins?.find((p) => p.label === settingsTab && p.configured);
+  const result = plugin && document.querySelector(`[data-test-result="${plugin.id}"]`);
+  if (result && !result.dataset.checked) checkPlugin(plugin.id, { typed: false });
 }
 
 // ---- events ----------------------------------------------------------------
@@ -2684,6 +2756,11 @@ $("#detail").addEventListener("change", (e) => {
   if (e.target.id === "set-MAGPIE_ANALYZER") applyMode(e.target.value);
 });
 $("#detail").addEventListener("close", () => { fixing = null; });
+
+$("#detail").addEventListener("input", (e) => {
+  const plugin = settingsData?.plugins?.find((p) => e.target.name === `${p.id.toUpperCase()}_URL` || e.target.name === `${p.id.toUpperCase()}_API_KEY`);
+  if (plugin) { testSeq++; showTestResult(plugin.id, "idle", "Changed. Press Test connection to check it."); }
+});
 
 $("#detail").addEventListener("submit", (e) => {
   if (e.target.id === "settings-form") {
