@@ -623,3 +623,7 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 .about-in-settings .features-mini { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 20px 0; text-align: left; }
 .about-in-settings .feature-item { padding: 10px; border-radius: 8px; background: var(--surface-1); display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
 .about-in-settings .feature-item i { font-size: 16px; color: var(--accent); min-width: 16px; }
+
+/* Plugin actions (Radarr, Sonarr, ...) on a card */
+.plugin-slot { display: contents; }
+.plugin-added { color: var(--ok); text-decoration: none; }

@@ -1023,6 +1023,7 @@ function settingsHtml(data, errors = {}, typed = {}) {
                 ${advanced.map((s) => settingRowHtml(s, errors, typed)).join("")}</details>`)}
             ${others.map((g) => section(g.name, `${g.settings.map((s) => settingRowHtml(s, errors, typed)).join("")}
               ${g.name === "Logging" ? logsHtml() : ""}
+              ${(data.plugins || []).filter((p) => p.label === g.name).map((p) => `<p class="setting-note"><button class="btn" type="button" data-test-plugin="${esc(p.id)}">Test connection</button> Uses what is typed above, or the saved values.</p>`).join("")}
               ${g.name === "Access" && data.setup_code_required ? `<p class="setting-note">This server has no access token yet, so saving asks for the setup code printed in the server log (<code>docker compose logs magpie</code>). Setting an access token removes that step.</p>` : ""}`)).join("")}
             ${section("Library", libraryHtml())}
             ${section("Appearance", appearanceHtml())}
@@ -1614,6 +1615,7 @@ async function putSettings(changes) {
     const headers = { "Content-Type": "application/json" };
     if (setupCode) headers["X-Magpie-Setup-Code"] = setupCode;
     settingsData = await api("/api/settings", { method: "PUT", headers, body: JSON.stringify({ changes }) });
+    pluginCatalog = null; pluginActions.clear(); pluginFetched.clear();   // a plugin may have just been set up
   } catch (e) {
     if (e instanceof HttpError && e.status === 403) {
       let detail = {};
@@ -2231,6 +2233,7 @@ function renderDetail(item) {
       <div class="actions primary-actions">
         ${canonical ? `<a class="btn primary" href="${esc(canonical)}" target="_blank" rel="noopener">Open ${esc(hostOf(canonical) || "source")} ↗</a>` : ""}
         ${item.status === "ready" && fixing !== item.id ? `<button class="btn" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
+        <span class="plugin-slot">${pluginButtonsHtml(item.id)}</span>
         <details class="menu"><summary class="btn">More ▾</summary><div class="menu-list">
           ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ Refresh metadata</button>
           <button class="btn" data-action="reanalyze">↻ Re-analyze</button>`}
@@ -2267,6 +2270,79 @@ function renderDetail(item) {
     </div>`;
   if (noteFocused) { const n = $("#note-edit"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }
   if (!dlg.open) dlg.showModal();
+  loadPluginActions(item);
+}
+
+// ---- plugins (Radarr, Sonarr, ...): one button per integration that applies to the item ----
+
+const pluginActions = new Map();   // item id -> [{id, label, action_label, state, message, url}]
+const pluginFetched = new Map();   // item id -> when we last asked the server
+let pluginCatalog = null;          // GET /api/plugins, remembered until settings change
+
+function pluginButtonsHtml(id) {
+  return (pluginActions.get(id) || []).map((p) => {
+    if (p.state === "added") {
+      const href = safeUrl(p.url);
+      const text = `✓ In ${esc(p.label)}`;
+      return href ? `<a class="btn plugin-added" href="${esc(href)}" target="_blank" rel="noopener">${text} ↗</a>` : `<span class="btn plugin-added">${text}</span>`;
+    }
+    if (p.state === "unavailable") return `<button class="btn" type="button" disabled title="${esc(p.message || "")}">${esc(p.action_label)}</button>`;
+    return `<button class="btn" type="button" data-plugin="${esc(p.id)}">＋ ${esc(p.action_label)}</button>`;
+  }).join("");
+}
+
+function showPluginActions(id) {
+  const dlg = $("#detail");
+  const slot = dlg.dataset.id === id ? dlg.querySelector(".plugin-slot") : null;
+  if (slot) slot.innerHTML = pluginButtonsHtml(id);
+}
+
+async function loadPluginActions(item) {
+  if (!navigator.onLine || item.status !== "ready" || item.pending_upload) return;
+  if (Date.now() - (pluginFetched.get(item.id) || 0) < 60000) return;   // the card re-renders on every poll
+  pluginFetched.set(item.id, Date.now());
+  try {
+    pluginCatalog ||= await api("/api/plugins");
+    if (!pluginCatalog.some((p) => p.configured && p.categories.includes(item.category))) return;
+    pluginActions.set(item.id, await api(`/api/items/${encodeURIComponent(item.id)}/plugins`));
+    showPluginActions(item.id);
+  } catch {
+    pluginFetched.delete(item.id);   // offline or the server is old: try again next time
+  }
+}
+
+async function runPlugin(pluginId, itemId, btn) {
+  const idle = btn.textContent;
+  btn.disabled = true; btn.textContent = "Adding…";
+  try {
+    const res = await api(`/api/items/${encodeURIComponent(itemId)}/plugins/${encodeURIComponent(pluginId)}`, { method: "POST" });
+    pluginActions.set(itemId, (pluginActions.get(itemId) || []).map((p) => p.id === pluginId ? { ...p, ...res } : p));
+    showPluginActions(itemId);
+    toast(`✓ ${res.message}`);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = idle;
+    toast(`✗ ${errorMessage(e)}`);
+  }
+}
+
+// Settings → Radarr / Sonarr: check the typed (or saved) URL and key.
+async function testPlugin(pluginId, btn) {
+  const form = $("#settings-form");
+  const plugin = settingsData.plugins.find((p) => p.id === pluginId);
+  const env = pluginId.toUpperCase();
+  const idle = btn.textContent;
+  btn.disabled = true; btn.textContent = "Testing…";
+  try {
+    const res = await apiWithSetup(`/api/plugins/${encodeURIComponent(pluginId)}/test`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: form.elements[`${env}_URL`].value.trim() || null, key: form.elements[`${env}_API_KEY`].value.trim() || null }),
+    });
+    toast(`✓ ${res.message}. Root folders: ${res.root_folders.join(", ") || "none"}. Quality profiles: ${res.quality_profiles.join(", ") || "none"}.`);
+  } catch (e) {
+    toast(`✗ ${plugin.label}: ${errorMessage(e)}`);
+  } finally {
+    btn.disabled = false; btn.textContent = idle;
+  }
 }
 
 // ---- events ----------------------------------------------------------------
@@ -2361,11 +2437,13 @@ async function askToken() {
 
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
   if (t.dataset.testKey !== undefined) return testKey(t.dataset.testKey);
+  if (t.dataset.testPlugin !== undefined) return testPlugin(t.dataset.testPlugin, t);
+  if (t.dataset.plugin !== undefined) return runPlugin(t.dataset.plugin, t.closest(".detail").dataset.id, t);
   if (t.dataset.settingsTab !== undefined) return selectSettingsTab(t.dataset.settingsTab);
   if (t.dataset.reset !== undefined) {
     return putSettings({ [t.dataset.reset]: null });

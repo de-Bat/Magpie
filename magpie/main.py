@@ -30,7 +30,7 @@ from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, SPECS, Settings, mask
 from .models import check_key
-from . import convlog, limits
+from . import convlog, limits, plugins
 from .db import Database
 from .pipeline import Pipeline
 
@@ -75,6 +75,11 @@ class ModelsRequest(BaseModel):
     provider: str
     url: str | None = None   # local / self-hosted only
     key: str | None = None   # a key typed but not saved yet
+
+
+class PluginTest(BaseModel):
+    url: str | None = None   # typed but not saved yet
+    key: str | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -250,7 +255,7 @@ def create_app(
         problems = {p["key"]: p for p in settings.problems() if p["key"]}
         groups: dict[str, list] = {}
         for spec in SPECS:
-            value = getattr(settings, spec.attr)
+            value = settings.value(spec.attr)
             entry = {
                 "env": spec.env, "label": spec.label, "help": spec.help, "kind": spec.kind,
                 "choices": list(spec.choices), "default": None if spec.kind == "secret" else spec.default,
@@ -267,6 +272,7 @@ def create_app(
             "setup_code_required": not settings.api_tokens,
             "status": server_status(),
             "providers": provider_choices(), "resolved_analyzer": settings.resolved_analyzer(),
+            "plugins": [p.describe(settings) for p in plugins.all()],
         }
 
     @app.get("/api/settings")
@@ -436,6 +442,57 @@ def create_app(
         No model is called, so it costs nothing and never changes the identification."""
         get_or_404(item_id)
         return await state["pipeline"].refresh_metadata(item_id)
+
+    def plugin_http() -> httpx.AsyncClient:
+        return state["pipeline"].http if "pipeline" in state else httpx.AsyncClient(timeout=20)
+
+    @app.get("/api/plugins")
+    def list_plugins():
+        return [p.describe(settings) for p in plugins.all()]
+
+    @app.get("/api/items/{item_id}/plugins")
+    async def item_plugins(item_id: str):
+        """The plugin actions that apply to this item, with their current state (e.g. already in Radarr)."""
+        item = get_or_404(item_id)
+        applicable = [p for p in plugins.all() if p.configured(settings) and p.applies_to(item)]
+
+        async def one(p):
+            try:
+                result = await p.status(item, settings, plugin_http())
+            except plugins.PluginError as e:
+                result = {"state": "unavailable", "message": str(e)}
+            return {**p.describe(settings), **result}
+
+        return list(await asyncio.gather(*(one(p) for p in applicable)))
+
+    @app.post("/api/items/{item_id}/plugins/{plugin_id}")
+    async def run_plugin(item_id: str, plugin_id: str):
+        plugin = plugins.get(plugin_id)
+        if plugin is None:
+            raise HTTPException(404, "Unknown plugin")
+        item = get_or_404(item_id)
+        if not plugin.configured(settings):
+            raise HTTPException(409, f"{plugin.label} isn't set up yet: add its server URL and API key in Settings.")
+        if not plugin.applies_to(item):
+            raise HTTPException(422, f"{plugin.label} doesn't apply to this kind of item.")
+        try:
+            result = await plugin.run(item, settings, plugin_http())
+        except plugins.PluginError as e:
+            raise HTTPException(e.status, str(e))
+        return {**plugin.describe(settings), **result}
+
+    @app.post("/api/plugins/{plugin_id}/test")
+    async def test_plugin(plugin_id: str, req: PluginTest, request: Request):
+        """Check a plugin's connection, with values typed but not saved yet. Same access rules as changing settings,
+        because it makes the server call out with a stored key."""
+        require_settings_access(request)
+        plugin = plugins.get(plugin_id)
+        if plugin is None:
+            raise HTTPException(404, "Unknown plugin")
+        try:
+            return await plugin.test(settings, plugin_http(), url=req.url or None, key=req.key or None)
+        except plugins.PluginError as e:
+            raise HTTPException(e.status, str(e))
 
     @app.get("/api/bulk")
     def bulk_status():

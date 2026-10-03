@@ -149,6 +149,21 @@ SPECS: list[Spec] = [
 ]
 SPEC_BY_ATTR = {s.attr: s for s in SPECS}
 SPEC_BY_ENV = {s.env: s for s in SPECS}
+# (url env, key env) pairs: a saved key is dropped when its URL moves to another server.
+URL_KEY_PAIRS: list[tuple[str, str]] = []
+
+
+def register_specs(specs, url_key: tuple[str, str] | None = None) -> None:
+    """Add settings contributed by a plugin; they show up in the settings screen under their own group."""
+    for spec in specs:
+        if spec.env not in SPEC_BY_ENV:
+            SPECS.append(spec)
+            SPEC_BY_ATTR[spec.attr] = spec
+            SPEC_BY_ENV[spec.env] = spec
+    if url_key and url_key not in URL_KEY_PAIRS:
+        URL_KEY_PAIRS.append(url_key)
+
+
 _FALSE = ("0", "false", "no", "off")
 _TRUE = ("1", "true", "yes", "on")
 
@@ -279,6 +294,17 @@ class Settings:
     def overrides_path(self) -> Path:
         return self.data_dir / OVERRIDES_FILE
 
+    def value(self, attr: str) -> Any:
+        """The current value of any registered setting, including those contributed by plugins."""
+        spec = SPEC_BY_ATTR[attr]
+        if attr in self.__dataclass_fields__:
+            return getattr(self, attr)
+        raw = self.overrides[spec.env] if spec.env in self.overrides else _env_value(spec)
+        try:
+            return parse_value(spec, raw)
+        except ValueError:
+            return spec.default
+
     def read_overrides(self) -> dict:
         try:
             if not self.overrides_path.exists():
@@ -328,6 +354,14 @@ class Settings:
                 changes["LOCAL_LLM_API_KEY"] = ""
                 notices.append("The local LLM API key was removed because the server URL now points to a different "
                                "server. Enter the key again if the new server needs one.")
+        for url_env, key_env in URL_KEY_PAIRS:
+            if url_env in changes and key_env not in changes:
+                url_spec, key_spec = SPEC_BY_ENV[url_env], SPEC_BY_ENV[key_env]
+                new_url = parse_value(url_spec, changes[url_env]) or parse_value(url_spec, _env_value(url_spec))
+                if self.value(key_spec.attr) and _origin(new_url) != _origin(self.value(url_spec.attr)):
+                    changes[key_env] = ""
+                    notices.append(f"{key_spec.label} was removed because the URL now points to a different server. "
+                                   "Enter the key again if the new server needs one.")
         merged = dict(self.overrides)
         for env, raw in changes.items():
             blank = raw is None or (isinstance(raw, str) and raw.strip() == "")
@@ -408,6 +442,10 @@ class Settings:
             add("info", "Without a TMDB API key, films and TV shows get fewer details (posters, cast).", "TMDB_API_KEY")
         if self.enrich and not self.omdb_api_key:
             add("info", "Without an OMDb API key, films and TV shows get no IMDb / Rotten Tomatoes scores.", "OMDB_API_KEY")
+        from . import plugins
+        for plugin in plugins.all():
+            for level, message, key in plugin.problems(self):
+                add(level, message, key)
         return out
 
     # ---- derived values ---------------------------------------------------------
@@ -502,3 +540,8 @@ def mask(value: str | None) -> str:
     if not value:
         return ""
     return "•" * 6 + value[-4:] if len(value) > 8 else "•" * 6
+
+
+from . import plugins  # noqa: E402  (plugins add their own settings)
+
+plugins.sync_settings()
