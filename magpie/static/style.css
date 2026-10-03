@@ -749,3 +749,11 @@ button.act-main:hover .act-text { text-decoration: underline; }
   .l-short { display: inline; }
 }
 .btn.plugin-jump { color: var(--text); }
+
+/* the main link: on a phone just the site's icon and the arrow, to save room */
+.open-ico { display: none; }
+@media (max-width: 640px) {
+  .open-src { display: inline-flex; align-items: center; gap: 6px; padding-inline: 12px; }
+  .open-src .open-ico { display: inline-flex; }
+  .open-src .open-text { display: none; }
+}

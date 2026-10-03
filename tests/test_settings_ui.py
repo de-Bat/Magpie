@@ -81,3 +81,9 @@ def test_header_keeps_only_a_jump_capsule_and_phone_ratings_share_one_row():
     js, css, _ = source()
     assert 'class="btn plugin-added plugin-jump" data-jump-section=' in js and "downloadChipHtml({ ...p, download: p.section.download }" not in js
     assert 'class="l-short"' in js and ".scores { flex-wrap: nowrap" in css
+
+
+def test_main_link_is_an_icon_and_arrow_on_phones():
+    js, css, _ = source()
+    assert "function sourceIconHtml(" in js and 'class="open-text"' in js and 'aria-label="Open ' in js
+    assert ".open-src .open-text { display: none; }" in css

@@ -1932,6 +1932,19 @@ function setSyncState(s, error = null) {
 function screenshotFor(item) {
   return blobUrls.get(item.id) || (item.image_file ? `/media/${encodeURIComponent(item.image_file)}` : null);
 }
+// A small icon for where the main link goes (shown instead of "Open …" on a phone); a plain link icon for other sites.
+const SOURCE_ICONS = {
+  github: "M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.69 1.25 3.35.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5z",
+  youtube: "M21.6 7.2a2.5 2.5 0 0 0-1.76-1.77C18.3 5 12 5 12 5s-6.3 0-7.84.43A2.5 2.5 0 0 0 2.4 7.2C2 8.75 2 12 2 12s0 3.25.4 4.8a2.5 2.5 0 0 0 1.76 1.77C5.7 19 12 19 12 19s6.3 0 7.84-.43a2.5 2.5 0 0 0 1.76-1.77C22 15.25 22 12 22 12s0-3.25-.4-4.8zM10 15V9l5.2 3z",
+};
+function sourceIconHtml(host) {
+  const svg = (path) => `<svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="${path}"/></svg>`;
+  if (/(^|\.)imdb\.com$/.test(host)) return `<svg viewBox="0 0 32 20" width="30" height="19"><rect width="32" height="20" rx="4" fill="currentColor"/><text x="16" y="14.5" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="11" fill="var(--accent)">IMDb</text></svg>`;
+  if (/(^|\.)github\.com$/.test(host)) return svg(SOURCE_ICONS.github);
+  if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) return svg(SOURCE_ICONS.youtube);
+  return svg(MATERIAL_ICONS.link);
+}
+
 function hostOf(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; }
 }
@@ -2506,7 +2519,7 @@ function renderDetail(item) {
       ${scoresHtml(m)}
       ${statusHtml(item)}${notice}
       <div class="actions primary-actions">
-        ${canonical ? `<a class="btn primary" href="${esc(canonical)}" target="_blank" rel="noopener">Open ${esc(hostOf(canonical) || "source")} ↗</a>` : ""}
+        ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="Open ${esc(hostOf(canonical) || "source")}" title="Open ${esc(hostOf(canonical) || "source")}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span><span class="open-text">Open ${esc(hostOf(canonical) || "source")}</span> ↗</a>` : ""}
         ${item.status === "ready" && fixing !== item.id ? `<button class="btn" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
         <span class="plugin-slot">${pluginButtonsHtml(item.id)}</span>
         <details class="menu"><summary class="btn">More ▾</summary><div class="menu-list">
