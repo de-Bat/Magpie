@@ -53,9 +53,10 @@ def test_the_activity_tray_follows_every_async_operation_and_cleans_up_after_its
 
 def test_add_button_opens_a_menu_and_names_are_searched_before_adding():
     js, css, html = source()
-    assert 'id="add-menu"' in html and 'aria-haspopup="menu"' in html and 'id="find-dialog"' in html
+    assert 'id="add-menu"' in html and 'aria-haspopup="menu"' in html and 'id="fab-more"' in html and 'id="find-dialog"' in html
     for kind in ("movie", "tv_show", "book"):
         assert f'data-find="{kind}"' in html, kind
+    assert 'id="fab" class="fab" type="button" data-action="add-upload"' in html   # the main part adds as before; the small part opens the menu
     assert 'data-action="add-upload"' in html            # the old screenshot/link dialog stays one click away
     assert "/api/catalog/search?kind=" in js and '"/api/items/entry"' in js
     assert "findResults.length === 1" in js and "data-find-typed" in js and "data-find-pick" in js

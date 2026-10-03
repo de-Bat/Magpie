@@ -487,7 +487,7 @@ let findKind = null, findSeq = 0, findResults = [];
 
 function setAddMenu(open) {
   $("#add-menu").hidden = !open;
-  $("#fab").setAttribute("aria-expanded", String(open));
+  $("#fab-more").setAttribute("aria-expanded", String(open));
   if (open) $("#add-menu button")?.focus();
 }
 
@@ -2860,7 +2860,7 @@ $("#cols-select").addEventListener("change", (e) => {
 
 // Keyboard: / searches, N adds, Esc closes the tag list, arrows move between cards.
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$("#add-menu").hidden) { setAddMenu(false); $("#fab").focus(); }
+  if (e.key === "Escape" && !$("#add-menu").hidden) { setAddMenu(false); $("#fab-more").focus(); }
   if (e.key === "Escape") { $("#tag-pop").hidden = true; $("#tag-btn").setAttribute("aria-expanded", "false"); }
   if (e.target.matches("input, textarea, select") || e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
   if (e.key === "/") { e.preventDefault(); $("#search").focus(); return; }
@@ -2893,7 +2893,7 @@ async function askToken() {
 }
 
 document.addEventListener("click", async (e) => {
-  if (!e.target.closest("#add-menu, #fab")) setAddMenu(false);   // click elsewhere closes the add menu
+  if (!e.target.closest("#add-menu, #fab-more")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
   const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-find],[data-find-pick],[data-find-typed]");
   if (!t) return;

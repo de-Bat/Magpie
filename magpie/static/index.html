@@ -76,7 +76,10 @@
       <button type="button" role="menuitem" data-find="tv_show"><span aria-hidden="true">📺</span> TV show</button>
       <button type="button" role="menuitem" data-find="book"><span aria-hidden="true">📚</span> Book</button>
     </div>
-    <button id="fab" class="fab" type="button" data-action="add" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu"><span aria-hidden="true">＋</span> Add</button>
+    <div class="fab-split">
+      <button id="fab" class="fab" type="button" data-action="add-upload"><span aria-hidden="true">＋</span> Add</button>
+      <button id="fab-more" class="fab fab-more" type="button" data-action="add" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu" aria-label="More ways to add" title="Add a movie, TV show or book"><span aria-hidden="true">▾</span></button>
+    </div>
   </div>
   <div id="dropveil" class="dropveil" hidden><div>Drop screenshots or a link to add them</div></div>
 

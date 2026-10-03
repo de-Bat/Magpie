@@ -204,6 +204,9 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .grid.list .verify-btn { top: 50%; transform: translateY(-50%); right: 12px; background: var(--surface-2); color: var(--text); box-shadow: none; }
 .empty { color: var(--muted); text-align: center; padding: 48px 16px; }
 .fab-wrap { position: fixed; right: calc(20px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom)); z-index: 4; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; }
+.fab-split { display: flex; filter: drop-shadow(var(--shadow-fab, 0 4px 14px rgb(0 0 0 / .3))); }
+.fab-split .fab { box-shadow: none; border-radius: 999px 0 0 999px; }
+.fab-split .fab-more { border-radius: 0 999px 999px 0; padding: 13px 14px 13px 12px; margin-left: 1px; border-left: 1px solid rgb(0 0 0 / .22); }
 .fab { z-index: 4; border: 0; background: var(--accent); color: var(--on-accent); border-radius: 999px; padding: 13px 20px; font: inherit; font-weight: 600; cursor: pointer; box-shadow: var(--shadow); }
 .dropveil { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 24%, transparent); backdrop-filter: blur(3px); }
 .dropveil div { background: var(--surface); border: 2px dashed var(--accent); border-radius: 16px; padding: 28px 36px; font-weight: 600; }
