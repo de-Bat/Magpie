@@ -1693,7 +1693,7 @@ function cardFacts(item) {
   const m = item.metadata || {};
   const facts = [];
   if (m.year && !["github_repo", "recipe"].includes(item.category)) facts.push(String(m.year));
-  if (m.imdb_rating) facts.push(`★ ${m.imdb_rating.replace("/10", "")}`);
+  if (m.imdb_rating) facts.push(`★ ${String(m.imdb_rating).replace("/10", "")}`);
   else if (m.tmdb_rating) facts.push(`★ ${m.tmdb_rating.replace("/10", "")}`);
   if (m.stars != null) facts.push(`★ ${Number(m.stars).toLocaleString()}`);
   if (m.programming_language) facts.push(m.programming_language);

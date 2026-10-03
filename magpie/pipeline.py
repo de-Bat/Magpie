@@ -108,6 +108,9 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
     """
     details = analysis.get("details") or {}
     metadata: dict[str, Any] = {k: v for k, v in details.items() if not _empty(v)}
+    for key in ("imdb_rating", "rotten_tomatoes"):   # models sometimes answer with a number instead of text
+        if isinstance(metadata.get(key), (int, float)) and not isinstance(metadata[key], bool):
+            metadata[key] = f"{metadata[key]}/10" if key == "imdb_rating" else f"{metadata[key]}%"
     for key in ("year", "screenshot_text"):
         if not _empty(analysis.get(key)):
             metadata[key] = analysis[key]
