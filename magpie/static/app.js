@@ -2439,6 +2439,8 @@ document.addEventListener("click", async (e) => {
       case "usage": return showUsage();
       case "add": return $("#add-dialog").showModal();
       case "close-add": return $("#add-dialog").close();
+      case "about": return $("#about-dialog").showModal();
+      case "close-about": return $("#about-dialog").close();
       case "settings": return showSettings();
       case "debug": return showDebug();
       case "sync": return requestSync();

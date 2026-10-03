@@ -34,6 +34,7 @@
     <button id="limit-pill" class="pill-btn limit-pill" type="button" data-action="usage" hidden></button>
     <button id="cost-btn" class="pill-btn" type="button" data-action="usage" title="Usage &amp; cost" hidden></button>
     <button id="sync-status" class="sync-status" type="button" title="Sync status"></button>
+    <button id="about-btn" class="pill-btn" type="button" data-action="about" title="About Magpie" aria-label="About">ℹ</button>
     <button id="settings-btn" class="pill-btn settings-btn" type="button" data-action="settings" title="Settings" aria-label="Settings">⚙<span id="settings-dot" class="status-dot" hidden></span></button>
   </header>
 
@@ -83,6 +84,42 @@
         <button class="btn" type="submit">Save link</button>
       </form>
       <input id="note" type="text" placeholder="Note for this one (optional), e.g. Dana recommended it" aria-label="Note">
+    </div>
+  </dialog>
+
+  <dialog id="about-dialog" class="sheet-dialog">
+    <div class="sheet-head"><h2>About Magpie</h2><button class="btn close" type="button" data-action="close-about" aria-label="Close">✕</button></div>
+    <div class="sheet-body about-body">
+      <div class="about-content">
+        <div class="about-header">
+          <img class="logo-light" src="/static/icons/logo-96.png" alt="" width="64" height="64">
+          <img class="logo-dark" src="/static/icons/logo-96-dark.png" alt="" width="64" height="64">
+          <h3>Magpie</h3>
+          <p class="version" id="about-version">v0.3.0</p>
+        </div>
+        <p class="about-desc">
+          Save screenshots of recommendations. Magpie identifies them and looks up the details.
+        </p>
+        <div class="about-features">
+          <h4>Features</h4>
+          <ul>
+            <li>📸 Screenshot capture and analysis</li>
+            <li>🔍 Intelligent item identification</li>
+            <li>🏷️ Automatic tagging and categorization</li>
+            <li>💾 Offline library management</li>
+            <li>🔗 Link and metadata enrichment</li>
+            <li>📊 Advanced filtering and search</li>
+          </ul>
+        </div>
+        <div class="about-footer">
+          <p><strong>Made with ❤️ for saving great finds</strong></p>
+          <p class="about-links">
+            <a href="https://github.com/de-Bat/Magpie" target="_blank" rel="noopener">GitHub</a>
+            <span class="separator">•</span>
+            <a href="https://github.com/de-Bat/Magpie/issues" target="_blank" rel="noopener">Report Issue</a>
+          </p>
+        </div>
+      </div>
     </div>
   </dialog>
 
