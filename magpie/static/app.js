@@ -2268,9 +2268,24 @@ const pluginActions = new Map();   // item id -> [{id, label, action_label, stat
 const pluginFetched = new Map();   // item id -> when we last asked the server
 let pluginCatalog = null;          // GET /api/plugins, remembered until settings change
 
+const DOWNLOAD_ICON = { downloaded: "✓", downloading: "↓", pending: "⏳", missing: "⚠" };
+
+// After it has been added: where the download stands (downloaded / downloading n% / pending / missing), with a link to it.
+function downloadChipHtml(p) {
+  const d = p.download, href = safeUrl(p.url);
+  const percent = d.state === "downloading" ? Math.max(0, Math.min(100, Number(d.percent) || 0)) : null;
+  const tip = [p.label, d.label, d.eta, d.detail].filter(Boolean).join(" · ");
+  const count = d.total && d.state !== "downloaded" ? `<span class="dl-count">${esc(`${d.have ?? 0}/${d.total}`)}</span>` : "";
+  const inner = `<span class="dl-name">${esc(p.label)}</span><span class="dl-icon" aria-hidden="true">${DOWNLOAD_ICON[d.state] || "•"}</span><span class="dl-label">${esc(d.label)}</span>${count}`;
+  const cls = `btn plugin-added dl dl-${esc(d.state)}`, style = percent === null ? "" : ` style="--pct:${percent}%"`;
+  return href ? `<a class="${cls}"${style} href="${esc(href)}" target="_blank" rel="noopener" title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</a>`
+    : `<span class="${cls}"${style} title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</span>`;
+}
+
 function pluginButtonsHtml(id) {
   return (pluginActions.get(id) || []).map((p) => {
     if (p.state === "added") {
+      if (p.download) return downloadChipHtml(p);
       const href = safeUrl(p.url);
       const text = `✓ In ${esc(p.label)}`;
       return href ? `<a class="btn plugin-added" href="${esc(href)}" target="_blank" rel="noopener">${text} ↗</a>` : `<span class="btn plugin-added">${text}</span>`;
@@ -2280,15 +2295,36 @@ function pluginButtonsHtml(id) {
   }).join("");
 }
 
+// While something is downloading or waiting, keep the chip current for as long as the card is open.
+const activeDownload = (id) => (pluginActions.get(id) || []).map((p) => p.download?.state).filter((st) => st === "downloading" || st === "pending");
+let pluginTimer = null;
+function schedulePluginRefresh(id) {
+  clearTimeout(pluginTimer);
+  const active = activeDownload(id);
+  if (!active.length) return;
+  pluginTimer = setTimeout(async () => {
+    const dlg = $("#detail");
+    if (!dlg.open || dlg.dataset.id !== id) return;   // closed: stops; opening the card again starts it again
+    if (navigator.onLine && document.visibilityState === "visible") {
+      try { pluginActions.set(id, await api(`/api/items/${encodeURIComponent(id)}/plugins`)); pluginFetched.set(id, Date.now()); } catch {}
+    }
+    showPluginActions(id);   // draws it and schedules the next refresh
+  }, active.includes("downloading") ? 6000 : 20000);
+}
+
 function showPluginActions(id) {
   const dlg = $("#detail");
   const slot = dlg.dataset.id === id ? dlg.querySelector(".plugin-slot") : null;
   if (slot) slot.innerHTML = pluginButtonsHtml(id);
+  schedulePluginRefresh(id);
 }
 
 async function loadPluginActions(item) {
   if (!navigator.onLine || item.status !== "ready" || item.pending_upload) return;
-  if (Date.now() - (pluginFetched.get(item.id) || 0) < 60000) return;   // the card re-renders on every poll
+  if (Date.now() - (pluginFetched.get(item.id) || 0) < (activeDownload(item.id).length ? 4000 : 60000)) {   // the card re-renders on every poll
+    schedulePluginRefresh(item.id);
+    return;
+  }
   pluginFetched.set(item.id, Date.now());
   try {
     pluginCatalog ||= await api("/api/plugins");

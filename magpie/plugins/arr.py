@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 
 import httpx
 
@@ -41,6 +42,67 @@ def pick_match(results: list[dict], title: str, year: int | None) -> dict | None
             if r.get("year") == year:
                 return r
     return same[0] if same else None
+
+
+SEARCH_GRACE = 600   # seconds after adding during which "no file yet" means it is still searching, not that nothing was found
+
+# What a queue entry's status means for the card. "downloading" is handled apart (it has a percentage).
+QUEUE_WAITING = {"queued": "Queued", "paused": "Paused", "delay": "Waiting (delay profile)", "completed": "Importing",
+                 "downloadclientunavailable": "Download client unavailable", "warning": "Needs attention", "unknown": "Queued",
+                 "fallback": "Queued"}
+
+
+def just_added(entry: dict) -> bool:
+    try:
+        added = datetime.fromisoformat(str(entry.get("added")).replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - added).total_seconds() < SEARCH_GRACE
+    except (TypeError, ValueError):
+        return False
+
+
+def seconds_left(timeleft: str | None) -> int | None:
+    """Sonarr/Radarr write time left as [d.]hh:mm:ss."""
+    m = re.fullmatch(r"(?:(\d+)\.)?(\d+):(\d\d):(\d\d)(?:\.\d+)?", str(timeleft or ""))
+    if not m:
+        return None
+    d, h, mi, sec = (int(x or 0) for x in m.groups())
+    return ((d * 24 + h) * 60 + mi) * 60 + sec
+
+
+def eta_text(seconds: int | None) -> str | None:
+    if seconds is None:
+        return None
+    if seconds < 90:
+        return "under a minute left"
+    if seconds < 3600:
+        return f"{round(seconds / 60)} min left"
+    if seconds < 86400:
+        h, m = divmod(round(seconds / 60), 60)
+        return f"{h} h {m} min left" if m else f"{h} h left"
+    return f"{round(seconds / 86400)} days left"
+
+
+def summarize_queue(records: list[dict]) -> dict | None:
+    """One download state from a title's queue entries (a film has one, a show one per episode), or None if idle."""
+    if not records:
+        return None
+    status = lambda q: str(q.get("status") or "").lower()   # noqa: E731
+    active = [q for q in records if status(q) == "downloading"]
+    if active:
+        size, left = sum(q.get("size") or 0 for q in active), sum(q.get("sizeleft") or 0 for q in active)
+        percent = max(0, min(100, round((size - left) / size * 100))) if size else 0
+        times = [t for t in (seconds_left(q.get("timeleft")) for q in active) if t is not None]
+        out = {"state": "downloading", "percent": percent, "label": f"Downloading {percent}%", "eta": eta_text(max(times) if times else None)}
+        if len(active) > 1:
+            out["detail"] = f"{len(active)} episodes downloading"
+        return out
+    waiting = [q for q in records if status(q) != "failed"]
+    if waiting:
+        q = waiting[0]
+        note = q.get("errorMessage") or next((m.get("title") for m in q.get("statusMessages") or [] if m.get("title")), None)
+        return {"state": "pending", "label": QUEUE_WAITING.get(status(q), "Queued"), "detail": note}
+    note = records[0].get("errorMessage") or next((m.get("title") for m in records[0].get("statusMessages") or [] if m.get("title")), None)
+    return {"state": "missing", "label": "Download failed", "detail": note}
 
 
 class ArrPlugin(Plugin):
@@ -150,6 +212,13 @@ class ArrPlugin(Plugin):
             if match:
                 return match
         raise PluginError(f"Couldn't find “{title or 'this item'}” in {self.label}'s lookup.", 404)
+
+    async def queue_of(self, http, settings, **ids) -> list[dict]:
+        """This title's entries in the download queue. A queue that can't be read just means no progress is shown."""
+        try:
+            return await self.call(http, settings, "GET", "/queue/details", params=ids) or []
+        except PluginError:
+            return []
 
     def with_search(self, settings) -> bool:
         return bool(self.cfg(settings, "search"))

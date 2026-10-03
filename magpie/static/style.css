@@ -625,6 +625,16 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 /* Plugin actions (Radarr, Sonarr, ...) on a card */
 .plugin-slot { display: contents; }
 .plugin-added { color: var(--ok); text-decoration: none; }
+/* download status chip: icon and label by state; while downloading it fills like a progress bar */
+.dl { position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 6px; }
+.dl-name { opacity: .75; font-weight: 500; }
+.dl-icon { font-weight: 700; }
+.dl-count { font-size: .85em; opacity: .8; padding-left: 6px; border-left: 1px solid currentColor; }
+.dl-downloaded { color: var(--ok); }
+.dl-downloading { color: var(--accent); background-image: linear-gradient(90deg, color-mix(in oklab, var(--accent) 30%, transparent) var(--pct, 0%), transparent var(--pct, 0%)); }
+.dl-downloading::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: var(--pct, 0%); background: var(--accent); transition: width .6s ease; }
+.dl-pending { color: var(--warn); }
+.dl-missing { color: var(--err); }
 
 /* Settings → Plugins */
 .plugin-list { display: grid; gap: 8px; margin-bottom: 20px; }

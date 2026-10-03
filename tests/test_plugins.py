@@ -25,8 +25,9 @@ def clean_env(monkeypatch):
 class FakeArr:
     """A Radarr/Sonarr stand-in: serves the v3 endpoints the plugins use and records what was posted."""
 
-    def __init__(self, kind, lookup=None, library=None, key="secret-key", v4=True):
+    def __init__(self, kind, lookup=None, library=None, key="secret-key", v4=True, queue=None):
         self.kind, self.lookup, self.library, self.key, self.v4 = kind, lookup or [], library or [], key, v4
+        self.queue = queue if queue is not None else []   # download queue entries; an Exception makes the endpoint fail
         self.posted, self.terms = [], []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -41,6 +42,10 @@ class FakeArr:
             return httpx.Response(200, json=[{"id": 4, "name": "Any"}, {"id": 7, "name": "HD-1080p"}])
         if path == "/api/v3/languageprofile":
             return httpx.Response(404 if self.v4 else 200, json=[{"id": 1, "name": "English"}])
+        if path == "/api/v3/queue/details":
+            if isinstance(self.queue, Exception):
+                return httpx.Response(500)
+            return httpx.Response(200, json=self.queue)
         if path == f"/api/v3/{k}/lookup":
             self.terms.append(request.url.params["term"])
             return httpx.Response(200, json=[r for r in self.lookup if self._matches(r, request.url.params["term"])])
@@ -229,3 +234,113 @@ def test_the_connection_test_uses_typed_values_and_guards_the_saved_key(tmp_path
         # the stored key is never sent to a server it wasn't saved for
         r = client.post("/api/plugins/radarr/test", json={"url": "http://evil:7878"}, headers=code)
         assert r.status_code == 400 and "Enter the API key" in r.json()["detail"]
+
+
+# ---- download status after adding: downloaded / downloading (with a percentage) / pending / missing ----------------
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+LONG_AGO = "2025-01-01T00:00:00Z"
+
+
+def ago(minutes):
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+
+
+def film(**over):
+    return {**FIGHT_CLUB, "id": 12, "hasFile": False, "monitored": True, "isAvailable": True, "added": LONG_AGO, **over}
+
+
+def radarr_download(tmp_path, entry, queue=None):
+    radarr = FakeArr("movie", lookup=[FIGHT_CLUB], library=[entry], queue=queue)
+    client, item = make(tmp_path, radarr, **ARR_ON)
+    with client:
+        offered = client.get(f"/api/items/{item}/plugins").json()[0]
+    assert offered["state"] == "added" and offered["message"] == "In Radarr"
+    return offered["download"]
+
+
+def test_radarr_shows_a_finished_download_with_its_quality_and_size(tmp_path):
+    d = radarr_download(tmp_path, film(hasFile=True, movieFile={"size": 8_400_000_000, "quality": {"quality": {"name": "Bluray-1080p"}}}))
+    assert (d["state"], d["label"], d["detail"]) == ("downloaded", "Downloaded", "Bluray-1080p · 8.4 GB")
+
+
+def test_radarr_shows_progress_while_downloading(tmp_path):
+    d = radarr_download(tmp_path, film(), queue=[{"status": "downloading", "size": 1000, "sizeleft": 580, "timeleft": "00:12:30"}])
+    assert (d["state"], d["percent"], d["label"]) == ("downloading", 42, "Downloading 42%") and "min left" in d["eta"]
+    d = radarr_download(tmp_path / "b", film(), queue=[{"status": "downloading", "size": 0, "sizeleft": 0}])
+    assert d["state"] == "downloading" and d["percent"] == 0   # no size reported yet: no division by zero
+
+
+def test_radarr_queue_entries_that_are_not_downloading_are_pending_or_failed(tmp_path):
+    cases = [("queued", "pending", "Queued"), ("paused", "pending", "Paused"), ("delay", "pending", "Waiting (delay profile)"),
+             ("completed", "pending", "Importing"), ("downloadClientUnavailable", "pending", "Download client unavailable"),
+             ("failed", "missing", "Download failed")]
+    for i, (status, state, label) in enumerate(cases):
+        d = radarr_download(tmp_path / str(i), film(), queue=[{"status": status, "size": 10, "sizeleft": 10, "errorMessage": "disk full" if status == "failed" else None}])
+        assert (d["state"], d["label"]) == (state, label), status
+        assert "percent" not in d
+    assert d["detail"] == "disk full"
+
+
+def test_radarr_not_downloading_is_pending_while_it_searches_or_waits_for_the_release_and_missing_otherwise(tmp_path):
+    assert radarr_download(tmp_path / "a", film(added=ago(2)))["label"] == "Searching"
+    d = radarr_download(tmp_path / "b", film(isAvailable=False))
+    assert (d["state"], d["label"]) == ("pending", "Not released yet")
+    d = radarr_download(tmp_path / "c", film())
+    assert (d["state"], d["label"], d["detail"]) == ("missing", "Missing", "No release found yet")
+    d = radarr_download(tmp_path / "d", film(monitored=False))
+    assert (d["state"], d["detail"]) == ("missing", "Not monitored in Radarr")
+
+
+def test_a_queue_that_cannot_be_read_does_not_break_the_status(tmp_path):
+    d = radarr_download(tmp_path, film(), queue=RuntimeError("down"))
+    assert d["state"] == "missing"
+
+
+def series(have, total, **over):
+    return {**SEVERANCE, "id": 3, "monitored": True, "added": LONG_AGO, "statistics": {"episodeFileCount": have, "episodeCount": total}, **over}
+
+
+def sonarr_download(tmp_path, entry, queue=None):
+    sonarr = FakeArr("series", lookup=[SEVERANCE], library=[entry], queue=queue)
+    client, item = make(tmp_path, sonarr, category="tv_show", title="Severance", year=2022, imdb="tt11280740", **ARR_ON)
+    with client:
+        offered = client.get(f"/api/items/{item}/plugins").json()[0]
+    assert offered["state"] == "added" and offered["message"] == "In Sonarr"
+    return offered["download"]
+
+
+def test_sonarr_summarises_the_episodes(tmp_path):
+    d = sonarr_download(tmp_path / "a", series(10, 10))
+    assert (d["state"], d["label"], d["have"], d["total"], d["detail"]) == ("downloaded", "Downloaded", 10, 10, "10 episodes on disk")
+    d = sonarr_download(tmp_path / "b", series(7, 10))
+    assert (d["state"], d["label"], d["have"], d["total"], d["detail"]) == ("missing", "Missing", 7, 10, "7 of 10 episodes on disk")
+    d = sonarr_download(tmp_path / "c", series(0, 0))
+    assert (d["state"], d["label"]) == ("pending", "Not aired yet")
+    assert sonarr_download(tmp_path / "d", series(0, 0, added=ago(1)))["label"] == "Searching"
+    assert sonarr_download(tmp_path / "e", series(2, 8, monitored=False))["detail"] == "Not monitored in Sonarr"
+
+
+def test_sonarr_adds_up_the_episodes_that_are_downloading(tmp_path):
+    queue = [{"status": "downloading", "size": 1000, "sizeleft": 500, "timeleft": "00:30:00"},
+             {"status": "downloading", "size": 1000, "sizeleft": 0, "timeleft": "00:00:10"},
+             {"status": "queued", "size": 1000, "sizeleft": 1000}]
+    d = sonarr_download(tmp_path, series(4, 10), queue=queue)
+    assert (d["state"], d["percent"], d["label"], d["detail"]) == ("downloading", 75, "Downloading 75%", "2 episodes downloading")
+    assert "30 min left" in d["eta"] and (d["have"], d["total"]) == (4, 10)
+    d = sonarr_download(tmp_path / "q", series(4, 10), queue=[{"status": "queued", "size": 10, "sizeleft": 10}])
+    assert (d["state"], d["label"], d["detail"]) == ("pending", "Queued", "4 of 10 episodes on disk")
+
+
+def test_adding_reports_that_it_is_searching(tmp_path):
+    radarr = FakeArr("movie", lookup=[FIGHT_CLUB])
+    sonarr = FakeArr("series", lookup=[SEVERANCE])
+    client, item = make(tmp_path, radarr, **ARR_ON)
+    with client:
+        r = client.post(f"/api/items/{item}/plugins/radarr").json()
+        assert r["download"] == {"state": "pending", "label": "Searching", "detail": "Radarr is looking for a release"}
+    client, item = make(tmp_path / "s", sonarr, category="tv_show", title="Severance", year=2022, imdb="tt11280740", **ARR_ON)
+    with client:
+        r = client.post(f"/api/items/{item}/plugins/sonarr").json()
+        assert (r["download"]["state"], r["download"]["label"]) == ("pending", "Searching")
