@@ -710,3 +710,17 @@ button.act-main:hover .act-text { text-decoration: underline; }
 .find-row .find-ov { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; opacity: .7; margin-top: 2px; }
 .find-typed { border: 1px dashed var(--border); }
 
+
+/* ---- a plugin's own section on the card ---- */
+.plugin-sections { display: flex; flex-direction: column; gap: 12px; }
+.plugin-sections:empty { display: none; }
+.psec { border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.psec-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.psec-head h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .06em; opacity: .7; }
+.psec-rows { margin: 0; display: grid; gap: 6px; }
+.psec-rows > div { display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.psec-rows dt { opacity: .7; }
+.psec-rows dd { margin: 0; text-align: right; }
+.when { margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.when-due { color: var(--accent); background: color-mix(in oklab, var(--accent) 16%, transparent); }
+.when-past { opacity: .65; background: color-mix(in oklab, currentColor 12%, transparent); }

@@ -91,3 +91,17 @@ register(Jellyseerr())
 - To build on Radarr/Sonarr's shared code (API v3 calls, lookup matching, root folder and quality
   profile choice), subclass `magpie.plugins.arr.ArrPlugin`.
 - Define a plugin class once per id: registering an id that already exists is an error.
+
+## A section on the card
+
+A plugin's `status()` (and `run()`) result may include a `section`; the card shows it under the plugin's name:
+
+```python
+{"state": "added", "section": {
+    "title": "Radarr",
+    "download": {"state": "downloading", "label": "Downloading 42%", "percent": 42},   # or None; states: downloaded, downloading, pending, missing
+    "rows": [{"label": "Digital release", "date": "2026-11-02"},     # shown as "Nov 2, 2026 · in 12 days"
+             {"label": "Show status", "value": "Continuing"}]}}
+```
+
+Radarr shows the digital, cinema and physical release dates (even before the film is added); Sonarr shows the next and last aired episode and the show's status.

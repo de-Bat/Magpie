@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..config import Spec
 from . import register
-from .arr import ArrPlugin, arr_specs, just_added, summarize_queue
+from .arr import ArrPlugin, arr_specs, date_row, just_added, section, summarize_queue
 
 
 class Radarr(ArrPlugin):
@@ -50,19 +50,24 @@ class Radarr(ArrPlugin):
             return {"state": "pending", "label": "Not released yet", "detail": "Radarr will search when it is available"}
         return {"state": "missing", "label": "Missing", "detail": "No release found yet"}
 
+    def _section(self, movie: dict, download: dict | None) -> dict:
+        return section("Radarr", download, date_row("Digital release", movie.get("digitalRelease")),
+                       date_row("In cinemas", movie.get("inCinemas")), date_row("Physical release", movie.get("physicalRelease")))
+
     async def status(self, item, settings, http):
         movie = await self._find(item, settings, http)
         existing = await self._existing(movie, settings, http)
         if existing:
-            return {"state": "added", "message": "In Radarr", "url": self._link(settings, movie),
-                    "download": await self._download(existing, settings, http)}
-        return {"state": "available"}
+            download = await self._download(existing, settings, http)
+            return {"state": "added", "message": "In Radarr", "url": self._link(settings, movie), "download": download,
+                    "section": self._section({**movie, **{k: v for k, v in existing.items() if v}}, download)}
+        return {"state": "available", "section": self._section(movie, None)}
 
     async def run(self, item, settings, http):
         movie = await self._find(item, settings, http)
         name = f"{movie.get('title')} ({movie.get('year')})" if movie.get("year") else movie.get("title")
         if await self._existing(movie, settings, http):
-            return {"state": "added", "message": f"{name} is already in Radarr", "url": self._link(settings, movie)}
+            return {**await self.status(item, settings, http), "message": f"{name} is already in Radarr"}
         search = self.with_search(settings)
         body = {k: v for k, v in movie.items() if k != "id"}
         body.update(
@@ -77,7 +82,7 @@ class Radarr(ArrPlugin):
             download = ({"state": "pending", "label": "Searching", "detail": "Radarr is looking for a release"} if search
                         else await self._download(created, settings, http))
         return {"state": "added", "message": f"Added {name} to Radarr" + (" and started searching" if search else ""),
-                "url": self._link(settings, movie), "download": download}
+                "url": self._link(settings, movie), "download": download, "section": self._section(movie, download)}
 
 
 register(Radarr())

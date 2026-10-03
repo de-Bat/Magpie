@@ -345,3 +345,32 @@ def test_adding_reports_that_it_is_searching(tmp_path):
     with client:
         r = client.post(f"/api/items/{item}/plugins/sonarr").json()
         assert (r["download"]["state"], r["download"]["label"]) == ("pending", "Searching")
+
+
+def section_of(tmp_path, kind, library, lookup, **card):
+    arr = FakeArr(kind, lookup=lookup, library=library)
+    client, item = make(tmp_path, arr, **card, **ARR_ON)
+    with client:
+        return client.get(f"/api/items/{item}/plugins").json()[0]
+
+
+def test_radarr_section_shows_status_and_when_the_digital_release_is_due(tmp_path):
+    dates = {"digitalRelease": "2026-11-02T00:00:00Z", "inCinemas": "2026-08-01T00:00:00Z", "physicalRelease": "0001-01-01T00:00:00Z"}
+    got = section_of(tmp_path, "movie", [film(**dates, isAvailable=False)], [FIGHT_CLUB])
+    sec = got["section"]
+    assert sec["title"] == "Radarr" and sec["download"]["label"] == "Not released yet"
+    assert sec["rows"] == [{"label": "Digital release", "date": "2026-11-02"}, {"label": "In cinemas", "date": "2026-08-01"}]  # unset dates are left out
+
+
+def test_radarr_section_is_there_before_the_film_is_added_with_the_release_dates_from_the_lookup(tmp_path):
+    got = section_of(tmp_path, "movie", [], [{**FIGHT_CLUB, "digitalRelease": "2026-11-02T00:00:00Z"}])
+    assert got["state"] == "available" and got["section"]["download"] is None
+    assert got["section"]["rows"] == [{"label": "Digital release", "date": "2026-11-02"}]
+
+
+def test_sonarr_section_shows_the_next_episode_and_show_status(tmp_path):
+    entry = series(3, 10, nextAiring="2026-10-12T01:00:00Z", previousAiring="2026-10-05T01:00:00Z", status="continuing")
+    got = section_of(tmp_path, "series", [entry], [SEVERANCE], category="tv_show", title="Severance", year=2022, imdb="tt11280740")
+    assert got["section"]["title"] == "Sonarr" and got["section"]["download"]["state"] == "missing"
+    assert got["section"]["rows"] == [{"label": "Next episode", "date": "2026-10-12"}, {"label": "Last aired", "date": "2026-10-05"},
+                                      {"label": "Show status", "value": "Continuing"}]

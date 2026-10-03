@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from ..config import Spec
 from . import PluginError, register
-from .arr import ArrPlugin, arr_specs, just_added, summarize_queue
+from .arr import ArrPlugin, arr_specs, just_added, summarize_queue, date_row, section, text_row
 
 MONITOR = ("all", "future", "missing", "existing", "firstseason", "lastseason", "pilot", "none")  # settings choices are lowercase
 API_MONITOR = {"firstseason": "firstSeason", "lastseason": "lastSeason"}
@@ -57,19 +57,25 @@ class Sonarr(ArrPlugin):
             return {**out, "state": "pending", "label": "Not aired yet", "detail": "Sonarr will search when episodes air"}
         return {**out, "state": "missing", "label": "Missing", "detail": f"{have} of {total} episodes on disk"}
 
+    def _section(self, series: dict, download: dict | None) -> dict:
+        return section("Sonarr", download, date_row("Next episode", series.get("nextAiring")), date_row("Last aired", series.get("previousAiring")),
+                       date_row("First aired", series.get("firstAired")),
+                       text_row("Show status", str(series.get("status") or "").capitalize()))
+
     async def status(self, item, settings, http):
         series = await self._find(item, settings, http)
         existing = await self._existing(series, settings, http)
         if existing:
-            return {"state": "added", "message": "In Sonarr", "url": self._link(settings, series),
-                    "download": await self._download(existing, settings, http)}
-        return {"state": "available"}
+            download = await self._download(existing, settings, http)
+            return {"state": "added", "message": "In Sonarr", "url": self._link(settings, series), "download": download,
+                    "section": self._section({**series, **{k: v for k, v in existing.items() if v}}, download)}
+        return {"state": "available", "section": self._section(series, None)}
 
     async def run(self, item, settings, http):
         series = await self._find(item, settings, http)
         name = f"{series.get('title')} ({series.get('year')})" if series.get("year") else series.get("title")
         if await self._existing(series, settings, http):
-            return {"state": "added", "message": f"{name} is already in Sonarr", "url": self._link(settings, series)}
+            return {**await self.status(item, settings, http), "message": f"{name} is already in Sonarr"}
         search = self.with_search(settings)
         body = {k: v for k, v in series.items() if k != "id"}
         body.update(
@@ -89,7 +95,7 @@ class Sonarr(ArrPlugin):
         download = {"state": "pending", "label": "Searching" if search else "Added", "have": 0, "total": 0,
                     "detail": "Sonarr is looking for episodes" if search else "Sonarr will search when you ask it to"} if created.get("id") else None
         return {"state": "added", "message": f"Added {name} to Sonarr" + (" and started searching" if search else ""),
-                "url": self._link(settings, series), "download": download}
+                "url": self._link(settings, series), "download": download, "section": self._section(series, download)}
 
 
 register(Sonarr())

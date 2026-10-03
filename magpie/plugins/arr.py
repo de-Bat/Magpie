@@ -52,6 +52,21 @@ QUEUE_WAITING = {"queued": "Queued", "paused": "Paused", "delay": "Waiting (dela
                  "fallback": "Queued"}
 
 
+def date_row(label: str, value) -> dict | None:
+    """A dated line for a card section; the app words it ("Nov 2, 2026 · in 12 days") in the viewer's own calendar."""
+    day = str(value or "")[:10]
+    return {"label": label, "date": day} if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and not day.startswith("0001") else None
+
+
+def text_row(label: str, value) -> dict | None:
+    return {"label": label, "value": str(value)} if value else None
+
+
+def section(title: str, download: dict | None, *rows: dict | None) -> dict:
+    """What a plugin shows on the card: a status (a `download` dict) and rows of facts."""
+    return {"title": title, "download": download, "rows": [r for r in rows if r]}
+
+
 def just_added(entry: dict) -> bool:
     try:
         added = datetime.fromisoformat(str(entry.get("added")).replace("Z", "+00:00"))

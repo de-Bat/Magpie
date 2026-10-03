@@ -2517,6 +2517,7 @@ function renderDetail(item) {
           <button class="btn danger" data-action="delete">Delete</button>
         </div></details>
       </div>
+      <div class="plugin-sections">${pluginSectionsHtml(item.id)}</div>
       ${fixing === item.id ? `<section>${correctionFormHtml(item)}</section>` : ""}
       <section><h3>About</h3>${about.length ? about.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="meta-line">No description yet.${item.pending_upload ? "" : " Refresh metadata may find one."}</p>`}</section>
       ${facts.length ? `<section><h3>${esc(TYPE_BLOCK[item.category] || "Details")}</h3><dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(humanize(k))}</dt><dd>${
@@ -2567,9 +2568,35 @@ function downloadChipHtml(p) {
     : `<span class="${cls}"${style} title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</span>`;
 }
 
+// "Nov 2, 2026 · in 12 days", from a YYYY-MM-DD date in the viewer's own calendar.
+function dateRowHtml(day) {
+  const d = new Date(`${day}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return esc(day);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const n = Math.round((d - today) / 864e5);
+  const span = (k) => k === 1 ? "1 day" : k < 60 ? `${k} days` : k < 700 ? `${Math.round(k / 30)} months` : `${Math.round(k / 365)} years`;
+  const when = n === 0 ? "today" : n === 1 ? "tomorrow" : n === -1 ? "yesterday" : n > 0 ? `in ${span(n)}` : `${span(-n)} ago`;
+  const text = d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return `${esc(text)} <span class="when ${n >= 0 ? "when-due" : "when-past"}">${esc(when)}</span>`;
+}
+
+// A plugin's own part of the card: its status and the facts it knows (digital release, next episode, …).
+function pluginSectionsHtml(id) {
+  return (pluginActions.get(id) || []).filter((p) => p.section && (p.section.download || p.section.rows?.length)).map((p) => {
+    const s = p.section;
+    const status = s.download && p.state === "added" ? downloadChipHtml({ ...p, download: s.download }) : "";
+    const rows = (s.rows || []).map((r) => `<div><dt>${esc(r.label)}</dt><dd>${r.date ? dateRowHtml(r.date) : esc(r.value)}</dd></div>`).join("");
+    return `<section class="psec" data-plugin-section="${esc(p.id)}"><div class="psec-head"><h3>${esc(s.title || p.label)}</h3>${status}</div>${rows ? `<dl class="psec-rows">${rows}</dl>` : ""}</section>`;
+  }).join("");
+}
+
 function pluginButtonsHtml(id) {
   return (pluginActions.get(id) || []).map((p) => {
     if (p.state === "added") {
+      if (p.section?.download) {   // its status is in the plugin's section; here only a way into the plugin
+        const href = safeUrl(p.url);
+        return href ? `<a class="btn plugin-added" href="${esc(href)}" target="_blank" rel="noopener">✓ In ${esc(p.label)} ↗</a>` : `<span class="btn plugin-added">✓ In ${esc(p.label)}</span>`;
+      }
       if (p.download) return downloadChipHtml(p);
       const href = safeUrl(p.url);
       const text = `✓ In ${esc(p.label)}`;
@@ -2601,6 +2628,8 @@ function showPluginActions(id) {
   const dlg = $("#detail");
   const slot = dlg.dataset.id === id ? dlg.querySelector(".plugin-slot") : null;
   if (slot) slot.innerHTML = pluginButtonsHtml(id);
+  const secs = dlg.dataset.id === id ? dlg.querySelector(".plugin-sections") : null;
+  if (secs) secs.innerHTML = pluginSectionsHtml(id);
   schedulePluginRefresh(id);
 }
 

@@ -61,3 +61,9 @@ def test_add_button_opens_a_menu_and_names_are_searched_before_adding():
     assert "/api/catalog/search?kind=" in js and '"/api/items/entry"' in js
     assert "findResults.length === 1" in js and "data-find-typed" in js and "data-find-pick" in js
     assert ".add-menu" in css and ".find-row" in css
+
+
+def test_plugins_can_add_a_section_to_the_card():
+    js, css, _ = source()
+    assert "function pluginSectionsHtml(" in js and 'class="plugin-sections"' in js and "function dateRowHtml(" in js
+    assert 'data-plugin-section=' in js and ".psec" in css and ".when-due" in css

@@ -38,7 +38,12 @@ class Plugin:
         return []
 
     async def status(self, item: dict, settings, http) -> dict:
-        """{"state": "available" | "added", "message": str | None, "url": str | None}. Raises PluginError."""
+        """{"state": "available" | "added", "message": str | None, "url": str | None}. Raises PluginError.
+
+        May also carry a `section` shown on the item's card under the plugin's name:
+        {"title": str, "download": {"state": "downloaded|downloading|pending|missing", "label", "percent"?, ...} | None,
+         "rows": [{"label": str, "value": str} | {"label": str, "date": "YYYY-MM-DD"}]}.
+        """
         return {"state": "available"}
 
     async def run(self, item: dict, settings, http) -> dict:
