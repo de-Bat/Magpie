@@ -75,3 +75,9 @@ def test_plugin_sections_sit_after_the_card_content_just_above_the_original():
     assert detail.index('class="plugin-sections"') < detail.index("<h3>Original</h3>")
     assert detail.index('class="plugin-sections"') - detail.index("relatedHtml(item)}") < 120   # directly after the last content section
     assert js.index('class="plugin-sections"') > js.index("<h3>About</h3>")
+
+
+def test_header_keeps_only_a_jump_capsule_and_phone_ratings_share_one_row():
+    js, css, _ = source()
+    assert 'class="btn plugin-added plugin-jump" data-jump-section=' in js and "downloadChipHtml({ ...p, download: p.section.download }" not in js
+    assert 'class="l-short"' in js and ".scores { flex-wrap: nowrap" in css

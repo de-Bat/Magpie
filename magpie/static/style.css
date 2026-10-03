@@ -737,3 +737,15 @@ button.act-main:hover .act-text { text-decoration: underline; }
 .psec.flash { animation: psec-flash 1.4s ease-out; }
 @keyframes psec-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
 @media (prefers-reduced-motion: reduce) { .psec.flash { animation: none; border-color: var(--accent); } }
+
+/* ratings: all of them in one row on a phone */
+.l-short { display: none; }
+@media (max-width: 640px) {
+  .scores { flex-wrap: nowrap; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+  .score { flex: 1 1 0; min-width: 0; padding: 6px 4px; }
+  .score b { font-size: 16px; white-space: nowrap; }
+  .score small { display: block; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .l-full, .score-extra { display: none; }
+  .l-short { display: inline; }
+}
+.btn.plugin-jump { color: var(--text); }

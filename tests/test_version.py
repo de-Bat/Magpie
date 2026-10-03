@@ -37,7 +37,10 @@ def test_release_notes_are_served_to_the_about_panel_newest_first(tmp_path):
     from magpie import releases
     notes = releases.load()
     assert notes and notes[0]["features"] and all(f["title"] for r in notes for f in r["features"])
-    assert notes[0]["version"] in (magpie.__version__, "next")   # the running release (or what is coming) is listed first
+    versions = [r["version"] for r in notes if r["version"] != "next"]
+    key = lambda v: tuple(int(x) for x in v.split("."))
+    assert versions == sorted(set(versions), key=key, reverse=True)        # newest first, none twice
+    assert [r["version"] for r in notes].count("next") <= 1 and "next" not in versions
     with TestClient(create_app(Settings(data_dir=tmp_path), http=httpx.AsyncClient())) as client:
         assert client.get("/api/settings").json()["releases"] == notes
     js = (STATIC / "app.js").read_text()

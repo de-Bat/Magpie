@@ -2370,15 +2370,16 @@ function showInstallHint() {
 function scoresHtml(m) {
   const scores = [
     ["IMDb", m.imdb_rating, m.imdb_votes ? `${m.imdb_votes} votes` : ""],
-    ["Rotten Tomatoes", m.rotten_tomatoes],
-    ["Metacritic", m.metacritic],
+    ["Rotten Tomatoes", m.rotten_tomatoes, "", "RT"],
+    ["Metacritic", m.metacritic, "", "Meta"],
     ["TMDB", m.tmdb_rating],
     ["GitHub stars", m.stars != null ? Number(m.stars).toLocaleString() : null],
     ["Rating", m.rating, m.rating_count ? `${m.rating_count} ratings` : ""],
   ].filter(([, v]) => v != null && v !== "");
   if (!scores.length) return "";
-  return `<div class="scores">${scores.map(([label, v, extra]) =>
-    `<div class="score"><b>${esc(v)}</b><small>${esc(label)}${extra ? `<br>${esc(extra)}` : ""}</small></div>`).join("")}</div>`;
+  // on a phone every rating shares one row, so long names shrink ("Rotten Tomatoes" → "RT") and vote counts drop to a tooltip
+  return `<div class="scores">${scores.map(([label, v, extra, short]) =>
+    `<div class="score"${extra ? ` title="${esc(extra)}"` : ""}><b>${esc(v)}</b><small>${short ? `<span class="l-full">${esc(label)}</span><span class="l-short">${esc(short)}</span>` : esc(label)}${extra ? `<span class="score-extra"><br>${esc(extra)}</span>` : ""}</small></div>`).join("")}</div>`;
 }
 
 function statusHtml(item) {
@@ -2557,14 +2558,13 @@ let pluginCatalog = null;          // GET /api/plugins, remembered until setting
 const DOWNLOAD_ICON = { downloaded: "✓", downloading: "↓", pending: "⏳", missing: "⚠" };
 
 // After it has been added: where the download stands (downloaded / downloading n% / pending / missing), with a link to it.
-function downloadChipHtml(p, jump = false) {
+function downloadChipHtml(p) {
   const d = p.download, href = safeUrl(p.url);
   const percent = d.state === "downloading" ? Math.max(0, Math.min(100, Number(d.percent) || 0)) : null;
   const tip = [p.label, d.label, d.eta, d.detail].filter(Boolean).join(" · ");
   const count = d.total && d.state !== "downloaded" ? `<span class="dl-count">${esc(`${d.have ?? 0}/${d.total}`)}</span>` : "";
   const inner = `<span class="dl-name">${esc(p.label)}</span><span class="dl-icon" aria-hidden="true">${DOWNLOAD_ICON[d.state] || "•"}</span><span class="dl-label">${esc(d.label)}</span>${count}`;
   const cls = `btn plugin-added dl dl-${esc(d.state)}`, style = percent === null ? "" : ` style="--pct:${percent}%"`;
-  if (jump) return `<button type="button" class="${cls}"${style} data-jump-section="${esc(p.id)}" title="${esc(tip)} — show details" aria-label="${esc(tip)} — show details">${inner}</button>`;
   return href ? `<a class="${cls}"${style} href="${esc(href)}" target="_blank" rel="noopener" title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</a>`
     : `<span class="${cls}"${style} title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</span>`;
 }
@@ -2594,7 +2594,10 @@ function pluginSectionsHtml(id) {
 function pluginButtonsHtml(id) {
   return (pluginActions.get(id) || []).map((p) => {
     if (p.state === "added") {
-      if (p.section?.download) return downloadChipHtml({ ...p, download: p.section.download }, true);   // a capsule that jumps to the plugin's section
+      if (p.section?.download) {   // just a capsule that jumps to the plugin's section; the status itself is shown there
+        const tip = `${p.label}: ${[p.section.download.label, p.section.download.eta].filter(Boolean).join(" · ")} — show details`;
+        return `<button type="button" class="btn plugin-added plugin-jump" data-jump-section="${esc(p.id)}" title="${esc(tip)}" aria-label="${esc(tip)}">${esc(p.label)} <span aria-hidden="true">↓</span></button>`;
+      }
       if (p.download) return downloadChipHtml(p);
       const href = safeUrl(p.url);
       const text = `✓ In ${esc(p.label)}`;

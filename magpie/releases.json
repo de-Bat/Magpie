@@ -1,14 +1,33 @@
 [
   {
+    "version": "next",
+    "features": [
+      {
+        "title": "Tidier card on phones",
+        "text": "All movie and TV ratings fit on one row, and Radarr/Sonarr leave a small capsule in the header that jumps to their section."
+      }
+    ]
+  },
+  {
+    "version": "0.19.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Jump to a plugin's details",
+        "text": "Radarr and Sonarr show a status capsule at the top of the card that jumps to their section, which now always says when a film is out digitally and on disc."
+      },
+      {
+        "title": "Plugin sections after the content",
+        "text": "Radarr and Sonarr sections sit just above the original capture."
+      }
+    ]
+  },
+  {
     "version": "0.18.0",
     "features": [
       {
         "title": "Release notes in About",
         "text": "Settings → About lists the main features of each release, newest first."
-      },
-      {
-        "title": "Jump to a plugin's details",
-        "text": "Radarr and Sonarr show a status capsule at the top of the card that jumps to their section, which now always says when a film is out digitally and on disc."
       }
     ],
     "date": "2026-10-03"
