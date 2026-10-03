@@ -6,6 +6,7 @@ set -e  # Exit on any error
 LOG_FILE="deploy_$(date +%Y%m%d_%H%M%S).log"
 TAG_TYPE=""
 TAG_MESSAGE=""
+SHOW_LOGS=false
 
 show_usage() {
   cat << EOF
@@ -16,12 +17,15 @@ Options:
   --tag-minor        Bump minor version and tag after deploy
   --tag-patch        Bump patch version and tag after deploy
   -m, --message MSG  Custom tag message
+  --foreground       Show logs in foreground (default: start in background)
+  --logs             Alias for --foreground
   -h, --help         Show this help message
 
 Examples:
-  $0                              # Deploy without tagging
-  $0 --tag-minor                  # Deploy and bump minor version
-  $0 --tag-major -m "Major Release"  # Deploy, bump major, with custom message
+  $0                              # Deploy in background (default)
+  $0 --foreground                 # Deploy and show logs in foreground
+  $0 --tag-minor                  # Deploy in background and bump minor version
+  $0 --tag-major --logs -m "v2.0" # Deploy, show logs, bump major with message
 EOF
 }
 
@@ -52,6 +56,10 @@ while [[ $# -gt 0 ]]; do
     -m|--message)
       TAG_MESSAGE="$2"
       shift 2
+      ;;
+    --foreground|--logs)
+      SHOW_LOGS=true
+      shift
       ;;
     -h|--help)
       show_usage
@@ -102,4 +110,12 @@ else
 fi
 
 log "Logs saved to $LOG_FILE"
-sudo docker compose logs -f magpie
+
+# Show logs if requested, otherwise just report background status
+if [ "$SHOW_LOGS" = true ]; then
+  log "📺 Showing live logs (press Ctrl+C to exit)..."
+  sudo docker compose logs -f magpie
+else
+  log "🎯 Running in background (use 'sudo docker compose logs -f magpie' to view logs)"
+  log "✅ Ready to accept requests at http://localhost:8000"
+fi
