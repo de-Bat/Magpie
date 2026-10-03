@@ -51,8 +51,10 @@ class Radarr(ArrPlugin):
         return {"state": "missing", "label": "Missing", "detail": "No release found yet"}
 
     def _section(self, movie: dict, download: dict | None) -> dict:
-        return section("Radarr", download, date_row("Digital release", movie.get("digitalRelease")),
-                       date_row("In cinemas", movie.get("inCinemas")), date_row("Physical release", movie.get("physicalRelease")))
+        # when it can be had: in cinemas (if it was), and as a digital and a physical release, which are always listed
+        return section("Radarr", download, date_row("In cinemas", movie.get("inCinemas")),
+                       date_row("Digital release", movie.get("digitalRelease"), "Not announced yet"),
+                       date_row("Physical release", movie.get("physicalRelease"), "Not announced yet"))
 
     async def status(self, item, settings, http):
         movie = await self._find(item, settings, http)

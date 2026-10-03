@@ -66,4 +66,4 @@ def test_add_button_opens_a_menu_and_names_are_searched_before_adding():
 def test_plugins_can_add_a_section_to_the_card():
     js, css, _ = source()
     assert "function pluginSectionsHtml(" in js and 'class="plugin-sections"' in js and "function dateRowHtml(" in js
-    assert 'data-plugin-section=' in js and ".psec" in css and ".when-due" in css
+    assert 'data-plugin-section=' in js and 'data-jump-section' in js and ".psec" in css and ".when-due" in css

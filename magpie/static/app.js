@@ -2557,13 +2557,14 @@ let pluginCatalog = null;          // GET /api/plugins, remembered until setting
 const DOWNLOAD_ICON = { downloaded: "✓", downloading: "↓", pending: "⏳", missing: "⚠" };
 
 // After it has been added: where the download stands (downloaded / downloading n% / pending / missing), with a link to it.
-function downloadChipHtml(p) {
+function downloadChipHtml(p, jump = false) {
   const d = p.download, href = safeUrl(p.url);
   const percent = d.state === "downloading" ? Math.max(0, Math.min(100, Number(d.percent) || 0)) : null;
   const tip = [p.label, d.label, d.eta, d.detail].filter(Boolean).join(" · ");
   const count = d.total && d.state !== "downloaded" ? `<span class="dl-count">${esc(`${d.have ?? 0}/${d.total}`)}</span>` : "";
   const inner = `<span class="dl-name">${esc(p.label)}</span><span class="dl-icon" aria-hidden="true">${DOWNLOAD_ICON[d.state] || "•"}</span><span class="dl-label">${esc(d.label)}</span>${count}`;
   const cls = `btn plugin-added dl dl-${esc(d.state)}`, style = percent === null ? "" : ` style="--pct:${percent}%"`;
+  if (jump) return `<button type="button" class="${cls}"${style} data-jump-section="${esc(p.id)}" title="${esc(tip)} — show details" aria-label="${esc(tip)} — show details">${inner}</button>`;
   return href ? `<a class="${cls}"${style} href="${esc(href)}" target="_blank" rel="noopener" title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</a>`
     : `<span class="${cls}"${style} title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</span>`;
 }
@@ -2586,17 +2587,14 @@ function pluginSectionsHtml(id) {
     const s = p.section;
     const status = s.download && p.state === "added" ? downloadChipHtml({ ...p, download: s.download }) : "";
     const rows = (s.rows || []).map((r) => `<div><dt>${esc(r.label)}</dt><dd>${r.date ? dateRowHtml(r.date) : esc(r.value)}</dd></div>`).join("");
-    return `<section class="psec" data-plugin-section="${esc(p.id)}"><div class="psec-head"><h3>${esc(s.title || p.label)}</h3>${status}</div>${rows ? `<dl class="psec-rows">${rows}</dl>` : ""}</section>`;
+    return `<section class="psec" id="psec-${esc(p.id)}" data-plugin-section="${esc(p.id)}"><div class="psec-head"><h3>${esc(s.title || p.label)}</h3>${status}</div>${rows ? `<dl class="psec-rows">${rows}</dl>` : ""}</section>`;
   }).join("");
 }
 
 function pluginButtonsHtml(id) {
   return (pluginActions.get(id) || []).map((p) => {
     if (p.state === "added") {
-      if (p.section?.download) {   // its status is in the plugin's section; here only a way into the plugin
-        const href = safeUrl(p.url);
-        return href ? `<a class="btn plugin-added" href="${esc(href)}" target="_blank" rel="noopener">✓ In ${esc(p.label)} ↗</a>` : `<span class="btn plugin-added">✓ In ${esc(p.label)}</span>`;
-      }
+      if (p.section?.download) return downloadChipHtml({ ...p, download: p.section.download }, true);   // a capsule that jumps to the plugin's section
       if (p.download) return downloadChipHtml(p);
       const href = safeUrl(p.url);
       const text = `✓ In ${esc(p.label)}`;
@@ -2935,7 +2933,7 @@ async function askToken() {
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#add-menu, #fab-more")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-find],[data-find-pick],[data-find-typed]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed]");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -2982,6 +2980,12 @@ document.addEventListener("click", async (e) => {
     if (!confirm("Delete every saved conversation log? This can't be undone.")) return;
     try { await apiWithSetup("/api/logs", { method: "DELETE" }); } catch (err) { return toast(`Couldn't delete: ${errorMessage(err)}`); }
     return loadLogs();
+  }
+  if (t.dataset.jumpSection !== undefined) {
+    const sec = $("#detail").querySelector(`[data-plugin-section="${CSS.escape(t.dataset.jumpSection)}"]`);
+    sec?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    sec?.classList.remove("flash"); void sec?.offsetWidth; sec?.classList.add("flash");
+    return;
   }
   if (t.dataset.find !== undefined) return openFind(t.dataset.find);
   if (t.dataset.findPick !== undefined) return addEntry(findResults[Number(t.dataset.findPick)]);

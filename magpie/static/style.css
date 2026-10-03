@@ -734,3 +734,6 @@ button.act-main:hover .act-text { text-decoration: underline; }
 .release ul { margin: 8px 0 2px; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
 .release li b { display: block; }
 .release li span { color: var(--muted); }
+.psec.flash { animation: psec-flash 1.4s ease-out; }
+@keyframes psec-flash { from { box-shadow: 0 0 0 3px var(--accent); } to { box-shadow: 0 0 0 3px transparent; } }
+@media (prefers-reduced-motion: reduce) { .psec.flash { animation: none; border-color: var(--accent); } }

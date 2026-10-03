@@ -5,6 +5,10 @@
       {
         "title": "Release notes in About",
         "text": "Settings → About lists the main features of each release, newest first."
+      },
+      {
+        "title": "Jump to a plugin's details",
+        "text": "Radarr and Sonarr show a status capsule at the top of the card that jumps to their section, which now always says when a film is out digitally and on disc."
       }
     ],
     "date": "2026-10-03"

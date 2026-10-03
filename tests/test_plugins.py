@@ -359,13 +359,14 @@ def test_radarr_section_shows_status_and_when_the_digital_release_is_due(tmp_pat
     got = section_of(tmp_path, "movie", [film(**dates, isAvailable=False)], [FIGHT_CLUB])
     sec = got["section"]
     assert sec["title"] == "Radarr" and sec["download"]["label"] == "Not released yet"
-    assert sec["rows"] == [{"label": "Digital release", "date": "2026-11-02"}, {"label": "In cinemas", "date": "2026-08-01"}]  # unset dates are left out
+    assert sec["rows"] == [{"label": "In cinemas", "date": "2026-08-01"}, {"label": "Digital release", "date": "2026-11-02"},
+                           {"label": "Physical release", "value": "Not announced yet"}]   # a date nobody has set yet is said so
 
 
 def test_radarr_section_is_there_before_the_film_is_added_with_the_release_dates_from_the_lookup(tmp_path):
     got = section_of(tmp_path, "movie", [], [{**FIGHT_CLUB, "digitalRelease": "2026-11-02T00:00:00Z"}])
     assert got["state"] == "available" and got["section"]["download"] is None
-    assert got["section"]["rows"] == [{"label": "Digital release", "date": "2026-11-02"}]
+    assert got["section"]["rows"] == [{"label": "Digital release", "date": "2026-11-02"}, {"label": "Physical release", "value": "Not announced yet"}]
 
 
 def test_sonarr_section_shows_the_next_episode_and_show_status(tmp_path):

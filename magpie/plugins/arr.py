@@ -52,10 +52,13 @@ QUEUE_WAITING = {"queued": "Queued", "paused": "Paused", "delay": "Waiting (dela
                  "fallback": "Queued"}
 
 
-def date_row(label: str, value) -> dict | None:
-    """A dated line for a card section; the app words it ("Nov 2, 2026 · in 12 days") in the viewer's own calendar."""
+def date_row(label: str, value, unknown: str | None = None) -> dict | None:
+    """A dated line for a card section; the app words it ("Nov 2, 2026 · in 12 days") in the viewer's own calendar.
+    No date: left out, or shown as `unknown` ("Not announced yet") when given."""
     day = str(value or "")[:10]
-    return {"label": label, "date": day} if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and not day.startswith("0001") else None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day) and not day.startswith("0001"):
+        return {"label": label, "date": day}
+    return {"label": label, "value": unknown} if unknown else None
 
 
 def text_row(label: str, value) -> dict | None:
