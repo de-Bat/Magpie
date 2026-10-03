@@ -31,3 +31,23 @@ def test_about_is_one_panel_inside_settings():
     assert "about-dialog" not in html and "fonts.googleapis.com" not in html
     assert "View Full About" not in js and 'data-action="about"' not in js and "close-about" not in js
     assert 'section("About", aboutHtml(data))' in js and "data.status?.version" in js
+
+
+def test_release_notes_are_served_to_the_about_panel_newest_first(tmp_path):
+    from magpie import releases
+    notes = releases.load()
+    assert notes and notes[0]["features"] and all(f["title"] for r in notes for f in r["features"])
+    assert notes[0]["version"] in (magpie.__version__, "next")   # the running release (or what is coming) is listed first
+    with TestClient(create_app(Settings(data_dir=tmp_path), http=httpx.AsyncClient())) as client:
+        assert client.get("/api/settings").json()["releases"] == notes
+    js = (STATIC / "app.js").read_text()
+    assert "function releasesHtml(" in js and "${releasesHtml(data.releases)}" in js
+
+
+def test_unreadable_release_notes_are_just_empty(tmp_path):
+    from magpie import releases
+    bad = tmp_path / "r.json"
+    bad.write_text("{not json")
+    assert releases.load(bad) == [] and releases.load(tmp_path / "missing.json") == []
+    bad.write_text('[{"version": "1.0.0", "features": [{"title": "A"}, {"text": "no title"}, 3]}, {"nope": 1}, 7]')
+    assert releases.load(bad) == [{"version": "1.0.0", "date": None, "features": [{"title": "A"}]}]

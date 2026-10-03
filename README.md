@@ -212,6 +212,10 @@ Magpie finds the title in Radarr/Sonarr by IMDb or TMDB id when it has one, othe
 
 **Settings → Plugins** installs more plugins from a public git repository (one repository can hold many) or from a single `.py` file (a link or an upload), and updates or removes them. Because a plugin runs code on the server, this is **off** until you set `MAGPIE_ALLOW_PLUGIN_INSTALL=true` in the server's environment (`.env`) and restart; it can't be switched on from the app. Only install plugins you trust. How to write one, with a full example: [docs/PLUGINS.md](docs/PLUGINS.md).
 
+## Release notes
+
+Settings → About lists the main features of each release. They live in `magpie/releases.json`, newest first. Add what you build to the entry whose version is `"next"` (create it if it is missing); `./tag.sh` renames it to the new version and date inside the release commit.
+
 ## iPhone: install as an app (PWA)
 
 The web UI is a Progressive Web App. On iPhone, open your server's address in **Safari**, tap **Share → Add to Home Screen**, and Magpie opens full-screen like a native app.

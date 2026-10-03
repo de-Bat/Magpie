@@ -1,0 +1,159 @@
+[
+  {
+    "version": "next",
+    "features": [
+      {
+        "title": "Release notes in About",
+        "text": "Settings → About lists the main features of each release, newest first."
+      }
+    ]
+  },
+  {
+    "version": "0.17.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Plugin sections on the card",
+        "text": "Radarr and Sonarr show their status and dates on the card: when the digital release is due, the next episode, and where the download stands."
+      }
+    ]
+  },
+  {
+    "version": "0.16.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Split Add button",
+        "text": "The main part adds a screenshot or link as before; the small arrow opens the menu for movies, TV shows and books."
+      }
+    ]
+  },
+  {
+    "version": "0.15.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Add movies, TV shows and books by name",
+        "text": "Search by title, pick the right one from a list, and Magpie fills in the poster, ratings and links. No screenshot needed."
+      }
+    ]
+  },
+  {
+    "version": "0.14.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Activity tray",
+        "text": "A stack at the bottom shows every analysis, re-analysis and refresh as it runs and how it ended; finished rows fade or can be dismissed."
+      }
+    ]
+  },
+  {
+    "version": "0.13.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Download status for Radarr and Sonarr",
+        "text": "After adding, see whether it is downloaded, downloading (with a percentage), pending or missing."
+      },
+      {
+        "title": "Smoother settings",
+        "text": "Saving shows a message and closes the panel; connection tests show success or failure inline; root folder and quality profile are drop-downs."
+      }
+    ]
+  },
+  {
+    "version": "0.12.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Better covers",
+        "text": "Wide pictures get a blurred backdrop instead of awkward bars; logos stay crisp on a plain background."
+      }
+    ]
+  },
+  {
+    "version": "0.11.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "About shows the real version",
+        "text": "One About panel in Settings, with the version of the running server."
+      }
+    ]
+  },
+  {
+    "version": "0.10.0",
+    "date": "2026-10-03",
+    "features": [
+      {
+        "title": "Plugins",
+        "text": "Extend Magpie: built-in Radarr and Sonarr to send saved films and shows to your download list, plus plugins installed from a git repository or a single file."
+      },
+      {
+        "title": "Duplicate detection",
+        "text": "Saving the same screenshot or link twice merges into the existing card."
+      },
+      {
+        "title": "Deploy and release scripts",
+        "text": "deploy.sh and tag.sh update, tag and restart the server."
+      }
+    ]
+  },
+  {
+    "version": "0.4.0",
+    "date": "2026-10-02",
+    "features": [
+      {
+        "title": "GitHub links become repositories",
+        "text": "An item whose own link is a GitHub repository is filed as one, with stars, language and README picture."
+      },
+      {
+        "title": "More reliable article links",
+        "text": "Magpie finds an article's exact address more reliably."
+      }
+    ]
+  },
+  {
+    "version": "0.3.0",
+    "date": "2026-10-02",
+    "features": [
+      {
+        "title": "Gemini web search",
+        "text": "Gemini models can search the web with Google Search grounding."
+      },
+      {
+        "title": "Conversation logs and debug mode",
+        "text": "See what was sent to the AI models and what came back, one log per operation."
+      }
+    ]
+  },
+  {
+    "version": "0.2.0",
+    "date": "2026-10-01",
+    "features": [
+      {
+        "title": "Finds the repo and the article",
+        "text": "For every AI provider, with more related links: repositories, packages, apps, papers and companies."
+      },
+      {
+        "title": "Per-model rate limits",
+        "text": "A rate-limited model pauses and retries instead of failing."
+      }
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "date": "2026-09-30",
+    "features": [
+      {
+        "title": "Screenshots identified for you",
+        "text": "Save screenshots of recommendations; Magpie identifies them with AI and OCR and looks up posters, covers, ratings and links."
+      },
+      {
+        "title": "Offline library",
+        "text": "An installable app that works offline and syncs when the server is back; search across everything you saved."
+      }
+    ]
+  }
+]

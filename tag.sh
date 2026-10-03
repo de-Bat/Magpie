@@ -315,15 +315,31 @@ case $COMMAND in
     undo_release() {
       git tag -d "$new_version" > /dev/null 2>&1 || true
       if [ "$committed" = true ]; then git reset -q --mixed HEAD~1; fi
+      if [ "${notes_changed:-false}" = true ]; then git checkout -q -- "$notes_file" 2>/dev/null || true; rm -f "$notes_file.new"; fi
       if git ls-files --error-unmatch -- "$version_file" > /dev/null 2>&1; then git checkout -q -- "$version_file"; else rm -f "$version_file"; fi
     }
     # (replaced rather than rewritten in place, so it works even if an earlier sudo run left the file owned by root)
     printf '%s\n' "${new_version#v}" > "$version_file.new" && mv -f "$version_file.new" "$version_file" || error "Couldn't write $VERSION_FILE"
+    # The release notes (the About panel) keep what is coming under "next"; it becomes this release
+    notes_file="$root/${TAG_NOTES_FILE:-magpie/releases.json}"
+    notes_changed=false
+    if [ -f "$notes_file" ] && grep -q '"version": *"next"' "$notes_file" && command -v python3 > /dev/null 2>&1; then
+      python3 - "$notes_file" "${new_version#v}" "$(date +%F)" <<'PY' && notes_changed=true
+import json, sys
+path, version, day = sys.argv[1:4]
+notes = json.load(open(path, encoding="utf-8"))
+for entry in notes:
+    if entry.get("version") == "next":
+        entry["version"], entry["date"] = version, day
+open(path + ".new", "w", encoding="utf-8").write(json.dumps(notes, indent=2, ensure_ascii=False) + "\n")
+PY
+      if [ "$notes_changed" = true ]; then mv -f "$notes_file.new" "$notes_file" && git add -- "$notes_file"; fi
+    fi
     git add -- "$version_file"
-    if git diff --cached --quiet -- "$version_file"; then
+    if git diff --cached --quiet -- "$version_file" "$notes_file"; then
       log "$VERSION_FILE already says ${new_version#v}"
     else
-      git commit -q -m "Release $new_version" -- "$version_file" || { undo_release; error "Couldn't commit the new version (is your git user.name / user.email set?)"; }
+      git commit -q -m "Release $new_version" -- "$version_file" $([ "$notes_changed" = true ] && printf '%s' "$notes_file") || { undo_release; error "Couldn't commit the new version (is your git user.name / user.email set?)"; }
       committed=true
       log "Recorded the version in $VERSION_FILE"
     fi

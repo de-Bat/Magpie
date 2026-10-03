@@ -724,3 +724,13 @@ button.act-main:hover .act-text { text-decoration: underline; }
 .when { margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .when-due { color: var(--accent); background: color-mix(in oklab, var(--accent) 16%, transparent); }
 .when-past { opacity: .65; background: color-mix(in oklab, currentColor 12%, transparent); }
+
+/* ---- release notes in About ---- */
+.releases { text-align: left; margin: 0 auto 22px; max-width: 520px; max-height: 320px; overflow: auto; }
+.releases h5 { margin: 0 0 8px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.release { border-top: 1px solid var(--border); padding: 8px 0; }
+.release summary { cursor: pointer; display: flex; justify-content: space-between; gap: 12px; font-size: 14px; }
+.release-date { color: var(--muted); font-size: 12px; }
+.release ul { margin: 8px 0 2px; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.release li b { display: block; }
+.release li span { color: var(--muted); }

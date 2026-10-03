@@ -2675,6 +2675,16 @@ const MATERIAL_ICONS = {
 };
 
 // Settings → About: the one place that describes Magpie (and says which version is running).
+// What each release brought, newest first; the latest is open.
+function releasesHtml(releases) {
+  if (!releases?.length) return "";
+  const when = (d) => { const t = d && new Date(`${d}T00:00:00`); return t && !Number.isNaN(t.getTime()) ? t.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : ""; };
+  const items = releases.filter((r) => r.features?.length).map((r, i) => `<details class="release"${i === 0 ? " open" : ""}>
+    <summary><b>${r.version === "next" ? "Coming next" : `Version ${esc(r.version)}`}</b>${when(r.date) ? `<span class="release-date">${esc(when(r.date))}</span>` : ""}</summary>
+    <ul>${r.features.map((f) => `<li><b>${esc(f.title)}</b>${f.text ? `<span>${esc(f.text)}</span>` : ""}</li>`).join("")}</ul></details>`).join("");
+  return `<div class="releases"><h5>What's new</h5>${items}</div>`;
+}
+
 function aboutHtml(data) {
   const v = data.status?.version;
   const icon = (path) => `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="${path}"/></svg>`;
@@ -2688,6 +2698,7 @@ function aboutHtml(data) {
       ${feature("screenshot_monitor", "Screenshot capture")}${feature("smart_toy", "AI identification")}${feature("local_offer", "Auto tagging")}
       ${feature("storage", "Offline library")}${feature("link", "Rich metadata")}${feature("search", "Smart search")}
     </div>
+    ${releasesHtml(data.releases)}
     <p class="about-links"><a href="https://github.com/de-Bat/Magpie" target="_blank" rel="noopener">GitHub</a><span class="separator">•</span><a href="https://github.com/de-Bat/Magpie/issues" target="_blank" rel="noopener">Report an issue</a></p>
   </div>`;
 }

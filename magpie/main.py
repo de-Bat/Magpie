@@ -29,7 +29,7 @@ from . import catalog
 from .bulk import BulkBusy, BulkRunner
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
-from . import __version__, config
+from . import __version__, config, releases
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, Settings, mask
 from .models import check_key
 from . import convlog, limits, plugins
@@ -302,6 +302,7 @@ def create_app(
             "status": server_status(),
             "providers": provider_choices(), "resolved_analyzer": settings.resolved_analyzer(),
             "plugins": [p.describe(settings) for p in plugins.all()],
+            "releases": releases.load(),
             "plugin_admin": {"allowed": plugin_loader.allowed(), "env": plugin_loader.ALLOW_ENV,
                              "sources": plugin_loader.describe_sources(settings.data_dir)},
         }
