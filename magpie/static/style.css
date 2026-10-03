@@ -417,7 +417,7 @@ body { padding-bottom: env(safe-area-inset-bottom); -webkit-tap-highlight-color:
 #tag-btn .tagn::before { content: "· "; }
 /* Small phones: shorter labels keep the four controls on one row */
 @media (max-width: 400px) {
-  .subbar .lbl, .subbar .to, .cols-icon { display: none; }
+  .subbar .lbl, .subbar .lbl-full, .cols-icon { display: none; }
   #tag-btn .tagn::before { content: ""; }
   .subbar #tag-btn { padding: 4px 11px; font-weight: 600; }
   .subbar .seg button { padding: 4px 8px; }
@@ -757,3 +757,7 @@ button.act-main:hover .act-text { text-decoration: underline; }
   .open-src .open-ico { display: inline-flex; }
   .open-src .open-text { display: none; }
 }
+
+.lbl-short { display: none; }
+@media (max-width: 400px) { .subbar .lbl-short { display: inline; } }
+.fab-split { direction: ltr; }   /* the arrow stays on the right-hand end, also in right-to-left languages */

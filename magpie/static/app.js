@@ -7,11 +7,17 @@
 // edits are applied locally and queued; the queue is replayed in order whenever the
 // self-hosted server is reachable, then changes are pulled with GET /api/sync?since=.
 
-const CATEGORY_LABELS = {
+const CATEGORY_NAMES = {
   movie: "🎬 Movie", tv_show: "📺 TV show", github_repo: "💻 GitHub repo", recipe: "🍳 Recipe",
   book: "📚 Book", music: "🎵 Music", podcast: "🎙️ Podcast", video: "▶️ Video", article: "📰 Article",
   product: "🛍️ Product", place: "📍 Place", event: "📅 Event", app: "📱 App", course: "🎓 Course", other: "📌 Other",
 };
+// "🎬 Movie" in the app's language; refilled when the language changes
+const CATEGORY_LABELS = {};
+function localizeCategories() {
+  for (const [key, label] of Object.entries(CATEGORY_NAMES)) { const [icon, ...name] = label.split(" "); CATEGORY_LABELS[key] = `${icon} ${tr(name.join(" "))}`; }
+}
+localizeCategories();
 // Types whose pictures are landscape (repo social cards, page headers): shown whole over the type's cover, not cropped.
 const WIDE_CATEGORIES = new Set(["github_repo", "article", "video", "product", "app", "other", "place", "event", "course"]);
 const typeName = (c) => (CATEGORY_LABELS[c] || c || "Other").replace(/^\S+ /, "");
@@ -330,12 +336,14 @@ function trackItem(prev, next) {
 
 function activityText(kind, item, outcome = "running") {
   const name = itemName(item);
-  const verbs = { analyze: ["Analyzing", "Identified", "identify"], reanalyze: ["Re-analyzing", "Re-analyzed", "re-analyze"],
-    correct: ["Applying your correction to", "Updated", "apply the correction to"], refresh: ["Refreshing metadata for", "Refreshed metadata for", "refresh metadata for"] }[kind];
-  if (outcome === "running") return `${verbs[0]} ${name}…`;
-  if (outcome === "failed") return `Couldn't ${verbs[2]} ${name}`;
+  const phrases = { analyze: ["Analyzing {name}…", "Identified {name}", "Couldn't identify {name}"],
+    reanalyze: ["Re-analyzing {name}…", "Re-analyzed {name}", "Couldn't re-analyze {name}"],
+    correct: ["Applying your correction to {name}…", "Updated {name}", "Couldn't apply the correction to {name}"],
+    refresh: ["Refreshing metadata for {name}…", "Refreshed metadata for {name}", "Couldn't refresh metadata for {name}"] }[kind];
+  if (outcome === "running") return tr(phrases[0], { name });
+  if (outcome === "failed") return tr(phrases[2], { name });
   const type = (kind === "analyze" || kind === "reanalyze") && item.category ? ` · ${typeName(item.category)}` : "";
-  return `${verbs[1]} ${name}${type}`;
+  return `${tr(phrases[1], { name })}${type}`;
 }
 
 // Library-wide refresh / re-analyze: one row with progress.
@@ -381,8 +389,8 @@ function fillActivityRow(el, a) {
   const main = `<span class="act-text">${esc(a.text)}</span>${a.note ? `<span class="act-note">${esc(a.note)}</span>` : ""}`;
   el.innerHTML = `<span class="act-icon" aria-hidden="true">${finished ? ACTIVITY_ICON[a.state] : ""}</span>
     ${item ? `<button type="button" class="act-main" data-open-item="${esc(a.itemId)}" title="Open it">${main}</button>` : `<span class="act-main">${main}</span>`}
-    ${retry ? `<button type="button" class="act-retry" data-activity-retry="${esc(a.itemId)}">Retry</button>` : ""}
-    ${finished ? `<button type="button" class="act-x" data-activity-dismiss="${esc(a.key)}" aria-label="Dismiss">×</button>` : ""}
+    ${retry ? `<button type="button" class="act-retry" data-activity-retry="${esc(a.itemId)}">${esc(tr("Retry"))}</button>` : ""}
+    ${finished ? `<button type="button" class="act-x" data-activity-dismiss="${esc(a.key)}" aria-label="${esc(tr("Dismiss"))}">×</button>` : ""}
     ${a.progress != null ? `<i class="act-bar"><i style="width:${Math.round(a.progress * 100)}%"></i></i>` : ""}`;
 }
 
@@ -478,7 +486,7 @@ async function addLink(raw, note) {
 
 // ---- add by name: movie, TV show, book ---------------------------------------
 
-const FIND = {
+const FIND = {   // English wording, translated when shown
   movie: { title: "Add a movie", placeholder: "Movie title", icon: "🎬" },
   tv_show: { title: "Add a TV show", placeholder: "TV show title", icon: "📺" },
   book: { title: "Add a book", placeholder: "Book title (and author)", icon: "📚" },
@@ -495,10 +503,10 @@ function openFind(kind) {
   if (!FIND[kind]) return;
   setAddMenu(false);
   findKind = kind;
-  $("#find-title").textContent = FIND[kind].title;
-  $("#find-input").placeholder = FIND[kind].placeholder;
+  $("#find-title").textContent = tr(FIND[kind].title);
+  $("#find-input").placeholder = tr(FIND[kind].placeholder);
   $("#find-input").value = "";
-  $("#find-results").innerHTML = navigator.onLine ? "" : `<p class="find-hint">Searching needs a connection.</p>`;
+  $("#find-results").innerHTML = navigator.onLine ? "" : `<p class="find-hint">${esc(tr("Searching needs a connection."))}</p>`;
   $("#find-dialog").showModal();
   $("#find-input").focus();
 }
@@ -512,9 +520,9 @@ async function runFind(query) {
   const q = query.trim();
   const box = $("#find-results");
   if (!q) return;
-  if (!navigator.onLine) { box.innerHTML = `<p class="find-hint">Searching needs a connection.</p>`; return; }
+  if (!navigator.onLine) { box.innerHTML = `<p class="find-hint">${esc(tr("Searching needs a connection."))}</p>`; return; }
   const seq = ++findSeq;
-  box.innerHTML = `<p class="find-hint">Searching…</p>`;
+  box.innerHTML = `<p class="find-hint">${esc(tr("Searching…"))}</p>`;
   let data;
   try {
     data = await api(`/api/catalog/search?kind=${encodeURIComponent(findKind)}&q=${encodeURIComponent(q)}`);
@@ -526,12 +534,12 @@ async function runFind(query) {
   findResults = data.results || [];
   // exactly one match is not a choice: add it
   if (findResults.length === 1) return addEntry(findResults[0]);
-  box.innerHTML = (findResults.length ? findResults.map(findRowHtml).join("") : `<p class="find-hint">${esc(data.note || "Nothing found.")}</p>`) + typedRowHtml(q);
+  box.innerHTML = (findResults.length ? findResults.map(findRowHtml).join("") : `<p class="find-hint">${esc(data.note || tr("Nothing found."))}</p>`) + typedRowHtml(q);
   box.querySelector("button")?.focus();
 }
 
 function typedRowHtml(q) {
-  return `<button type="button" class="find-row find-typed" data-find-typed="${esc(q)}"><span class="find-ph" aria-hidden="true">＋</span><span><b>Add “${esc(q)}” as typed</b><small>Look it up after adding</small></span></button>`;
+  return `<button type="button" class="find-row find-typed" data-find-typed="${esc(q)}"><span class="find-ph" aria-hidden="true">＋</span><span><b>${esc(tr("Add “{q}” as typed", { q }))}</b><small>${esc(tr("Look it up after adding"))}</small></span></button>`;
 }
 
 async function addEntry(spec) {
@@ -1372,11 +1380,15 @@ function setTheme(theme) {
 
 function appearanceHtml() {
   const current = getTheme();
-  return `<div class="setting"><div class="setting-text"><label>Theme</label><p class="setting-help">This device only.</p></div>
-    <div class="setting-control"><div class="segmented" role="group" aria-label="Theme">${
+  const saved = (() => { try { return localStorage.getItem("magpie.lang") || ""; } catch { return ""; } })();
+  return `<div class="setting"><div class="setting-text"><label>${esc(tr("Theme"))}</label><p class="setting-help">${esc(tr("This device only."))}</p></div>
+    <div class="setting-control"><div class="segmented" role="group" aria-label="${esc(tr("Theme"))}">${
     [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
-      `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${label}</button>`).join("")
-  }</div></div></div>`;
+      `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${esc(tr(label))}</button>`).join("")
+  }</div></div></div>
+  <div class="setting"><div class="setting-text"><label for="ui-language">${esc(tr("Language"))}</label><p class="setting-help">${esc(tr("This device only."))}</p></div>
+    <div class="setting-control"><select id="ui-language"><option value="">${esc(tr("Automatic"))}</option>${
+    Object.entries(LANGUAGES).map(([code, name]) => `<option value="${code}"${saved === code ? " selected" : ""}>${esc(name)}</option>`).join("")}</select></div></div>`;
 }
 
 // ---- library-wide actions: refresh all metadata, re-analyze all -----------------------------
@@ -2212,7 +2224,7 @@ async function showUsage(days = 30) {
 }
 
 function cardTitle(item) {
-  if (item.title) return item.title;
+  if (item.title) return localizedView(item).title;
   if (item.batch_pending) return "Queued for analysis (batch)";
   if (item.status === "error" && item.retry_at) return "Waiting for the AI model's limit";
   return { queued: "Waiting to upload", processing: "Analyzing screenshot…", error: "Couldn't identify — open to retry" }[item.status] || "Untitled";
@@ -2235,7 +2247,7 @@ function renderFilters() {
   for (const i of items) counts[tabOf(i)] = (counts[tabOf(i)] || 0) + 1;
   if (state.tab !== "all" && !counts[state.tab]) state.tab = "all";
   $("#tabs").innerHTML = TABS.filter((t) => t.id === "all" || counts[t.id]).map((t) => `
-    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${themeOf(t.cats[0])}">${typeIcon(themeOf(t.cats[0]))}</span>` : ""}${esc(t.label)}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
+    <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${themeOf(t.cats[0])}">${typeIcon(themeOf(t.cats[0]))}</span>` : ""}${esc(tr(t.label))}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
   const check = items.filter(needsCheck).length;
   $("#check-count").textContent = check || "";
   document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
@@ -2248,12 +2260,12 @@ function renderFilters() {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 80).map(([t, n]) => `
     <button class="chip ${state.tags.includes(t) ? "active" : ""}" type="button" data-tag="${esc(t)}" aria-pressed="${state.tags.includes(t)}">#${esc(t)} <span class="count">${n}</span></button>`).join("")
     || `<span class="hint">No tags yet. Add them from an item's details.</span>`;
-  $("#tag-btn").innerHTML = `#<span class="lbl"> Tags</span>${state.tags.length ? `<span class="count tagn">${state.tags.length}</span>` : ""}`;
+  $("#tag-btn").innerHTML = `#<span class="lbl"> ${esc(tr("Tags"))}</span>${state.tags.length ? `<span class="count tagn">${state.tags.length}</span>` : ""}`;
 }
 
 // The title set on a generated cover, like a book jacket: repos show the owner small above the name.
 function coverTitleHtml(item) {
-  const text = item.title || hostOf(item.source_url) || cardTitle(item);
+  const text = localizedView(item).title || hostOf(item.source_url) || cardTitle(item);
   const repo = item.category === "github_repo" && /^[^/\s]+\/[^/\s]+$/.test(text) ? text.split("/") : null;
   const main = repo ? repo[1] : text;
   // Two lines at most. Short titles are set big; longer ones smaller so that they fit two lines (a very long one is
@@ -2314,7 +2326,7 @@ function renderGrid() {
   const items = filteredItems();
   $("#empty").hidden = items.length > 0;
   const filtered = state.q || state.tab !== "all" || state.show !== "all" || state.tags.length;
-  $("#empty").textContent = filtered ? "Nothing matches. Clear the search or switch tabs." : "Nothing here yet. Tap + Add, or paste a screenshot or link.";
+  $("#empty").textContent = filtered ? tr("Nothing matches. Clear the search or switch tabs.") : tr("Nothing here yet. Tap + Add, or paste a screenshot or link.");
   const cols = Math.min(state.cols, maxColumns());
   $("#grid").className = `grid ${state.layout === "list" ? "list" : cols ? `cols${cols >= 6 ? " dense" : ""}` : ""}`;
   $("#grid").style.setProperty("--cols", cols || "");
@@ -2409,14 +2421,14 @@ function confidenceHtml(item, { fixButton = true } = {}) {
   if (item.pending_upload || item.status !== "ready") return "";
   const c = item.confidence;
   const level = item.corrected ? "ok" : c == null ? "unknown" : c >= 85 ? "ok" : c >= 60 ? "mid" : "low";
-  const label = item.corrected ? "Corrected by you" : c == null ? "Confidence unknown" : `${c}% sure`;
+  const label = item.corrected ? tr("Corrected by you") : c == null ? "Confidence unknown" : `${c}% sure`;
   const alts = (item.alternatives || []).filter((a) => a && a.title);
   return `
     <div class="confidence ${level}">
       <div class="confidence-head">
         <span class="confidence-label">${esc(label)}</span>
         ${c != null && !item.corrected ? `<span class="meter"><span style="width:${Math.max(4, Math.min(100, c))}%"></span></span>` : ""}
-        ${fixButton ? `<button class="btn small" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
+        ${fixButton ? `<button class="btn small" data-action="fix">${esc(tr(item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"))}</button>` : ""}
       </div>
       ${item.confidence_reason && !item.corrected ? `<div class="meta-line">${esc(item.confidence_reason)}</div>` : ""}
       ${item.usage?.model ? `<div class="meta-line resolved-by">Resolved by ${esc(item.usage.model)}</div>` : ""}
@@ -2482,13 +2494,14 @@ function originalHtml(item) {
       <a class="btn small" href="${esc(link)}" target="_blank" rel="noopener">Open the link ↗</a></div></div>`;
   }
   if (shot) {
-    return `<div class="orig"><a class="orig-shot" href="${esc(shot)}" target="_blank" rel="noopener" title="View full size"><img src="${esc(shot)}" alt="Your screenshot"></a>
-      <div><div><b>Your screenshot</b></div><div class="meta-line">${esc(note)}</div><a class="btn small" href="${esc(shot)}" target="_blank" rel="noopener">View full size ↗</a></div></div>`;
+    return `<div class="orig"><a class="orig-shot" href="${esc(shot)}" target="_blank" rel="noopener" title="${esc(tr("View full size"))}"><img src="${esc(shot)}" alt="${esc(tr("Your screenshot"))}"></a>
+      <div><div><b>${esc(tr("Your screenshot"))}</b></div><div class="meta-line">${esc(note)}</div><a class="btn small" href="${esc(shot)}" target="_blank" rel="noopener">${esc(tr("View full size"))} ↗</a></div></div>`;
   }
-  return `<p class="meta-line" style="margin:0">The original isn't on this device${item.pending_upload ? "" : ". It opens once you're connected to the server."}</p>`;
+  return `<p class="meta-line" style="margin:0">${esc(tr("The original isn't on this device"))}${item.pending_upload ? "" : esc(tr(". It opens once you're connected to the server."))}</p>`;
 }
 
-function renderDetail(item) {
+function renderDetail(source) {
+  const item = localizedView(source), view = item;
   const m = item.metadata || {};
   const canonical = safeUrl(item.canonical_url);
   const facts = orderedFacts(item);
@@ -2507,33 +2520,33 @@ function renderDetail(item) {
     : isUnverified(item) ? `<div class="notice"><span>No source such as TMDB or GitHub confirmed this. It may still be right.</span><button class="btn small" data-action="verify">✓ Mark as correct</button></div>` : "";
   dlg.innerHTML = `
     <div class="detail t-${themeOf(item.category)}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
-      <button class="btn close" data-action="close" aria-label="Close">✕</button>
+      <button class="btn close" data-action="close" aria-label="${esc(tr("Close"))}">✕</button>
       <div class="hero">
         <div class="hero-cover">${coverHtml(item, { chip: false })}</div>
         <div class="hero-text">
           <div class="eyebrow">${metaLine}</div>
-          <h2>${esc(cardTitle(item))}</h2>
+          <h2>${esc(cardTitle(view))}</h2>
           ${item.subtitle ? `<div class="sub">${esc(item.subtitle)}</div>` : ""}
         </div>
       </div>
       ${scoresHtml(m)}
       ${statusHtml(item)}${notice}
       <div class="actions primary-actions">
-        ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="Open ${esc(hostOf(canonical) || "source")}" title="Open ${esc(hostOf(canonical) || "source")}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span><span class="open-text">Open ${esc(hostOf(canonical) || "source")}</span> ↗</a>` : ""}
-        ${item.status === "ready" && fixing !== item.id ? `<button class="btn" data-action="fix">${item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"}</button>` : ""}
+        ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}" title="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span><span class="open-text">${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}</span> ↗</a>` : ""}
+        ${item.status === "ready" && fixing !== item.id ? `<button class="btn" data-action="fix">${esc(tr(item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"))}</button>` : ""}
         <span class="plugin-slot">${pluginButtonsHtml(item.id)}</span>
-        <details class="menu"><summary class="btn">More ▾</summary><div class="menu-list">
-          ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ Refresh metadata</button>
-          <button class="btn" data-action="reanalyze">↻ Re-analyze</button>`}
-          <label class="menu-select">Type <select id="category-edit">
+        <details class="menu"><summary class="btn">${esc(tr("More"))} ▾</summary><div class="menu-list">
+          ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ ${esc(tr("Refresh metadata"))}</button>
+          <button class="btn" data-action="reanalyze">↻ ${esc(tr("Re-analyze"))}</button>`}
+          <label class="menu-select">${esc(tr("Type"))} <select id="category-edit">
             ${Object.entries(CATEGORY_LABELS).map(([k, label]) => `<option value="${k}" ${k === item.category ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <button class="btn danger" data-action="delete">Delete</button>
+          <button class="btn danger" data-action="delete">${esc(tr("Delete"))}</button>
         </div></details>
       </div>
-      ${fixing === item.id ? `<section>${correctionFormHtml(item)}</section>` : ""}
-      <section><h3>About</h3>${about.length ? about.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="meta-line">No description yet.${item.pending_upload ? "" : " Refresh metadata may find one."}</p>`}</section>
-      ${facts.length ? `<section><h3>${esc(TYPE_BLOCK[item.category] || "Details")}</h3><dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(humanize(k))}</dt><dd>${
+      ${fixing === item.id ? `<section>${correctionFormHtml(source)}</section>` : ""}
+      <section><h3>${esc(tr("About"))}</h3>${about.length ? about.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="meta-line">${esc(tr("No description yet."))}${item.pending_upload ? "" : esc(tr(" Refresh metadata may find one."))}</p>`}</section>
+      ${facts.length ? `<section><h3>${esc(tr(TYPE_BLOCK[item.category] || "Details"))}</h3><dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(tr(humanize(k)))}</dt><dd>${
         typeof v === "string" && /^https?:/.test(v) && safeUrl(v) ? `<a href="${esc(v)}" target="_blank" rel="noopener">${esc(v)}</a>` : esc(fmtValue(v))
       }</dd>`).join("")}</dl></section>` : ""}
       ${m.ingredients?.length ? `<section><h3>Ingredients</h3><ul>${m.ingredients.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></section>` : ""}
@@ -2541,10 +2554,10 @@ function renderDetail(item) {
       ${links.length ? `<section><div class="links">${links.map((l) => `<a class="chip" href="${esc(safeUrl(l.url))}" target="_blank" rel="noopener">${esc(l.label)} ↗</a>`).join("")}</div></section>` : ""}
       ${relatedHtml(item)}
       <div class="plugin-sections">${pluginSectionsHtml(item.id)}</div>
-      <section><h3>Original</h3>${originalHtml(item)}</section>
-      ${item.status === "ready" && fixing !== item.id ? `<section><h3>How sure Magpie is</h3>${confidenceHtml(item, { fixButton: false })}</section>` : ""}
-      <section><h3>Your note</h3>
-        <textarea id="note-edit" placeholder="Why did you save this? Who recommended it?">${esc(noteValue)}</textarea>
+      <section><h3>${esc(tr("Original"))}</h3>${originalHtml(item)}</section>
+      ${item.status === "ready" && fixing !== item.id ? `<section><h3>${esc(tr("How sure Magpie is"))}</h3>${confidenceHtml(item, { fixButton: false })}</section>` : ""}
+      <section><h3>${esc(tr("Your note"))}</h3>
+        <textarea id="note-edit" placeholder="${esc(tr("Why did you save this? Who recommended it?"))}">${esc(noteValue)}</textarea>
         <div class="tag-editor">
           ${(item.tags || []).map((t) => `<span class="chip">#${esc(t)}<button data-remove-tag="${esc(t)}" aria-label="Remove tag">×</button></span>`).join("")}
           <input id="new-tag" placeholder="add tag ↵" enterkeyhint="done" autocapitalize="off">
@@ -2588,9 +2601,8 @@ function dateRowHtml(day) {
   if (Number.isNaN(d.getTime())) return esc(day);
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const n = Math.round((d - today) / 864e5);
-  const span = (k) => k === 1 ? "1 day" : k < 60 ? `${k} days` : k < 700 ? `${Math.round(k / 30)} months` : `${Math.round(k / 365)} years`;
-  const when = n === 0 ? "today" : n === 1 ? "tomorrow" : n === -1 ? "yesterday" : n > 0 ? `in ${span(n)}` : `${span(-n)} ago`;
-  const text = d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  const when = relativeDays(n);
+  const text = d.toLocaleDateString(uiLanguage, { year: "numeric", month: "short", day: "numeric" });
   return `${esc(text)} <span class="when ${n >= 0 ? "when-due" : "when-past"}">${esc(when)}</span>`;
 }
 
@@ -2599,7 +2611,7 @@ function pluginSectionsHtml(id) {
   return (pluginActions.get(id) || []).filter((p) => p.section && (p.section.download || p.section.rows?.length)).map((p) => {
     const s = p.section;
     const status = s.download && p.state === "added" ? downloadChipHtml({ ...p, download: s.download }) : "";
-    const rows = (s.rows || []).map((r) => `<div><dt>${esc(r.label)}</dt><dd>${r.date ? dateRowHtml(r.date) : esc(r.value)}</dd></div>`).join("");
+    const rows = (s.rows || []).map((r) => `<div><dt>${esc(tr(r.label))}</dt><dd>${r.date ? dateRowHtml(r.date) : esc(tr(r.value))}</dd></div>`).join("");
     return `<section class="psec" id="psec-${esc(p.id)}" data-plugin-section="${esc(p.id)}"><div class="psec-head"><h3>${esc(s.title || p.label)}</h3>${status}</div>${rows ? `<dl class="psec-rows">${rows}</dl>` : ""}</section>`;
   }).join("");
 }
@@ -2765,6 +2777,15 @@ function installPlugin(kind, btn) {
 }
 
 document.addEventListener("change", (e) => {
+  if (e.target.id === "ui-language") {   // this device's app language (Settings → Appearance)
+    try { e.target.value ? localStorage.setItem("magpie.lang", e.target.value) : localStorage.removeItem("magpie.lang"); } catch {}
+    setUiLanguage(getLanguage());
+    localizeCategories();
+    const section = e.target.closest(".settings-section");
+    if (section) section.innerHTML = `<h3>Appearance</h3>${appearanceHtml()}`;
+    render();
+    return;
+  }
   if (e.target.id !== "plugin-upload" || !e.target.files[0]) return;
   const file = e.target.files[0];
   e.target.value = "";
@@ -3144,6 +3165,8 @@ async function boot() {
   const cookieToken = document.cookie.split("; ").find((c) => c.startsWith("magpie_token=") || c.startsWith("keeper_token="));
   if (cookieToken && !(await db.get("kv", "token"))) await setToken(decodeURIComponent(cookieToken.split("=")[1]));
 
+  setUiLanguage(uiLanguage);
+  localizeCategories();
   await loadLocal();
   for (const item of state.items.values()) if (isBusy(item)) trackItem(undefined, item);   // still working from before
   trackBulk();   // a library-wide job that is already running

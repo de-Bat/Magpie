@@ -72,9 +72,9 @@ def test_plugins_can_add_a_section_to_the_card():
 def test_plugin_sections_sit_after_the_card_content_just_above_the_original():
     js, _, _ = source()
     detail = js[js.index("relatedHtml(item)}"):]
-    assert detail.index('class="plugin-sections"') < detail.index("<h3>Original</h3>")
+    assert detail.index('class="plugin-sections"') < detail.index('tr("Original")')
     assert detail.index('class="plugin-sections"') - detail.index("relatedHtml(item)}") < 120   # directly after the last content section
-    assert js.index('class="plugin-sections"') > js.index("<h3>About</h3>")
+    assert js.index('class="plugin-sections"') > js.index('tr("About")')
 
 
 def test_header_keeps_only_a_jump_capsule_and_phone_ratings_share_one_row():
@@ -85,5 +85,27 @@ def test_header_keeps_only_a_jump_capsule_and_phone_ratings_share_one_row():
 
 def test_main_link_is_an_icon_and_arrow_on_phones():
     js, css, _ = source()
-    assert "function sourceIconHtml(" in js and 'class="open-text"' in js and 'aria-label="Open ' in js
+    assert "function sourceIconHtml(" in js and 'class="open-text"' in js and 'tr("Open {host}"' in js
     assert ".open-src .open-text { display: none; }" in css
+
+
+def test_the_app_is_localized_and_movie_texts_follow_the_viewers_language():
+    js, css, html = source()
+    i18n = (STATIC / "i18n.js").read_text()
+    assert '<script src="/static/i18n.js"></script>' in html and "/static/i18n.js" in (STATIC / "sw.js").read_text()
+    for code in ("he", "es", "de", "fr"):
+        assert f"{code}:" in i18n or f'"{code}"' in i18n
+    assert 'RTL_LANGUAGES = new Set(["he"' in i18n and "function localizedView(" in i18n and "Intl.RelativeTimeFormat" in i18n
+    assert 'id="ui-language"' in js and "setUiLanguage(" in js and "localizedView(" in js
+    assert 'data-i18n="Add to Magpie"' in html
+
+
+def test_every_translated_row_is_complete():
+    import json, subprocess
+    out = subprocess.run(["node", "-e", f"""{(STATIC / 'i18n.js').read_text()}
+      const missing = []; const keys = Object.keys(TRANSLATIONS.he);
+      for (const l of ['he','es','de','fr']) for (const k of keys) {{ if (!TRANSLATIONS[l][k]) missing.push(l+':'+k);
+        const vars = (x) => (x.match(/\\{{\\w+\\}}/g) || []).sort().join(); if (TRANSLATIONS[l][k] && vars(TRANSLATIONS[l][k]) !== vars(k)) missing.push('vars '+l+':'+k); }}
+      console.log(JSON.stringify([keys.length, missing]));"""], capture_output=True, text=True, check=True).stdout
+    count, missing = json.loads(out)
+    assert count > 90 and missing == []

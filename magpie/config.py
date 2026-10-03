@@ -69,6 +69,8 @@ class Spec:
     max: float | None = None
 
 
+CONTENT_LANGUAGES = ("en", "he", "ar", "es", "fr", "de", "it", "pt", "nl", "pl", "ru", "tr", "ja", "ko", "zh")
+
 SPECS: list[Spec] = [
     Spec("analyzer", "MAGPIE_ANALYZER", "choice", "auto", "Identification", "Analyzer",
          "auto picks hybrid if Claude and a local LLM are both set, else whichever is set, else OCR only.", ANALYZERS),
@@ -127,6 +129,10 @@ SPECS: list[Spec] = [
     Spec("ocr_langs", "MAGPIE_OCR_LANGS", "str", "eng", "OCR", "Tesseract languages", "e.g. eng+heb"),
     Spec("enrich", "MAGPIE_ENRICH", "bool", True, "Lookups", "Online lookups",
          "TMDB, GitHub, Open Library, recipe pages. Turn off for air-gapped installs."),
+    Spec("content_language", "MAGPIE_LANGUAGE", "choice", "en", "Lookups", "Content language",
+         "Titles, descriptions and genres of movies and TV shows are also fetched from TMDB in this language, and shown to "
+         "anyone whose app language is the same. IMDb has no public API; TMDB carries the IMDb id and translated texts.",
+         CONTENT_LANGUAGES),
     Spec("tmdb_api_key", "TMDB_API_KEY", "secret", None, "Lookups", "TMDB API key",
          "Posters, cast, IMDb ids. https://www.themoviedb.org/settings/api"),
     Spec("omdb_api_key", "OMDB_API_KEY", "secret", None, "Lookups", "OMDb API key",
@@ -232,6 +238,7 @@ def _from_env(attr: str):
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("MAGPIE_DATA_DIR") or "data").resolve())
     model: str = field(default_factory=_from_env("model"))
+    content_language: str = field(default_factory=_from_env("content_language"))
     tmdb_api_key: str | None = field(default_factory=_from_env("tmdb_api_key"))
     omdb_api_key: str | None = field(default_factory=_from_env("omdb_api_key"))
     github_token: str | None = field(default_factory=_from_env("github_token"))

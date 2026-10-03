@@ -93,3 +93,31 @@ def test_entry_validation(settings):
         assert client.post("/api/items/entry", json={"category": "recipe", "title": "x"}).status_code == 422
         assert client.post("/api/items/entry", json={"category": "book", "title": "  "}).status_code == 422
         assert client.post("/api/items/entry", json={"category": "book", "title": "x", "id": "no"}).status_code == 422
+
+
+def test_movie_texts_are_also_fetched_in_the_content_language(tmp_path):
+    calls = []
+
+    def movie(request):
+        calls.append(request.url.params.get("language"))
+        if request.url.params.get("language") == "he":
+            return httpx.Response(200, json={"id": 603, "title": "המטריקס", "overview": "האקר מגלה את האמת.", "tagline": "", "genres": [{"name": "פעולה"}]})
+        return httpx.Response(200, json=TMDB_MOVIE)
+
+    s = Settings(data_dir=tmp_path, tmdb_api_key="k" * 32, omdb_api_key=None, github_token=None, content_language="he")
+    client, _ = make_client(s, {}, {"https://api.themoviedb.org/3/movie/603": movie})
+    with client:
+        client.post("/api/items/entry", json={"id": "entry-0002", "category": "movie", "title": "The Matrix", "tmdb": ["movie", 603]})
+        item = client.get("/api/items/entry-0002").json()
+    assert item["title"] == "The Matrix" and item["metadata"]["tmdb_id"] == 603            # identification stays as it was
+    assert item["metadata"]["localized"] == {"lang": "he", "title": "המטריקס", "summary": "האקר מגלה את האמת.", "genres": ["פעולה"]}
+    assert calls.count("he") == 1 and None in calls
+
+
+def test_english_content_language_makes_no_extra_request(tmp_path):
+    calls = []
+    client, _ = make_client(keyed(tmp_path), {}, {"https://api.themoviedb.org/3/movie/603": lambda r: (calls.append(1), httpx.Response(200, json=TMDB_MOVIE))[1]})
+    with client:
+        client.post("/api/items/entry", json={"id": "entry-0003", "category": "movie", "title": "The Matrix", "tmdb": ["movie", 603]})
+        item = client.get("/api/items/entry-0003").json()
+    assert len(calls) == 1 and "localized" not in item["metadata"]

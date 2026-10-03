@@ -437,6 +437,7 @@ async def enrich_screen(analysis: dict, settings: Settings, http: httpx.AsyncCli
             )
             if r.status_code == 200:
                 _apply_tmdb(out, r.json(), kind, os.environ.get("MAGPIE_REGION", "US"))
+                await _localize_tmdb(out, base, kind, tmdb_id, headers, params, settings.content_language, http)
                 imdb_id = out.metadata.get("imdb_id") or imdb_id
 
     if settings.omdb_api_key and imdb_id:
@@ -479,6 +480,23 @@ async def wikipedia_image(title: str, hint: str, http: httpx.AsyncClient) -> str
 async def _wikipedia_poster(title: str, year: Any, is_tv: bool, http: httpx.AsyncClient) -> str | None:
     """The poster from the film's / show's Wikipedia infobox, when TMDB and OMDb gave none."""
     return await wikipedia_image(title, f"{year or ''} {'TV series' if is_tv else 'film'}".strip(), http)
+
+
+async def _localize_tmdb(out: Enrichment, base: str, kind: str, tmdb_id: int, headers: dict, params: dict, language: str,
+                         http: httpx.AsyncClient) -> None:
+    """The title, description, tagline and genres in the content language (TMDB translates them), kept next to the English ones
+    as metadata.localized so each viewer sees the language their app is set to."""
+    if not language or language == "en":
+        return
+    try:
+        r = await http.get(f"{base}/{kind}/{tmdb_id}", headers=headers, params={**params, "language": language})
+        d = r.json() if r.status_code == 200 else {}
+    except (httpx.HTTPError, ValueError):
+        return
+    local = {"lang": language, "title": d.get("title") or d.get("name"), "summary": d.get("overview") or None,
+             "tagline": d.get("tagline") or None, "genres": [g["name"] for g in d.get("genres") or [] if g.get("name")] or None}
+    if any(local[k] for k in ("title", "summary", "tagline", "genres")):
+        out.metadata["localized"] = {k: v for k, v in local.items() if v}
 
 
 def _apply_tmdb(out: Enrichment, d: dict, kind: str, region: str) -> None:

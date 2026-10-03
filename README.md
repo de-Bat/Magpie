@@ -212,6 +212,11 @@ Magpie finds the title in Radarr/Sonarr by IMDb or TMDB id when it has one, othe
 
 **Settings → Plugins** installs more plugins from a public git repository (one repository can hold many) or from a single `.py` file (a link or an upload), and updates or removes them. Because a plugin runs code on the server, this is **off** until you set `MAGPIE_ALLOW_PLUGIN_INSTALL=true` in the server's environment (`.env`) and restart; it can't be switched on from the app. Only install plugins you trust. How to write one, with a full example: [docs/PLUGINS.md](docs/PLUGINS.md).
 
+## Languages
+
+- **App language** (per device): Settings → Appearance → Language. English, Hebrew (right-to-left), Spanish, German and French; "Automatic" follows the browser. Text is looked up by its English wording in `magpie/static/i18n.js`: to add a language or a string, add a column or a row there. Anything without a translation shows in English. Settings screens, logs and error messages are English only for now.
+- **Content language** (server): `MAGPIE_LANGUAGE` / Settings → Lookups → Content language. Movie and TV titles, descriptions, taglines and genres are also fetched from TMDB in that language (IMDb has no public API; TMDB carries the IMDb id and the translations) and shown to everyone whose app language is the same. The original (English) text stays as it is; items already in the library get the translation on their next *Refresh metadata*.
+
 ## Release notes
 
 Settings → About lists the main features of each release. They live in `magpie/releases.json`, newest first. Add what you build to the entry whose version is `"next"` (create it if it is missing); `./tag.sh` renames it to the new version and date inside the release commit.

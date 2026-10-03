@@ -9,6 +9,10 @@
       {
         "title": "Compact main link",
         "text": "On a phone the card's source link is the site's icon and an arrow instead of 'Open …'."
+      },
+      {
+        "title": "Languages",
+        "text": "The app speaks English, Hebrew, Spanish, German and French (Settings → Appearance; right-to-left for Hebrew). Movie and TV titles, descriptions and genres are fetched from TMDB in your content language (Settings → Lookups) and shown to anyone using that language."
       }
     ],
     "date": "2026-10-03"
