@@ -417,6 +417,14 @@ class Pipeline:
         analysis = {**analysis, "_auto_tags": auto_tags}
         self.db.set_tags(item_id, [t for t in item.get("tags", []) if t not in stale] + auto_tags)
 
+        # TODO: Duplicate detection by canonical_url
+        # canonical_url = fields.get("canonical_url")
+        # existing = self.db.find_by_canonical_url(canonical_url) if canonical_url else None
+        # if existing and existing["id"] != item_id:
+        #     convlog.event("decision", what="duplicate_by_canonical_url", new_item_id=item_id, existing_item_id=existing["id"], canonical_url=canonical_url)
+        #     self.db.delete_item(item_id)
+        #     return {**existing, "duplicate": True, "duplicate_item_id": item_id}
+
         return self.db.update_item(
             item_id, **fields, analysis=analysis, status="ready", error=None, confirmed=0,
             corrected=int(corrected or bool(item.get("corrected"))),

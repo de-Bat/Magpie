@@ -283,6 +283,13 @@ class Database:
         row = self.conn.execute("SELECT id FROM items WHERE image_hash = ? ORDER BY created_at LIMIT 1", (image_hash,)).fetchone()
         return self.get_item(row["id"]) if row else None
 
+    def find_by_canonical_url(self, url: str) -> dict | None:
+        """First analyzed item with the same canonical URL, if any."""
+        if not url:
+            return None
+        row = self.conn.execute("SELECT id FROM items WHERE canonical_url = ? AND status = 'ready' ORDER BY created_at LIMIT 1", (url,)).fetchone()
+        return self.get_item(row["id"]) if row else None
+
     def find_by_source_url(self, url: str) -> dict | None:
         row = self.conn.execute("SELECT id FROM items WHERE source_url = ? ORDER BY created_at LIMIT 1", (url,)).fetchone()
         return self.get_item(row["id"]) if row else None

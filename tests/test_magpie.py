@@ -1400,7 +1400,7 @@ def test_uploading_the_same_screenshot_twice_returns_the_existing_item_marked_du
         r1 = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")})
         assert r1.status_code == 202
         item_id_1 = r1.json()["id"]
-        
+
         r2 = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")})
         assert r2.status_code == 202
         item = r2.json()
