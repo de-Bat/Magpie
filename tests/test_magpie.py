@@ -1516,3 +1516,100 @@ async def test_model_image_falls_back_to_logo_if_model_image_dead(settings):
     assert e is not None
     assert e.image_url == logo_img
     assert e.image_kind == "logo"
+
+
+async def test_daily_dev_link_resolved_to_publisher_article_via_outbound_link(settings):
+    from magpie.findlink import repair_link
+    aggregator_url = "https://app.daily.dev/posts/two-old-gpus-salvaged"
+    real_url = "https://www.xda-developers.com/salvaged-two-old-gpus-work/"
+    routes = {
+        aggregator_url: httpx.Response(200, text=f'<html><head><title>{TITLE} | daily.dev</title></head><body><a href="{real_url}">Read on XDA Developers</a></body></html>', headers={"content-type": "text/html"}),
+        real_url: _article_page(TITLE),
+    }
+    a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url=aggregator_url,
+        details=blank_details(),
+    )
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real_url
+    assert any(l.get("url") == aggregator_url for l in fixed.get("links") or [])
+    assert (fixed.get("details") or {}).get("post_url") == aggregator_url
+
+
+async def test_daily_dev_link_resolved_to_publisher_article_via_search(settings):
+    from magpie.findlink import repair_link
+    aggregator_url = "https://app.daily.dev/posts/two-old-gpus-salvaged"
+    real_url = "https://www.xda-developers.com/salvaged-two-old-gpus-work/"
+    routes = {
+        aggregator_url: httpx.Response(200, text=f'<html><head><title>{TITLE} | daily.dev</title></head><body>No link here</body></html>', headers={"content-type": "text/html"}),
+        "https://html.duckduckgo.com/html/": httpx.Response(200, text=f'<a class="result__a" href="{real_url}">{TITLE}</a>', headers={"content-type": "text/html"}),
+        real_url: _article_page(TITLE),
+    }
+    a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url=aggregator_url,
+        screenshot_text=f"{TITLE}\nxda-developers.com",
+        details=blank_details(),
+    )
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real_url
+    assert any(l.get("url") == aggregator_url for l in fixed.get("links") or [])
+
+
+def test_refresh_metadata_resolves_daily_dev_and_updates_card_image(settings):
+    aggregator_url = "https://app.daily.dev/posts/two-old-gpus-salvaged"
+    real_url = "https://www.xda-developers.com/salvaged-two-old-gpus-work/"
+    xda_img = "https://www.xda-developers.com/gpu-cover.jpg"
+    img_bytes = png_bytes((400, 300))
+    routes = {
+        aggregator_url: httpx.Response(200, text=f'<html><head><title>{TITLE} | daily.dev</title></head><body><a href="{real_url}">Read on XDA Developers</a></body></html>', headers={"content-type": "text/html"}),
+        real_url: httpx.Response(200, text=f'<html><head><title>{TITLE} | XDA</title><meta property="og:title" content="{TITLE}"><meta property="og:image" content="{xda_img}"></head></html>', headers={"content-type": "text/html"}),
+        xda_img: httpx.Response(200, content=img_bytes, headers={"content-type": "image/jpeg"}),
+    }
+    init_a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url=aggregator_url,
+        image_url=None,
+        details=blank_details(),
+    )
+    client, analyzer = make_client(settings, init_a, routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
+        # Now refresh metadata: it should resolve the aggregator link to XDA and get the XDA image
+        r = client.post(f"/api/items/{item_id}/refresh-metadata")
+        assert r.status_code == 200
+        item = r.json()
+        assert item["canonical_url"] == real_url
+        assert item["image_url"] == xda_img
+        assert any(l["url"] == aggregator_url for l in item["links"])
+
+
+def test_refresh_metadata_preserves_candidate_image_on_walled_site(settings):
+    lead_img = "https://cdn.example/pictures/lead-gpu.jpg"
+    img_bytes = png_bytes((400, 300))
+    routes = {
+        "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": httpx.Response(403),
+        lead_img: httpx.Response(200, content=img_bytes, headers={"content-type": "image/jpeg"}),
+    }
+    init_a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url="https://www.xda-developers.com/salvaged-gpus-beat-new-card/",
+        image_url=lead_img,
+        details=blank_details(),
+    )
+    client, analyzer = make_client(settings, init_a, routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
+        r = client.post(f"/api/items/{item_id}/refresh-metadata")
+        assert r.status_code == 200
+        item = r.json()
+        assert item["image_url"] == lead_img
+        assert (item.get("metadata") or {}).get("image_kind") != "logo"
+

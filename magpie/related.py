@@ -18,7 +18,8 @@ GITHUB_RESERVED = {"features", "topics", "sponsors", "orgs", "login", "join", "a
 NOISE_HOSTS = ("facebook.com", "twitter.com", "x.com", "linkedin.com", "pinterest.com", "reddit.com", "instagram.com", "t.me", "wa.me",
                "whatsapp.com", "flipboard.com", "tumblr.com", "doubleclick.net", "googletagmanager.com", "google.com", "googleadservices.com",
                "bing.com", "amazon.com", "amzn.to", "bit.ly", "t.co", "feedburner.com", "gravatar.com", "wp.com", "wordpress.com",
-               "disqus.com", "mailchimp.com", "patreon.com", "paypal.com", "ko-fi.com", "buymeacoffee.com", "archive.org", "archive.ph")
+               "disqus.com", "mailchimp.com", "patreon.com", "paypal.com", "ko-fi.com", "buymeacoffee.com", "archive.org", "archive.ph",
+               "daily.dev", "news.ycombinator.com", "threads.net", "bsky.app", "feedly.com")
 _ANCHOR = re.compile(r"<a\b[^>]*?\bhref=[\"']([^\"'#][^\"']*)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 _TAG = re.compile(r"<[^>]+>")
 

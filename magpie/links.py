@@ -24,7 +24,7 @@ PLATFORM_HOSTS = {
     "youtube.com": "youtube", "youtu.be": "youtube", "instagram.com": "instagram", "facebook.com": "facebook",
     "fb.watch": "facebook", "x.com": "twitter", "twitter.com": "twitter", "reddit.com": "reddit",
     "tiktok.com": "tiktok", "linkedin.com": "linkedin", "threads.net": "threads", "t.me": "telegram",
-    "pinterest.com": "pinterest", "bsky.app": "bluesky",
+    "pinterest.com": "pinterest", "bsky.app": "bluesky", "daily.dev": "daily.dev",
 }
 LD_CATEGORIES = [  # first match wins, so specific types come before generic ones
     ({"recipe"}, "recipe"), ({"movie"}, "movie"), ({"tvseries", "tvseason", "tvepisode"}, "tv_show"),

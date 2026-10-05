@@ -16,7 +16,7 @@ from .analyzer import AnalysisError, RateLimited
 from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import convlog, links, readability
-from .findlink import repair_link
+from .findlink import is_aggregator, repair_link
 from .related import clean_related, drop_dead, same_site, text_related
 from .images import best_image, picture_is_opaque
 from .enrich import fetch_page, link_is_gone
@@ -363,35 +363,82 @@ class Pipeline:
         if not item:
             return None
         stored = item.get("analysis") if isinstance(item.get("analysis"), dict) else {}
+        candidate_image = item.get("image_url") or stored.get("image_url")
         # Look up what the item is now, including the user's edits, not what the model first said.
-        analysis = {**stored, "category": item.get("category"), "title": item.get("title"), "year": stored.get("year"),
-                    "canonical_url": item.get("canonical_url"), "image_url": None, "links": [], "tags": [],
-                    "details": {**(stored.get("details") or {}), **{k: v for k, v in (item.get("metadata") or {}).items()
-                                                                     if k in ("imdb_id", "github_full_name", "author", "isbn")}}}
-        repaired = await repair_link({**analysis, "_analyzer": ["link"] if item.get("kind") == "url" else []}, self.http) \
+        analysis = {
+            **stored,
+            "category": item.get("category"),
+            "title": item.get("title"),
+            "year": stored.get("year"),
+            "canonical_url": item.get("canonical_url"),
+            "image_url": candidate_image,
+            "links": list(item.get("links") or stored.get("links") or []),
+            "tags": [],
+            "details": {
+                **(stored.get("details") or {}),
+                **{k: v for k, v in (item.get("metadata") or {}).items()
+                   if k in ("imdb_id", "github_full_name", "author", "isbn", "publisher")},
+            },
+        }
+        skip_repair = item.get("kind") == "url" and not is_aggregator(item.get("canonical_url"))
+        repaired = await repair_link({**analysis, "_analyzer": ["link"] if skip_repair else []}, self.http) \
             if self.settings.enrich else analysis
-        analysis = {**analysis, "canonical_url": repaired.get("canonical_url")}
+        analysis = {**analysis, **repaired}
+        canonical_after_repair = analysis.get("canonical_url")
         enrichments = await run_enrichers(analysis, self.settings, self.http)
         fresh = merge(analysis, enrichments)
         from_page = any((e.source or "").startswith("opengraph") for e in enrichments)
+
         links, seen = list(item.get("links") or []), {l.get("url") for l in item.get("links") or []}
-        links += [l for l in fresh["links"] if l["url"] not in seen]
+        for l in (repaired.get("links") or []) + (fresh.get("links") or []):
+            if l.get("url") and l["url"] not in seen:
+                seen.add(l["url"])
+                links.append(l)
+
+        existing_img = item.get("image_url") or stored.get("image_url")
+        existing_kind = (item.get("metadata") or {}).get("image_kind") or (stored.get("metadata") or {}).get("image_kind")
+        fresh_img = fresh.get("image_url")
+        fresh_kind = fresh.get("metadata", {}).get("image_kind")
+
+        # Use fresh image if available, unless it's just a favicon logo and we already have a real image.
+        if fresh_img and (fresh_kind != "logo" or existing_kind == "logo" or not existing_img):
+            new_image = fresh_img
+            new_kind = fresh_kind
+        else:
+            new_image = existing_img or fresh_img
+            new_kind = existing_kind if new_image == existing_img else fresh_kind
+
+        page_canonical = fresh.get("canonical_url") if (from_page and not is_aggregator(fresh.get("canonical_url"))) else None
+        target_url = page_canonical or canonical_after_repair or fresh.get("canonical_url") or analysis.get("canonical_url")
+
+        if item.get("corrected") and not is_aggregator(item.get("canonical_url")):
+            canonical_url = item.get("canonical_url")
+        else:
+            canonical_url = target_url
+
         changes = {
-            "image_url": fresh["image_url"] or item.get("image_url"),
+            "image_url": new_image,
             "metadata": {**(item.get("metadata") or {}), **{k: v for k, v in fresh["metadata"].items() if k != "screenshot_text"}},
             "links": links,
-            "related": clean_related([*(item.get("related") or []), *fresh["related"]], exclude=[analysis["canonical_url"] or fresh["canonical_url"], *[l.get("url") for l in links]]),
+            "related": clean_related([*(item.get("related") or []), *fresh["related"]],
+                                     exclude=[canonical_url, *[l.get("url") for l in links]]),
             "subtitle": item.get("subtitle") or fresh["subtitle"],
             "summary": item.get("summary") or fresh["summary"],
-            # a dead link is replaced, or dropped; a page's own canonical address (the original of a syndicated or
-            # AMP copy, without tracking parameters) replaces the one we had, unless you set the link yourself
-            "canonical_url": (fresh["canonical_url"] if from_page and not item.get("corrected") and fresh["canonical_url"]
-                              else analysis["canonical_url"] or fresh["canonical_url"]),
+            "canonical_url": canonical_url,
+            "analysis": {
+                **stored,
+                **analysis,
+                **fresh,
+                "canonical_url": canonical_url,
+                "image_url": new_image,
+                "links": links,
+                "details": {**(stored.get("details") or {}), **(analysis.get("details") or {})},
+            },
         }
-        if fresh["image_url"]:
+        if new_kind:
+            changes["metadata"]["image_kind"] = new_kind
+        else:
             changes["metadata"].pop("image_kind", None)
-            if fresh["metadata"].get("image_kind"):
-                changes["metadata"]["image_kind"] = fresh["metadata"]["image_kind"]
         await self._mark_opaque(changes["metadata"], changes["image_url"])
         return self.db.update_item(item_id, **changes)
 
