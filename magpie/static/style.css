@@ -252,8 +252,17 @@ dialog::backdrop { background: rgb(8 10 14 / .45); }
 .detail:focus { outline: none; }
 .detail .close, .usage-panel .close { position: absolute; top: 12px; right: 12px; z-index: 2; border-radius: 50%; width: 34px; height: 34px; padding: 0; justify-content: center; }
 .hero { display: grid; grid-template-columns: 120px 1fr; gap: 16px; align-items: end; padding-right: 36px; }
-.hero .cover { border-radius: 10px; }
-.hero-cover { container-type: inline-size; }
+.hero.expanded-cover { grid-template-columns: 1fr; gap: 16px; align-items: start; padding-right: 0; }
+.hero .cover { border-radius: 10px; cursor: pointer; }
+.hero-cover { position: relative; container-type: inline-size; width: 120px; }
+.hero.expanded-cover .hero-cover { width: min(100%, 340px); margin: 0 auto; }
+.hero-cover .cover-actions { position: absolute; top: 8px; right: 8px; z-index: 5; display: flex; gap: 6px; opacity: .85; transition: opacity .15s ease; }
+.hero-cover:hover .cover-actions, .hero-cover:focus-within .cover-actions { opacity: 1; }
+.cover-zoom-btn, .cover-full-link { display: inline-grid; place-items: center; width: 28px; height: 28px; padding: 0; border-radius: 8px;
+  border: 1px solid rgb(255 255 255 / .35); background: rgb(20 24 31 / .72); color: #fff; font-size: 13px; font-weight: 700; line-height: 1;
+  text-decoration: none; cursor: pointer; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); box-shadow: 0 2px 8px rgb(0 0 0 / .35);
+  transition: background .15s, transform .1s; }
+.cover-zoom-btn:hover, .cover-full-link:hover { background: rgb(20 24 31 / .92); transform: scale(1.08); }
 .hero h2 { margin: 2px 0 0; font-size: 24px; line-height: 1.15; text-wrap: balance; }
 .hero .sub { color: var(--muted); margin-top: 4px; }
 .eyebrow { font: 11px ui-monospace, Menlo, monospace; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
@@ -357,6 +366,9 @@ details pre { white-space: pre-wrap; font-size: 12px; background: var(--surface-
   .grid { grid-template-columns: repeat(2, 1fr); gap: 14px 12px; }
   #detail { width: 100vw; height: 92dvh; margin: auto 0 0 0; border-radius: 16px 16px 0 0; border-width: 1px 0 0 0; }
   .hero { grid-template-columns: 96px 1fr; }
+  .hero-cover { width: 96px; }
+  .hero.expanded-cover { grid-template-columns: 1fr; }
+  .hero.expanded-cover .hero-cover { width: min(100%, 320px); margin: 0 auto; }
   .form-grid { grid-template-columns: 1fr; }
   /* iOS zooms into inputs smaller than 16px */
   input, select, textarea, #search { font-size: 16px !important; }

@@ -48,3 +48,112 @@ async def test_best_image_skips_dead_tiny_and_svg_candidates():
         # nothing checkable: the first one that couldn't be ruled out, else the last resort
         assert await best_image(http, ["https://cdn.example/dead.png", "https://cdn.example/blocked.png"]) == "https://cdn.example/blocked.png"
         assert await best_image(http, ["https://cdn.example/dead.png"], last_resort="https://card") == "https://card"
+
+
+def test_readme_logos_extracts_logo_candidates():
+    from magpie.images import readme_logos
+    md = ("[![CI](https://github.com/a/b/workflows/ci/badge.svg)](x)\n"
+          '<img src="assets/project-logo.png" alt="MyProject logo" width="128">\n'
+          '![Diagram](assets/architecture.png)\n'
+          '<p align="center"><img src="mascot.png" width="200"></p>')
+    logos = readme_logos(md, "a/b")
+    assert "https://raw.githubusercontent.com/a/b/HEAD/assets/project-logo.png" in logos
+    # architecture diagram is not a logo, mascot in centered block near top is candidate
+    assert "https://raw.githubusercontent.com/a/b/HEAD/assets/architecture.png" not in logos
+
+
+async def test_github_image_prefers_logo_over_social_preview():
+    import httpx
+    from magpie.enrich import github_image
+
+    readme = '<p align="center"><img src="assets/logo.png" alt="logo"></p>'
+    routes = {
+        "https://github.com/myorg/myrepo": httpx.Response(200, text='<html><head><meta property="og:image" content="https://repository-images.githubusercontent.com/123/banner.png"></head></html>', headers={"content-type": "text/html"}),
+        "https://repository-images.githubusercontent.com/123/banner.png": httpx.Response(200, content=_png((1280, 640)), headers={"content-type": "image/png"}),
+        "https://raw.githubusercontent.com/myorg/myrepo/HEAD/assets/logo.png": httpx.Response(200, content=_png((256, 256)), headers={"content-type": "image/png"}),
+    }
+
+    def handler(request):
+        return routes.get(str(request.url), httpx.Response(404))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        repo = {"owner": {"login": "myorg", "type": "Organization", "avatar_url": "https://avatars.githubusercontent.com/u/999"}}
+        url, kind = await github_image("myorg/myrepo", {}, http, readme=readme, repo=repo)
+        assert url == "https://raw.githubusercontent.com/myorg/myrepo/HEAD/assets/logo.png"
+        assert kind == "logo"
+
+
+async def test_github_image_uses_org_avatar_when_no_readme_logo():
+    import httpx
+    from magpie.enrich import github_image
+
+    readme = "# MyRepo\nJust text without any logo."
+    routes = {
+        "https://github.com/myorg/myrepo": httpx.Response(200, text='<html><head><meta property="og:image" content="https://repository-images.githubusercontent.com/123/banner.png"></head></html>', headers={"content-type": "text/html"}),
+        "https://avatars.githubusercontent.com/u/999": httpx.Response(200, content=_png((400, 400)), headers={"content-type": "image/png"}),
+        "https://repository-images.githubusercontent.com/123/banner.png": httpx.Response(200, content=_png((1280, 640)), headers={"content-type": "image/png"}),
+    }
+
+    def handler(request):
+        return routes.get(str(request.url), httpx.Response(404))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        repo = {"owner": {"login": "myorg", "type": "Organization", "avatar_url": "https://avatars.githubusercontent.com/u/999"}}
+        url, kind = await github_image("myorg/myrepo", {}, http, readme=readme, repo=repo)
+        assert url == "https://avatars.githubusercontent.com/u/999"
+        assert kind == "logo"
+
+
+async def test_github_image_falls_back_to_social_preview_without_logo():
+    import httpx
+    from magpie.enrich import github_image
+
+    readme = "# MyRepo\nJust text without any logo."
+    routes = {
+        "https://github.com/john/myrepo": httpx.Response(200, text='<html><head><meta property="og:image" content="https://repository-images.githubusercontent.com/123/banner.png"></head></html>', headers={"content-type": "text/html"}),
+        "https://repository-images.githubusercontent.com/123/banner.png": httpx.Response(200, content=_png((1280, 640)), headers={"content-type": "image/png"}),
+    }
+
+    def handler(request):
+        return routes.get(str(request.url), httpx.Response(404))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        # User account (not organization) without avatar verification
+        repo = {"owner": {"login": "john", "type": "User"}}
+        url, kind = await github_image("john/myrepo", {}, http, readme=readme, repo=repo)
+        assert url == "https://repository-images.githubusercontent.com/123/banner.png"
+        assert kind is None
+
+
+async def test_enrich_github_sets_logo_kind():
+    import httpx
+    from magpie.config import Settings
+    from magpie.enrich import enrich_github
+
+    settings = Settings()
+
+    readme = '<p align="center"><img src="assets/logo.png" alt="logo"></p>'
+    repo_data = {
+        "full_name": "cool/app",
+        "html_url": "https://github.com/cool/app",
+        "stargazers_count": 500,
+        "owner": {"login": "cool", "type": "Organization", "avatar_url": "https://avatars.githubusercontent.com/u/123", "html_url": "https://github.com/cool"},
+    }
+    routes = {
+        "https://api.github.com/repos/cool/app": httpx.Response(200, json=repo_data),
+        "https://api.github.com/repos/cool/app/readme": httpx.Response(200, text=readme),
+        "https://api.github.com/repos/cool/app/releases/latest": httpx.Response(404),
+        "https://github.com/cool/app": httpx.Response(200, text='<html><head><meta property="og:image" content="https://repository-images.githubusercontent.com/123/banner.png"></head></html>', headers={"content-type": "text/html"}),
+        "https://raw.githubusercontent.com/cool/app/HEAD/assets/logo.png": httpx.Response(200, content=_png((256, 256)), headers={"content-type": "image/png"}),
+    }
+
+    def handler(request):
+        return routes.get(str(request.url), httpx.Response(404))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        analysis = {"title": "cool app", "canonical_url": "https://github.com/cool/app", "details": {"github_full_name": "cool/app"}}
+        enrichment = await enrich_github(analysis, settings, http)
+        assert enrichment is not None
+        assert enrichment.image_url == "https://raw.githubusercontent.com/cool/app/HEAD/assets/logo.png"
+        assert enrichment.image_kind == "logo"
+

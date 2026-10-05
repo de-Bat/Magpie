@@ -361,7 +361,28 @@ def _unique(urls: Iterable[str]) -> list[str]:
     return out
 
 
+def _resolve_readme_src(src: str, full_name: str, base: str | None = None) -> str | None:
+    src = (src or "").strip()
+    if not src or src.startswith("data:"):
+        return None
+    if src.startswith("//"):
+        src = "https:" + src
+    elif not src.startswith("http"):
+        if base:
+            src = urljoin(base if base.endswith("/") else base + "/", src.removeprefix("./"))
+        elif full_name:
+            src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.removeprefix('./').lstrip('/')}"
+        else:
+            return None
+    src = github_raw(src)
+    return src if looks_usable(src) and not _README_NOISE.search(src) else None
+
+
 _README_IMG = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)|<img\b[^>]*?\bsrc=(?:["\']([^"\']+)["\']|([^\s>"\']+))', re.I)
+_LOGO_NAME_RE = re.compile(r"(?:^|[_\-/.])(logo|icon|brand|logomark|wordmark|symbol|mascot)(?:[_\-/.]|$)", re.I)
+_LOGO_ATTR_RE = re.compile(r"\b(logo|icon|brand|logomark|wordmark|symbol|mascot)\b", re.I)
+_MD_IMG_FULL = re.compile(r'!\[(?P<alt>[^\]]*)\]\(\s*<?(?P<src>[^)\s>]+)(?:\s+(?:["\'](?P<title>[^"\']*)["\']|\((?P<title2>[^)]*)\)))?', re.I)
+_CENTER_BLOCK = re.compile(r'<(?:p|div|h1)\b[^>]*align=["\']?center["\']?[^>]*>(.*?)</(?:p|div|h1)>', re.I | re.S)
 
 
 def readme_images(markdown: str, full_name: str, limit: int = 3, base: str | None = None) -> list[str]:
@@ -370,21 +391,72 @@ def readme_images(markdown: str, full_name: str, limit: int = 3, base: str | Non
     CDN) or, by default, the GitHub repository."""
     found: list[str] = []
     for m in _README_IMG.finditer((markdown or "")[:8000]):
-        src = (m.group(1) or m.group(2) or m.group(3) or "").strip()
-        if not src or src.startswith("data:"):
-            continue
-        if src.startswith("//"):
-            src = "https:" + src
-        elif not src.startswith("http"):
-            if base:
-                src = urljoin(base if base.endswith("/") else base + "/", src.removeprefix("./"))
-            elif full_name:
-                src = f"https://raw.githubusercontent.com/{full_name}/HEAD/{src.removeprefix('./').lstrip('/')}"
-            else:
-                continue  # a relative path we can't resolve
-        src = github_raw(src)
-        if looks_usable(src) and not _README_NOISE.search(src) and src not in found:
+        raw = m.group(1) or m.group(2) or m.group(3) or ""
+        src = _resolve_readme_src(raw, full_name, base)
+        if src and src not in found:
             found.append(src)
         if len(found) >= limit:
             break
     return found
+
+
+def readme_logos(markdown: str, full_name: str, limit: int = 3, base: str | None = None) -> list[str]:
+    """Candidate logos found near the top of a repository README: images whose filename, alt text, or
+    class declares them as a logo, icon or brand, or a hero emblem centered at the top."""
+    text = (markdown or "")[:10000]
+    if not text:
+        return []
+
+    # Find images located inside a centered block near the top of the README (<2500 chars)
+    centered_srcs: set[str] = set()
+    for block in _CENTER_BLOCK.finditer(text[:2500]):
+        for im in _README_IMG.finditer(block.group(1)):
+            raw = im.group(1) or im.group(2) or im.group(3) or ""
+            resolved = _resolve_readme_src(raw, full_name, base)
+            if resolved:
+                centered_srcs.add(resolved)
+
+    explicit_logos: list[str] = []
+    top_centered: list[str] = []
+
+    # 1. HTML <img> tags
+    for tag_match in re.finditer(r'<img\b(?P<attrs>[^>]*?)>', text, re.I):
+        attrs = tag_match.group("attrs")
+        raw = (_best_srcset(_attr(attrs, "data-srcset") or _attr(attrs, "srcset")) or
+               _attr(attrs, "src") or _attr(attrs, "data-src") or _attr(attrs, "data-original"))
+        if not raw:
+            continue
+        src = _resolve_readme_src(raw, full_name, base)
+        if not src:
+            continue
+        alt = _attr(attrs, "alt") or ""
+        title = _attr(attrs, "title") or ""
+        cls = _attr(attrs, "class") or ""
+        is_explicit = bool(_LOGO_NAME_RE.search(src) or _LOGO_ATTR_RE.search(f"{alt} {title} {cls}"))
+        if is_explicit and src not in explicit_logos:
+            explicit_logos.append(src)
+        elif src in centered_srcs and src not in top_centered and not re.search(r"screenshot|diagram|demo", f"{src} {alt}", re.I):
+            top_centered.append(src)
+
+    # 2. Markdown images ![alt](url)
+    for m in _MD_IMG_FULL.finditer(text):
+        raw = m.group("src") or ""
+        src = _resolve_readme_src(raw, full_name, base)
+        if not src:
+            continue
+        alt = m.group("alt") or ""
+        title = m.group("title") or m.group("title2") or ""
+        is_explicit = bool(_LOGO_NAME_RE.search(src) or _LOGO_ATTR_RE.search(f"{alt} {title}"))
+        if is_explicit and src not in explicit_logos:
+            explicit_logos.append(src)
+        elif src in centered_srcs and src not in top_centered and not re.search(r"screenshot|diagram|demo", f"{src} {alt}", re.I):
+            top_centered.append(src)
+
+    out: list[str] = []
+    for s in [*explicit_logos, *top_centered]:
+        if s not in out:
+            out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+

@@ -78,6 +78,7 @@ const HIDDEN_META = new Set([
 const state = {
   q: "", tab: "all", show: "all", tags: [], cols: (() => { try { return Math.max(0, Math.min(8, parseInt(localStorage.getItem("magpie.columns"), 10) || 0)); } catch { return 0; } })(),
   layout: (() => { try { return localStorage.getItem("magpie.layout") === "list" ? "list" : "grid"; } catch { return "grid"; } })(),
+  expandedCover: (() => { try { return localStorage.getItem("magpie.expandedCover") === "1"; } catch { return false; } })(),
   items: new Map(),        // id -> item (mirror of the IndexedDB "items" store)
   ops: [],                 // queued changes, oldest first
   sync: "idle",            // idle | syncing | offline | auth | error
@@ -2293,7 +2294,10 @@ function coverHtml(item, { chip = true } = {}) {
   // a real poster, cover or header; your own screenshot lives under "Original"
   const pic = safeUrl(item.image_url) && !brokenImages.has(safeUrl(item.image_url)) ? safeUrl(item.image_url) : null;
   // only the site's logo (no picture of the article): shown whole on a tile, with the title still on the cover
-  const logo = !!pic && item.metadata?.image_kind === "logo";
+  const logo = !!pic && (
+    item.metadata?.image_kind === "logo" ||
+    (item.category === "github_repo" && /avatars\.githubusercontent\.com|[_\-/.]logo[_\-/.]|[_\-/.]icon[_\-/.]|[_\-/.]brand[_\-/.]/i.test(pic))
+  );
   const wide = !!pic && !logo && WIDE_CATEGORIES.has(item.category);
   const backdrop = wide && item.metadata?.image_opaque === true;   // a transparent logo keeps the plain themed cover
   const busy = ["queued", "processing"].includes(item.status) || item.batch_pending || item.pending_upload;
@@ -2520,6 +2524,20 @@ function originalHtml(item) {
   return `<p class="meta-line" style="margin:0">${esc(tr("The original isn't on this device"))}${item.pending_upload ? "" : esc(tr(". It opens once you're connected to the server."))}</p>`;
 }
 
+function toggleDetailCoverSize() {
+  state.expandedCover = !state.expandedCover;
+  try { localStorage.setItem("magpie.expandedCover", state.expandedCover ? "1" : "0"); } catch {}
+  const hero = $("#detail .hero");
+  if (hero) hero.classList.toggle("expanded-cover", state.expandedCover);
+  const zoomBtn = $("#detail .cover-zoom-btn");
+  if (zoomBtn) {
+    zoomBtn.textContent = state.expandedCover ? "⤡" : "⤢";
+    const label = tr(state.expandedCover ? "Smaller cover" : "Enlarge cover");
+    zoomBtn.title = label;
+    zoomBtn.setAttribute("aria-label", label);
+  }
+}
+
 function renderDetail(source) {
   const item = localizedView(source), view = item;
   const m = item.metadata || {};
@@ -2541,8 +2559,14 @@ function renderDetail(source) {
   dlg.innerHTML = `
     <div class="detail t-${themeOf(item.category)}" data-id="${esc(item.id)}" tabindex="-1" autofocus>
       <button class="btn close" data-action="close" aria-label="${esc(tr("Close"))}">✕</button>
-      <div class="hero">
-        <div class="hero-cover">${coverHtml(item, { chip: false })}</div>
+      <div class="hero${state.expandedCover ? " expanded-cover" : ""}">
+        <div class="hero-cover">
+          ${coverHtml(item, { chip: false })}
+          <div class="cover-actions">
+            <button class="cover-zoom-btn" type="button" data-action="toggle-cover-size" title="${state.expandedCover ? esc(tr("Smaller cover")) : esc(tr("Enlarge cover"))}" aria-label="${state.expandedCover ? esc(tr("Smaller cover")) : esc(tr("Enlarge cover"))}">${state.expandedCover ? "⤡" : "⤢"}</button>
+            ${safeUrl(item.image_url) ? `<a class="cover-full-link" href="${esc(safeUrl(item.image_url))}" target="_blank" rel="noopener" title="${esc(tr("View full image"))}" aria-label="${esc(tr("View full image"))}">↗</a>` : ""}
+          </div>
+        </div>
         <div class="hero-text">
           <div class="eyebrow">${metaLine}</div>
           <h2>${esc(cardTitle(view))}</h2>
@@ -2990,7 +3014,7 @@ async function askToken() {
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#add-menu, #fab-more")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed]");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed],.hero-cover .cover");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
@@ -3078,6 +3102,10 @@ document.addEventListener("click", async (e) => {
     const item = state.items.get(t.dataset.id);
     if (item) renderDetail(item);
     return;
+  } else if (t.classList.contains("cover") && t.closest(".hero-cover")) {
+    if (!e.target.closest(".cover-actions, a, button")) {
+      return toggleDetailCoverSize();
+    }
   } else {
     const id = t.closest(".detail")?.dataset.id;
     const item = id && state.items.get(id);
@@ -3090,6 +3118,7 @@ document.addEventListener("click", async (e) => {
     }
     switch (t.dataset.action) {
       case "close": return $("#detail").close();
+      case "toggle-cover-size": return toggleDetailCoverSize();
       case "verify": return verifyItem(id);
       case "fix": fixing = id; renderDetail(item); return $("#correct-form input[name=title]")?.focus();
       case "cancel-fix": fixing = null; return renderDetail(item);

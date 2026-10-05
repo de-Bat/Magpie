@@ -21,7 +21,7 @@ from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
 from .related import outbound_related, readme_related, same_site, text_related
 from .images import (best_image, manifest_icons, oembed_thumbnail, origin_icons, package_logos, page_image_candidates,
-                     page_pictures, readme_images, site_logos, verify_image, youtube_thumbnails)
+                     page_pictures, readme_images, readme_logos, site_logos, verify_image, youtube_thumbnails)
 
 log = logging.getLogger(__name__)
 
@@ -157,7 +157,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         readme = rr.text if rr.status_code == 200 else ""
     except httpx.HTTPError:
         readme = ""
-    hero = await github_image(full_name, headers, http, readme)
+    hero, hero_kind = await github_image(full_name, headers, http, readme=readme, repo=repo)
     release = await _latest_release(full_name, headers, http)
     meta = {
         "github_full_name": full_name,
@@ -193,6 +193,7 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         metadata=meta, related=related,
         canonical_url=repo["html_url"],
         image_url=hero,
+        image_kind=hero_kind,
         subtitle=repo.get("description"),
         links=links,
         tags=tags,
@@ -209,22 +210,49 @@ async def _latest_release(full_name: str, headers: dict, http: httpx.AsyncClient
         return None
 
 
-async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient, readme: str | None = None) -> str:
-    """The best picture for a repository: the maintainers' own social preview if they uploaded one, else the
-    header or logo from the README, else GitHub's generated card (always available)."""
-    candidates: list[str] = []
-    page = await fetch_page(f"https://github.com/{full_name}", http)
-    og = (page.meta.get("og:image") or "") if page else ""
-    if "repository-images.githubusercontent.com" in og:  # uploaded by the maintainers; the generated cards are opengraph.githubassets.com
-        candidates.append(og)
+async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient,
+                       readme: str | None = None, repo: dict | None = None) -> tuple[str, str | None]:
+    """The best picture for a repository, preferring its logo if one exists:
+    1. A logo from the README or the organization's avatar ("logo" kind);
+    2. The maintainers' own social preview if they uploaded one;
+    3. Another picture from the README;
+    4. An individual owner's avatar;
+    5. GitHub's generated card (always available)."""
     if readme is None:
         try:
             r = await http.get(f"https://api.github.com/repos/{full_name}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"})
             readme = r.text if r.status_code == 200 else ""
         except httpx.HTTPError:
             readme = ""
+
+    # 1. Prefer logo: project logo from README, or organization avatar
+    logo_candidates = readme_logos(readme, full_name)
+    owner = (repo.get("owner") if isinstance(repo, dict) else None) or {}
+    if owner.get("type") == "Organization" and owner.get("avatar_url"):
+        logo_candidates.append(owner["avatar_url"])
+
+    logo = await best_image(http, logo_candidates, verified_only=True)
+    if logo:
+        return logo, "logo"
+
+    # 2. Other pictures: maintainer social preview, general README images, user avatar
+    candidates: list[str] = []
+    page = await fetch_page(f"https://github.com/{full_name}", http)
+    og = (page.meta.get("og:image") or "") if page else ""
+    if "repository-images.githubusercontent.com" in og:  # uploaded by the maintainers
+        candidates.append(og)
     candidates += readme_images(readme, full_name)
-    return await best_image(http, candidates, last_resort=f"https://opengraph.githubassets.com/1/{full_name}")
+    if owner.get("avatar_url"):
+        candidates.append(owner["avatar_url"])
+
+    found = await best_image(http, candidates, verified_only=True)
+    if found:
+        kind = "logo" if "avatars.githubusercontent.com" in found else None
+        return found, kind
+
+    # 3. Fallback: generated card
+    fallback = (await best_image(http, candidates)) or f"https://opengraph.githubassets.com/1/{full_name}"
+    return fallback, None
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +302,7 @@ async def enrich_npm(analysis: dict, settings: Settings, http: httpx.AsyncClient
     candidates: list[str] = []
     generic_card = None
     if full_name:
-        image = await github_image(full_name, {"Accept": "application/vnd.github+json"}, http)
+        image, _ = await github_image(full_name, {"Accept": "application/vnd.github+json"}, http)
         if "opengraph.githubassets.com" in image:
             generic_card = image
         else:

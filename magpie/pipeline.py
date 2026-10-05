@@ -130,7 +130,7 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         metadata.update({k: v for k, v in e.metadata.items() if not _empty(v)})
         canonical_url = e.canonical_url or canonical_url
         if e.image_url:
-            if e.image_kind == "logo" and image_url and image_kind != "logo":
+            if e.image_kind == "logo" and image_url and image_kind != "logo" and e.source != "github" and analysis.get("category") != "github_repo":
                 pass  # Keep the specific item picture from analysis over a generic site logo
             else:
                 image_url, image_kind = e.image_url, e.image_kind
