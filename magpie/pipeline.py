@@ -130,7 +130,10 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         metadata.update({k: v for k, v in e.metadata.items() if not _empty(v)})
         canonical_url = e.canonical_url or canonical_url
         if e.image_url:
-            image_url, image_kind = e.image_url, e.image_kind
+            if e.image_kind == "logo" and image_url and image_kind != "logo":
+                pass  # Keep the specific item picture from analysis over a generic site logo
+            else:
+                image_url, image_kind = e.image_url, e.image_kind
         subtitle = subtitle or e.subtitle
         if e.subtitle and e.subtitle != subtitle:
             metadata.setdefault("description", e.subtitle)
@@ -439,9 +442,19 @@ class Pipeline:
         convlog.event("enrichment", sources=[e.source for e in enrichments], matched=[e.matched_title for e in enrichments if e.matched_title],
                       canonical_url=[e.canonical_url for e in enrichments if e.canonical_url], images=[e.image_url for e in enrichments if e.image_url])
         fields = merge(analysis, enrichments)
-        if fields["image_url"] and not any(e.image_url for e in enrichments):
-            # Only the model suggested it, and models sometimes make up image links: keep it only if it isn't dead.
-            fields["image_url"] = await best_image(self.http, [fields["image_url"]])
+        if fields["image_url"] and (not any(e.image_url for e in enrichments) or fields["image_url"] == analysis.get("image_url")):
+            # If the model suggested this image, verify it isn't dead; otherwise fall back to any enrichment image found.
+            verified = await best_image(self.http, [fields["image_url"]])
+            if verified:
+                fields["image_url"] = verified
+            else:
+                enrichment_img = next((e.image_url for e in enrichments if e.image_url), None)
+                enrichment_kind = next((e.image_kind for e in enrichments if e.image_url), None)
+                fields["image_url"] = enrichment_img
+                if enrichment_kind:
+                    fields["metadata"]["image_kind"] = enrichment_kind
+                else:
+                    fields["metadata"].pop("image_kind", None)
         await self._mark_opaque(fields["metadata"], fields["image_url"])
 
         # Replace the tags generated for the previous identification, keep the user's own.

@@ -211,7 +211,7 @@ def install_git(data_dir: Path, url: str, ref: str | None = None) -> dict:
     if ref and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", ref):
         raise LoaderError("The branch or tag has characters git doesn't allow.")
     with _LOCK:
-        host_path = urlsplit(url).path.removesuffix(".git").strip("/").split("/")
+        host_path = urlsplit(url.replace("\\", "/")).path.removesuffix(".git").strip("/").split("/")
         sid = _slug("-".join(host_path[-2:]) or urlsplit(url).hostname)
         if any(s["id"] == sid for s in read_sources(data_dir)):
             raise LoaderError(f"{sid} is already installed; update or remove it instead.", 409)

@@ -1430,3 +1430,89 @@ def test_a_new_capture_of_something_already_saved_joins_the_existing_card(settin
         again = client.post("/api/items", files={"file": ("b.png", second_png, "image/png")}).json()
         assert again["id"] == first and again["duplicate"] is True          # and recognised by its image next time
         assert len(client.get("/api/items").json()) == 1
+
+
+async def test_walled_article_with_search_titles_matches_hit_headline(settings):
+    # A model's web search returns a URL on a walled site whose slug is opaque (e.g. /news/12345),
+    # but the search engine title contains the full article headline.
+    from magpie.findlink import repair_link
+    target_url = "https://www.xda-developers.com/news/12345"
+    routes = {
+        "https://www.xda-developers.com/": httpx.Response(403),
+    }
+    a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url=None,
+        details=blank_details(),
+        _sources=[target_url],
+        _source_titles={target_url: TITLE + " - XDA"},
+    )
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == target_url
+
+
+async def test_vertex_redirect_in_canonical_url_is_resolved(settings):
+    from magpie.findlink import repair_link
+    redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABC"
+    real = "https://www.xda-developers.com/salvaged-gpus-beat-new-card/"
+    routes = {
+        "https://vertexaisearch.cloud.google.com/grounding-api-redirect/ABC": httpx.Response(302, headers={"location": real}),
+        real: _article_page(TITLE),
+    }
+    a = analysis(category="article", title=TITLE, canonical_url=redirect, details=blank_details())
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real
+
+
+async def test_model_article_image_is_kept_over_site_logo(settings):
+    # When an article page is walled off (403), an image URL found by the model is verified and kept,
+    # rather than overwritten by the site's touch icon / logo.
+    from magpie.enrich import enrich_web
+    lead_img = "https://cdn.example/pictures/lead-gpu.jpg"
+    img_bytes = png_bytes((400, 300))
+    routes = {
+        "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": httpx.Response(403),
+        "https://www.xda-developers.com/favicon.ico": httpx.Response(200, content=png_bytes((32, 32)), headers={"content-type": "image/png"}),
+        "https://www.xda-developers.com/apple-touch-icon.png": httpx.Response(200, content=png_bytes((180, 180)), headers={"content-type": "image/png"}),
+        lead_img: httpx.Response(200, content=img_bytes, headers={"content-type": "image/jpeg"}),
+    }
+    a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url="https://www.xda-developers.com/salvaged-gpus-beat-new-card/",
+        image_url=lead_img,
+        details=blank_details(),
+    )
+    async with mock_http(routes) as http:
+        e = await enrich_web(a, settings, http)
+    assert e is not None
+    assert e.image_url == lead_img
+    assert e.image_kind != "logo"
+
+
+async def test_model_image_falls_back_to_logo_if_model_image_dead(settings):
+    # If the model guessed an image URL that 404s, enrich_web falls back to the site logo.
+    from magpie.enrich import enrich_web
+    dead_img = "https://cdn.example/pictures/nonexistent.jpg"
+    logo_img = "https://www.xda-developers.com/apple-touch-icon.png"
+    routes = {
+        "https://www.xda-developers.com/salvaged-gpus-beat-new-card/": httpx.Response(403),
+        dead_img: httpx.Response(404),
+        "https://www.xda-developers.com/favicon.ico": httpx.Response(404),
+        logo_img: httpx.Response(200, content=png_bytes((180, 180)), headers={"content-type": "image/png"}),
+    }
+    a = analysis(
+        category="article",
+        title=TITLE,
+        canonical_url="https://www.xda-developers.com/salvaged-gpus-beat-new-card/",
+        image_url=dead_img,
+        details=blank_details(),
+    )
+    async with mock_http(routes) as http:
+        e = await enrich_web(a, settings, http)
+    assert e is not None
+    assert e.image_url == logo_img
+    assert e.image_kind == "logo"

@@ -448,3 +448,27 @@ def test_gemini_search_sources_are_resolved_to_the_real_addresses(tmp_path):
     s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None)
     result = asyncio.run(LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler))).analyze(png(), "image/png"))
     assert result["_sources"] == ["https://www.xda-developers.com/real-article/", "https://plain.example/a"]
+
+
+def test_gemini_resolves_vertex_redirects_in_canonical_url_and_image_url(tmp_path):
+    redirect_canonical = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/CANONICAL"
+    redirect_img = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/IMAGE"
+    real_url = "https://www.xda-developers.com/real-article/"
+    real_img = "https://www.xda-developers.com/real-article/lead.jpg"
+
+    def handler(request):
+        if str(request.url) == redirect_canonical:
+            return httpx.Response(302, headers={"location": real_url})
+        if str(request.url) == redirect_img:
+            return httpx.Response(302, headers={"location": real_img})
+        reply_data = {**GOOD, "canonical_url": redirect_canonical, "image_url": redirect_img}
+        reply = {"candidates": [{"content": {"parts": [{"text": json.dumps(reply_data)}]},
+                                 "groundingMetadata": {"webSearchQueries": ["q"], "groundingChunks": [
+                                     {"web": {"uri": redirect_canonical, "title": "Article Headline"}}]}}]}
+        return httpx.Response(200, json=reply)
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None)
+    result = asyncio.run(LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler))).analyze(png(), "image/png"))
+    assert result["canonical_url"] == real_url
+    assert result["image_url"] == real_img
+    assert result["_source_titles"][real_url] == "Article Headline"

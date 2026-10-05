@@ -175,7 +175,8 @@ async def judge(title: str, url: str, search_title: str, wanted_hosts: list[str]
 
 
 async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncClient, publisher: str | None = None,
-                           sites: list[str] = (), sources: list[str] = ()) -> str | None:
+                           sites: list[str] = (), sources: list[str] = (),
+                           source_titles: dict[str, str] | None = None) -> str | None:
     """The address of the page titled `title`: first the pages the model's own web search found, then looked for on the same
     site (or a site named in the capture, or at the named publisher), then anywhere, then with the headline's first words
     unquoted (a capture often cuts it). What was tried and why each was taken or refused goes into the conversation log."""
@@ -203,7 +204,8 @@ async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncC
     # the pages Gemini's (or any model's) web search read: best first, those on the site we're after
     ordered = sorted(dict.fromkeys(sources), key=lambda u: not any(_site(u) == h or _site(u).endswith("." + h) for h in wanted))
     for url in ordered[:6]:
-        if (found := await check(Hit(url), "the model's web search")):
+        hit_title = (source_titles or {}).get(url, "")
+        if (found := await check(Hit(url, hit_title), "the model's web search")):
             report(found)
             return found
     for query in queries:
@@ -219,28 +221,55 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
     """The analysis with a working link: unchanged if the model's link opens and fits the title; otherwise the
     real article's address, or no link at all when it can't be found. Links you shared yourself are never touched."""
     url, title = analysis.get("canonical_url"), analysis.get("title")
+    source_titles = dict(analysis.get("_source_titles") or {})
+    sources = list(analysis.get("_sources") or ())
+    for item in analysis.get("links") or []:
+        u, lbl = item.get("url"), item.get("label")
+        if u and u.startswith("http") and u not in sources:
+            sources.append(u)
+            if lbl:
+                source_titles.setdefault(u, lbl)
+    for item in analysis.get("related") or []:
+        u, lbl = item.get("url"), item.get("label")
+        if u and u.startswith("http") and u not in sources:
+            sources.append(u)
+            if lbl:
+                source_titles.setdefault(u, lbl)
+
+    if url and "vertexaisearch.cloud.google.com" in url:
+        try:
+            r = await http.get(url, follow_redirects=False, timeout=8)
+            if r.is_redirect and (target := r.headers.get("location")):
+                if target.startswith("http") and "google.com/grounding" not in target:
+                    url = target
+                    analysis = {**analysis, "canonical_url": url}
+        except httpx.HTTPError:
+            pass
+
     if not url and title and analysis.get("category") == "article" and "link" not in (analysis.get("_analyzer") or []):
         # the model named the article but found no address for it: look it up
         publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
-        found = await find_article_url(title, None, http, publisher, capture_sites(analysis), analysis.get("_sources") or ())
+        found = await find_article_url(title, None, http, publisher, capture_sites(analysis), sources, source_titles=source_titles)
         return {**analysis, "canonical_url": found} if found else analysis
     if (not url or not title or analysis.get("category") not in REPAIRABLE or not url.startswith("http")
             or "link" in (analysis.get("_analyzer") or [])):
         return analysis
     page = await fetch_page(url, http)
     if page and page_matches(title, page):
-        return analysis
+        return {**analysis, "canonical_url": canonical_link(page)}
     if page is None and not link_is_gone(url):
-        return analysis   # blocked, timing out or not a web page: we can't tell that it's wrong
+        slug = _slug_words(url)
+        if not slug or _share(title, slug) >= 0.6:
+            return {**analysis, "canonical_url": _clean(url)}
     publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
-    found = await find_article_url(title, url, http, publisher, capture_sites(analysis), analysis.get("_sources") or ())
+    found = await find_article_url(title, url, http, publisher, capture_sites(analysis), sources, source_titles=source_titles)
     if found:
         log.info("Link %s for %r didn't match; using %s", url, title, found)
         return {**analysis, "canonical_url": found}
-    if page is not None:
-        # The address opens, so it isn't made up: the page's headline just doesn't repeat the title (a product page, a
-        # place, a podcast, a model's paraphrase). Keep it rather than lose a working link; only a dead one is dropped.
-        return analysis
+    if page is not None or not link_is_gone(url):
+        # The address opens, so it isn't made up (or was blocked and couldn't be replaced): keep it rather than lose a working link;
+        # only a dead one is dropped.
+        return {**analysis, "canonical_url": _clean(url)}
     log.info("Link %s for %r is dead and no replacement was found", url, title)
     note = " The link the model suggested doesn't work, so none is shown."
     return {**analysis, "canonical_url": None,

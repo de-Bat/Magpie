@@ -277,10 +277,33 @@ class LocalLLMAnalyzer:
                 raise AnalysisError(f"Unexpected reply from Gemini: {r.text[:300]}") from e
             grounding = cand.get("groundingMetadata") or {}
             queries = grounding.get("webSearchQueries") or []
-            sources = await self._grounding_sources(grounding)
+            sources, titles = await self._grounding_sources(grounding)
             convlog.event("web_search", queries=queries, sources=sources)
             result = normalize(parse_json(text))
-            result["_sources"] = sources
+            for k in ("canonical_url", "image_url"):
+                val = result.get(k)
+                if val and "vertexaisearch.cloud.google.com" in val:
+                    target = await self._resolve_vertex_redirect(val)
+                    if target:
+                        result[k] = target
+            for item in result.get("links") or []:
+                u, lbl = item.get("url"), item.get("label")
+                if u and u.startswith("http"):
+                    sources.append(u)
+                    if lbl:
+                        titles.setdefault(u, lbl)
+            for item in result.get("related") or []:
+                u, lbl = item.get("url"), item.get("label")
+                if u and u.startswith("http"):
+                    sources.append(u)
+                    if lbl:
+                        titles.setdefault(u, lbl)
+            if result.get("canonical_url"):
+                sources.append(result["canonical_url"])
+                if result.get("title"):
+                    titles.setdefault(result["canonical_url"], result["title"])
+            result["_sources"] = list(dict.fromkeys(sources))
+            result["_source_titles"] = titles
         except AnalysisError as e:
             run.ok = False
             e.runs = [] if getattr(e, "unsent", False) else [self._finish_run(run, started, {})]
@@ -291,25 +314,27 @@ class LocalLLMAnalyzer:
                                                            "completion_tokens": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)})]
         return result
 
-    async def _grounding_sources(self, grounding: dict) -> list[str]:
-        """The pages Google Search returned for the answer. Gemini gives them as redirect links on its own domain; the
+    async def _resolve_vertex_redirect(self, uri: str | None) -> str | None:
+        if not uri or not uri.startswith("http"):
+            return None
+        if (urlsplit(uri).hostname or "") != "vertexaisearch.cloud.google.com":
+            return uri
+        try:
+            r = await self.http.get(uri, follow_redirects=False, timeout=8)
+        except httpx.HTTPError:
+            return None
+        target = r.headers.get("location") if r.is_redirect else None
+        return target if target and target.startswith("http") and "google.com/grounding" not in target else None
+
+    async def _grounding_sources(self, grounding: dict) -> tuple[list[str], dict[str, str]]:
+        """The pages Google Search returned for the answer and their titles. Gemini gives them as redirect links on its own domain; the
         redirect's target is the real address."""
-        uris = [(c.get("web") or {}).get("uri") for c in grounding.get("groundingChunks") or []]
-
-        async def resolve(uri: str | None) -> str | None:
-            if not uri or not uri.startswith("http"):
-                return None
-            if (urlsplit(uri).hostname or "") != "vertexaisearch.cloud.google.com":
-                return uri
-            try:
-                r = await self.http.get(uri, follow_redirects=False, timeout=8)
-            except httpx.HTTPError:
-                return None
-            target = r.headers.get("location") if r.is_redirect else None
-            return target if target and target.startswith("http") and "google.com/grounding" not in target else None
-
-        resolved = await asyncio.gather(*(resolve(u) for u in uris[:8]))
-        return list(dict.fromkeys(u for u in resolved if u))
+        chunks = [(c.get("web") or {}) for c in grounding.get("groundingChunks") or []]
+        uris = [c.get("uri") for c in chunks]
+        resolved = await asyncio.gather(*(self._resolve_vertex_redirect(u) for u in uris[:8]))
+        sources = list(dict.fromkeys(u for u in resolved if u))
+        titles = {u: c.get("title") for u, c in zip(resolved, chunks) if u and c.get("title")}
+        return sources, titles
 
     def _finish_run(self, run: Run, started: float, usage: dict) -> dict:
         run.requests = 1

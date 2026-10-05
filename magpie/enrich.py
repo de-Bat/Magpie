@@ -11,7 +11,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -29,6 +29,19 @@ BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
 )
+BROWSER_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="126", "Google Chrome";v="126"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 TMDB_IMG = "https://image.tmdb.org/t/p/w500"
 
 
@@ -797,8 +810,7 @@ def page_refused(url: str) -> bool:
 
 async def _fetch_page(url: str, http: httpx.AsyncClient) -> Page | None:
     try:
-        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "text/html,application/xhtml+xml",
-                                               "Accept-Language": "en-US,en;q=0.9"})
+        r = await safe_get(http, url, headers=BROWSER_HEADERS)
     except (httpx.HTTPError, BlockedURL) as e:
         log.info("Fetching %s failed: %s", url, e)
         if isinstance(e, BlockedURL) and "Can't resolve" in str(e):
@@ -961,6 +973,23 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
         return None
     page = await fetch_page(url, http)
     if not page:
+        # Check if the model already found an actual image (from web search or article page)
+        model_pic = analysis.get("image_url")
+        if model_pic and model_pic.startswith("http"):
+            verified_pic = await best_image(http, [model_pic], verified_only=True)
+            if verified_pic:
+                return Enrichment(image_url=verified_pic, canonical_url=strip_tracking(url))
+
+        # Check alternative sources from the model's search for an article picture
+        for alt_url in (analysis.get("_sources") or []):
+            if alt_url and alt_url != url and alt_url.startswith("http"):
+                alt_page = await fetch_page(alt_url, http)
+                if alt_page:
+                    alt_pic, _ = await page_picture(http, alt_page)
+                    if alt_pic:
+                        return Enrichment(image_url=alt_pic, canonical_url=strip_tracking(url))
+                    break
+
         # Blocked or behind a consent wall: a YouTube video still has a thumbnail we can address directly,
         # many articles have a copy in the Internet Archive with the same share image, and failing that
         # the site's logo is at a known address.
@@ -975,7 +1004,8 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
             found.image_url = await best_image(http, page_image_candidates(page, [found.image_url]), page.url) or found.image_url
             return found
     e = with_readability(opengraph_from_page(page), page)
-    e.image_url, e.image_kind = await page_picture(http, page, e.image_url)
+    extra_lead = [analysis.get("image_url")] if analysis.get("image_url") else []
+    e.image_url, e.image_kind = await page_picture(http, page, e.image_url, extra_candidates=extra_lead)
     e.related = outbound_related(page)   # the repository, app, paper or company the article is about
     # ... and the ones it only names in its text ("github.com/owner/repo", "example.dev")
     e.related += [r for r in text_related(e.metadata.get("article_text") or "", limit=4)
@@ -1002,14 +1032,15 @@ async def archived_picture(url: str, http: httpx.AsyncClient) -> str | None:
     return await best_image(http, [*originals, *(f"https://web.archive.org/web/{ts}im_/{u}" for u in originals)], verified_only=True)
 
 
-async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = None) -> tuple[str | None, str | None]:
+async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = None,
+                       extra_candidates: Iterable[str | None] = ()) -> tuple[str | None, str | None]:
     """The best picture a web page offers, and whether it is only the site's logo ("logo"). In order:
     1. a picture of the page, checked: share image, structured data, the header picture, lead and content pictures;
     2. the oEmbed thumbnail and the video's own thumbnail;
     3. the page's own share image even if its host wouldn't let us check it (browsers usually get it);
     4. the site's logo: publisher logo, app manifest and touch icons, the icon at its usual addresses;
     5. any picture that merely couldn't be ruled out."""
-    pictures = page_pictures(page, [lead])
+    pictures = page_pictures(page, [lead, *extra_candidates])
     found = await best_image(http, pictures, page.url, verified_only=True)
     if found:
         return found, None
