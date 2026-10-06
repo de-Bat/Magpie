@@ -21,7 +21,7 @@ import httpx
 from urllib.parse import urlsplit
 
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, RateLimited, ScreenshotAnalyzer, correction_prompt, prepare_image
-from .findlink import collect_sources
+from .findlink import collect_sources, resolve_vertex_redirect
 from .config import HOSTED_LLMS, Settings
 from .related import clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
@@ -306,16 +306,7 @@ class LocalLLMAnalyzer:
         return result
 
     async def _resolve_vertex_redirect(self, uri: str | None) -> str | None:
-        if not uri or not uri.startswith("http"):
-            return None
-        if (urlsplit(uri).hostname or "") != "vertexaisearch.cloud.google.com":
-            return uri
-        try:
-            r = await self.http.get(uri, follow_redirects=False, timeout=8)
-        except httpx.HTTPError:
-            return None
-        target = r.headers.get("location") if r.is_redirect else None
-        return target if target and target.startswith("http") and "google.com/grounding" not in target else None
+        return await resolve_vertex_redirect(self.http, uri)
 
     async def _grounding_sources(self, grounding: dict) -> tuple[list[str], dict[str, str]]:
         """The pages Google Search returned for the answer and their titles. Gemini gives them as redirect links on its own domain; the

@@ -61,6 +61,21 @@ def collect_sources(items: list[dict] | None, sources: list[str], titles: dict[s
             titles.setdefault(u, lbl)
 
 
+async def resolve_vertex_redirect(http: httpx.AsyncClient, uri: str | None) -> str | None:
+    """The real address behind a Gemini grounding redirect (a link on vertexaisearch.cloud.google.com); other
+    addresses are returned as they are, and None when the redirect can't be followed."""
+    if not uri or not uri.startswith("http"):
+        return None
+    if (urlsplit(uri).hostname or "") != "vertexaisearch.cloud.google.com":
+        return uri
+    try:
+        r = await http.get(uri, follow_redirects=False, timeout=8)
+    except httpx.HTTPError:
+        return None
+    target = r.headers.get("location") if r.is_redirect else None
+    return target if target and target.startswith("http") and "google.com/grounding" not in target else None
+
+
 def _words(text: str) -> set[str]:
     return {w for w in re.findall(r"[^\W_]+", (text or "").lower()) if len(w) > 2 and w not in _STOP}
 
@@ -354,14 +369,9 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
     collect_sources(analysis.get("related"), sources, source_titles, skip_aggregators=True)
 
     if url and "vertexaisearch.cloud.google.com" in url:
-        try:
-            r = await http.get(url, follow_redirects=False, timeout=8)
-            if r.is_redirect and (target := r.headers.get("location")):
-                if target.startswith("http") and "google.com/grounding" not in target:
-                    url = target
-                    analysis = {**analysis, "canonical_url": url}
-        except httpx.HTTPError:
-            pass
+        if target := await resolve_vertex_redirect(http, url):
+            url = target
+            analysis = {**analysis, "canonical_url": url}
 
     publisher = ((analysis.get("details") or {}).get("publisher") or "").strip() or None
     if is_aggregator_name(publisher):

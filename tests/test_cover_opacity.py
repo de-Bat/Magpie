@@ -114,7 +114,7 @@ def test_nothing_is_recorded_when_the_picture_cannot_be_checked(settings):
 
 
 def test_the_card_uses_the_backdrop_only_for_pictures_known_to_be_opaque():
-    js, css = (STATIC / "app.js").read_text(), (STATIC / "style.css").read_text()
+    js, css = (STATIC / "app.js").read_text(encoding="utf-8"), (STATIC / "style.css").read_text(encoding="utf-8")
     assert 'item.metadata?.image_opaque === true' in js and "backdrop ? `<img class=\"cover-bd\"" in js
     assert '"image_opaque"' in js                                   # kept out of the Details table
     assert ".cover.wide-img.bd .cover-img" in css and ".cover.wide-img .cover-img { object-fit: contain; top: 22%" in css

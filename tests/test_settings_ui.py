@@ -7,7 +7,7 @@ import magpie
 STATIC = Path(magpie.__file__).parent / "static"
 
 def source():
-    return (STATIC / "app.js").read_text(), (STATIC / "style.css").read_text(), (STATIC / "index.html").read_text()
+    return (STATIC / "app.js").read_text(encoding="utf-8"), (STATIC / "style.css").read_text(encoding="utf-8"), (STATIC / "index.html").read_text(encoding="utf-8")
 
 
 def test_toasts_are_in_the_top_layer_so_they_show_above_an_open_dialog():
@@ -91,8 +91,8 @@ def test_main_link_is_an_icon_and_arrow_on_phones():
 
 def test_the_app_is_localized_and_movie_texts_follow_the_viewers_language():
     js, css, html = source()
-    i18n = (STATIC / "i18n.js").read_text()
-    assert '<script src="/static/i18n.js"></script>' in html and "/static/i18n.js" in (STATIC / "sw.js").read_text()
+    i18n = (STATIC / "i18n.js").read_text(encoding="utf-8")
+    assert '<script src="/static/i18n.js"></script>' in html and "/static/i18n.js" in (STATIC / "sw.js").read_text(encoding="utf-8")
     for code in ("he", "es", "de", "fr"):
         assert f"{code}:" in i18n or f'"{code}"' in i18n
     assert 'RTL_LANGUAGES = new Set(["he"' in i18n and "function localizedView(" in i18n and "Intl.RelativeTimeFormat" in i18n
@@ -102,7 +102,7 @@ def test_the_app_is_localized_and_movie_texts_follow_the_viewers_language():
 
 def test_every_translated_row_is_complete():
     import json, subprocess
-    out = subprocess.run(["node", "-e", f"""{(STATIC / 'i18n.js').read_text()}
+    out = subprocess.run(["node", "-e", f"""{(STATIC / 'i18n.js').read_text(encoding="utf-8")}
       const missing = []; const keys = Object.keys(TRANSLATIONS.he);
       for (const l of ['he','es','de','fr']) for (const k of keys) {{ if (!TRANSLATIONS[l][k]) missing.push(l+':'+k);
         const vars = (x) => (x.match(/\\{{\\w+\\}}/g) || []).sort().join(); if (TRANSLATIONS[l][k] && vars(TRANSLATIONS[l][k]) !== vars(k)) missing.push('vars '+l+':'+k); }}
