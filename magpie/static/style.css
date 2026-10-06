@@ -136,9 +136,9 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 .cover .typechip, .cover .flag { z-index: 2; }
 .cover.busy::after { z-index: 2; }
 .cover.has-img::before, .cover.wide-img::before { display: none; }
-/* a site's logo: whole, on a light tile in the upper part of the themed cover; the title stays readable below */
+/* a site's or project's logo: whole, with a transparent background, in the upper part of the themed cover; the title stays readable below */
 .cover.logo-img .cover-img { inset: auto; left: 50%; top: 23%; width: 42%; height: auto; aspect-ratio: 1; transform: translateX(-50%);
-  object-fit: contain; padding: 7%; box-sizing: border-box; background: #fff; border-radius: 18%; box-shadow: 0 4px 18px rgb(0 0 0 / .28); }
+  object-fit: contain; padding: 7%; box-sizing: border-box; background: transparent; border-radius: 18%; filter: drop-shadow(0 4px 12px rgb(0 0 0 / .28)); }
 .cover.logo-img .glyph { visibility: hidden; }
 .cover-title { position: absolute; left: 7%; right: 7%; bottom: 7%; font-weight: 800; line-height: 1.02; letter-spacing: -.02em;
   text-wrap: balance; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--lines, 2);
