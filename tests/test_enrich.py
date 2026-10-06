@@ -187,3 +187,16 @@ def test_clean_keeps_identifying_query_parameters_but_drops_tracking():
     assert _clean("https://example.com/post/") == "https://example.com/post/"
 
 
+
+def test_collect_sources_gathers_link_and_related_urls_with_titles():
+    from magpie.findlink import collect_sources
+    from magpie.related import AGGREGATOR_HOSTS, NOISE_HOSTS
+    sources, titles = ["https://a.com/x"], {}
+    items = [{"url": "https://a.com/x", "label": "First"}, {"url": "https://b.com/y", "label": "Second"},
+             {"url": "https://news.ycombinator.com/item?id=1", "label": "HN"}, {"url": "ftp://c.com/z"}, {"url": None}]
+    collect_sources(items, sources, titles, skip_aggregators=True)
+    assert sources == ["https://a.com/x", "https://b.com/y"]
+    assert titles == {"https://a.com/x": "First", "https://b.com/y": "Second"}
+    collect_sources(items, sources, titles)          # aggregators allowed this time
+    assert "https://news.ycombinator.com/item?id=1" in sources
+    assert all(h in NOISE_HOSTS for h in AGGREGATOR_HOSTS)

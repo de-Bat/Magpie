@@ -21,6 +21,7 @@ import httpx
 from urllib.parse import urlsplit
 
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, RateLimited, ScreenshotAnalyzer, correction_prompt, prepare_image
+from .findlink import collect_sources
 from .config import HOSTED_LLMS, Settings
 from .related import clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
@@ -286,18 +287,8 @@ class LocalLLMAnalyzer:
                     target = await self._resolve_vertex_redirect(val)
                     if target:
                         result[k] = target
-            for item in result.get("links") or []:
-                u, lbl = item.get("url"), item.get("label")
-                if u and u.startswith("http"):
-                    sources.append(u)
-                    if lbl:
-                        titles.setdefault(u, lbl)
-            for item in result.get("related") or []:
-                u, lbl = item.get("url"), item.get("label")
-                if u and u.startswith("http"):
-                    sources.append(u)
-                    if lbl:
-                        titles.setdefault(u, lbl)
+            collect_sources(result.get("links"), sources, titles)
+            collect_sources(result.get("related"), sources, titles)
             if result.get("canonical_url"):
                 sources.append(result["canonical_url"])
                 if result.get("title"):

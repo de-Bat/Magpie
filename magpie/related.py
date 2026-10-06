@@ -14,12 +14,16 @@ KINDS = ("repo", "package", "app", "paper", "company", "docs", "video", "referen
 MAX_RELATED = 8
 GITHUB_RESERVED = {"features", "topics", "sponsors", "orgs", "login", "join", "about", "pricing", "marketplace", "explore",
                    "collections", "trending", "settings", "notifications", "pulls", "issues", "search", "site", "readme", "customer-stories"}
+# link aggregators and social feeds: they repost articles rather than being the article, so they are never an
+# article's own address (findlink resolves them to the original) and never "related"
+AGGREGATOR_HOSTS = ("daily.dev", "app.daily.dev", "reddit.com", "old.reddit.com", "news.ycombinator.com", "flipboard.com", "feedly.com",
+                    "threads.net", "bsky.app", "twitter.com", "x.com", "facebook.com", "linkedin.com")
 # hosts whose links are chrome, sharing buttons or tracking, never "related"
-NOISE_HOSTS = ("facebook.com", "twitter.com", "x.com", "linkedin.com", "pinterest.com", "reddit.com", "instagram.com", "t.me", "wa.me",
-               "whatsapp.com", "flipboard.com", "tumblr.com", "doubleclick.net", "googletagmanager.com", "google.com", "googleadservices.com",
+NOISE_HOSTS = ("pinterest.com", "instagram.com", "t.me", "wa.me",
+               "whatsapp.com", "tumblr.com", "doubleclick.net", "googletagmanager.com", "google.com", "googleadservices.com",
                "bing.com", "amazon.com", "amzn.to", "bit.ly", "t.co", "feedburner.com", "gravatar.com", "wp.com", "wordpress.com",
                "disqus.com", "mailchimp.com", "patreon.com", "paypal.com", "ko-fi.com", "buymeacoffee.com", "archive.org", "archive.ph",
-               "daily.dev", "news.ycombinator.com", "threads.net", "bsky.app", "feedly.com")
+               *AGGREGATOR_HOSTS)
 _ANCHOR = re.compile(r"<a\b[^>]*?\bhref=[\"']([^\"'#][^\"']*)[\"'][^>]*>(.*?)</a>", re.I | re.S)
 _TAG = re.compile(r"<[^>]+>")
 

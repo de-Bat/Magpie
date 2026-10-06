@@ -18,7 +18,7 @@ import httpx
 from . import convlog
 from .enrich import Page, canonical_link, fetch_page, link_is_gone, strip_tracking
 from .fetch import BlockedURL, safe_get
-from .related import NOISE_HOSTS, _TEXT_URL, _host
+from .related import AGGREGATOR_HOSTS, NOISE_HOSTS, _TEXT_URL, _host
 
 log = logging.getLogger(__name__)
 
@@ -27,18 +27,6 @@ REPAIRABLE = {"article", "video", "product", "place", "event", "course", "app", 
 _STOP = {"the", "and", "for", "with", "that", "this", "from", "your", "you", "are", "was", "how", "why", "what", "into", "have", "has"}
 SEARCH_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
-AGGREGATOR_HOSTS = {
-    "daily.dev", "app.daily.dev",
-    "reddit.com", "old.reddit.com",
-    "news.ycombinator.com",
-    "flipboard.com",
-    "feedly.com",
-    "threads.net",
-    "bsky.app",
-    "twitter.com", "x.com",
-    "facebook.com",
-    "linkedin.com",
-}
 
 
 def is_aggregator_host(host: str) -> bool:
@@ -59,6 +47,18 @@ def is_aggregator_name(name: str | None) -> bool:
     if is_aggregator_host(clean):
         return True
     return clean in {"daily.dev", "daily dev", "reddit", "hacker news", "hackernews", "flipboard", "feedly", "threads", "bluesky", "twitter", "x"}
+
+
+def collect_sources(items: list[dict] | None, sources: list[str], titles: dict[str, str], skip_aggregators: bool = False) -> None:
+    """Add the addresses of `items` ({url, label}) to the pages a search may use, and their labels as the titles."""
+    for item in items or []:
+        u, lbl = item.get("url"), item.get("label")
+        if not u or not u.startswith("http") or (skip_aggregators and is_aggregator(u)):
+            continue
+        if u not in sources:
+            sources.append(u)
+        if lbl:
+            titles.setdefault(u, lbl)
 
 
 def _words(text: str) -> set[str]:
@@ -350,18 +350,8 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
     url, title = analysis.get("canonical_url"), analysis.get("title")
     source_titles = dict(analysis.get("_source_titles") or {})
     sources = list(analysis.get("_sources") or ())
-    for item in analysis.get("links") or []:
-        u, lbl = item.get("url"), item.get("label")
-        if u and u.startswith("http") and u not in sources and not is_aggregator(u):
-            sources.append(u)
-            if lbl:
-                source_titles.setdefault(u, lbl)
-    for item in analysis.get("related") or []:
-        u, lbl = item.get("url"), item.get("label")
-        if u and u.startswith("http") and u not in sources and not is_aggregator(u):
-            sources.append(u)
-            if lbl:
-                source_titles.setdefault(u, lbl)
+    collect_sources(analysis.get("links"), sources, source_titles, skip_aggregators=True)
+    collect_sources(analysis.get("related"), sources, source_titles, skip_aggregators=True)
 
     if url and "vertexaisearch.cloud.google.com" in url:
         try:
