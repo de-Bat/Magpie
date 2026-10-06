@@ -157,3 +157,33 @@ async def test_enrich_github_sets_logo_kind():
         assert enrichment.image_url == "https://raw.githubusercontent.com/cool/app/HEAD/assets/logo.png"
         assert enrichment.image_kind == "logo"
 
+
+async def test_github_image_never_uses_a_users_personal_avatar():
+    import httpx
+    from magpie.enrich import github_image
+
+    readme = "# MyRepo\nJust text without any logo."
+    avatar = "https://avatars.githubusercontent.com/u/1"
+    routes = {
+        # the user's avatar loads fine, but it must not be picked; no social preview or README picture exists
+        avatar: httpx.Response(200, content=_png((400, 400)), headers={"content-type": "image/png"}),
+    }
+
+    def handler(request):
+        return routes.get(str(request.url), httpx.Response(404))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        repo = {"owner": {"login": "john", "type": "User", "avatar_url": avatar}}
+        url, kind = await github_image("john/myrepo", {}, http, readme=readme, repo=repo)
+        assert url == "https://opengraph.githubassets.com/1/john/myrepo"
+        assert kind is None
+
+
+def test_clean_keeps_identifying_query_parameters_but_drops_tracking():
+    from magpie.findlink import _clean
+    assert _clean("https://youtube.com/watch?v=abc123&utm_source=x#t=5") == "https://youtube.com/watch?v=abc123"
+    assert _clean("https://shop.example/item.php?id=42&fbclid=zzz") == "https://shop.example/item.php?id=42"
+    assert _clean("https://example.com/post?utm_medium=a&gclid=b") == "https://example.com/post"
+    assert _clean("https://example.com/post/") == "https://example.com/post/"
+
+

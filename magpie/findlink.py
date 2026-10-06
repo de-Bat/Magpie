@@ -186,9 +186,9 @@ def _site(url: str) -> str:
 
 
 def _clean(url: str) -> str:
-    """The address without tracking parameters or a fragment (a page we couldn't open has no canonical link to use)."""
-    parts = urlsplit(url)
-    return parts._replace(query="", fragment="").geturl()
+    """The address without tracking parameters or a fragment (a page we couldn't open has no canonical link to use).
+    Other query parameters stay: they can identify the page (watch?v=..., ?id=...)."""
+    return strip_tracking(url) or url
 
 
 def _extract_page_urls(page: Page) -> list[str]:

@@ -216,8 +216,8 @@ async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient,
     1. A logo from the README or the organization's avatar ("logo" kind);
     2. The maintainers' own social preview if they uploaded one;
     3. Another picture from the README;
-    4. An individual owner's avatar;
-    5. GitHub's generated card (always available)."""
+    4. GitHub's generated card (always available).
+    An individual owner's avatar is never used: it is usually a personal photo, not the project's picture."""
     if readme is None:
         try:
             r = await http.get(f"https://api.github.com/repos/{full_name}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"})
@@ -235,20 +235,17 @@ async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient,
     if logo:
         return logo, "logo"
 
-    # 2. Other pictures: maintainer social preview, general README images, user avatar
+    # 2. Other pictures: maintainer social preview, general README images
     candidates: list[str] = []
     page = await fetch_page(f"https://github.com/{full_name}", http)
     og = (page.meta.get("og:image") or "") if page else ""
     if "repository-images.githubusercontent.com" in og:  # uploaded by the maintainers
         candidates.append(og)
     candidates += readme_images(readme, full_name)
-    if owner.get("avatar_url"):
-        candidates.append(owner["avatar_url"])
 
     found = await best_image(http, candidates, verified_only=True)
     if found:
-        kind = "logo" if "avatars.githubusercontent.com" in found else None
-        return found, kind
+        return found, None
 
     # 3. Fallback: generated card
     fallback = (await best_image(http, candidates)) or f"https://opengraph.githubassets.com/1/{full_name}"
