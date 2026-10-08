@@ -200,3 +200,25 @@ async def test_a_pages_svg_icon_becomes_its_logo(store):
     async with mock_http({"https://site.example/logo.svg": svg(SQUARE_SVG)}) as http:
         picture, kind = await page_picture(http, page)
     assert kind == "logo" and picture.startswith("/media/logo-")
+
+
+def test_refreshing_a_repository_replaces_githubs_generated_card_with_its_readme_svg_logo(tmp_path):
+    from fastapi.testclient import TestClient
+    from magpie.config import Settings
+    from magpie.main import create_app
+    from tests.test_magpie import GITHUB_REPO, FakeAnalyzer, analysis, png_bytes
+
+    readme = {"text": ""}
+    routes = {"https://api.github.com/repos/astral-sh/uv/readme": lambda request: httpx.Response(200, text=readme["text"]),
+              "https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO),
+              "https://raw.githubusercontent.com/astral-sh/uv/HEAD/assets/icon.svg": svg(SQUARE_SVG)}
+    settings = Settings(data_dir=tmp_path, tmdb_api_key=None, omdb_api_key=None, github_token=None)
+    client = TestClient(create_app(settings, analyzer=FakeAnalyzer(analysis()), http=mock_http(routes)))
+    with client:
+        item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
+        before = client.get(f"/api/items/{item_id}").json()
+        assert "opengraph.githubassets.com" in before["image_url"]   # no logo yet: GitHub's generated card
+        readme["text"] = '<h1><img src="assets/icon.svg" alt="uv logo" width="48"> uv</h1>'
+        after = client.post(f"/api/items/{item_id}/refresh-metadata").json()
+    assert after["image_url"].startswith("/media/logo-") and after["metadata"]["image_kind"] == "logo"
+    assert after["metadata"]["image_opaque"] is False

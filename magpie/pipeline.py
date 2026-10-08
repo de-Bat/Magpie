@@ -400,8 +400,9 @@ class Pipeline:
         fresh_img = fresh.get("image_url")
         fresh_kind = fresh.get("metadata", {}).get("image_kind")
 
-        # Use fresh image if available, unless it's just a favicon logo and we already have a real image.
-        if fresh_img and (fresh_kind != "logo" or existing_kind == "logo" or not existing_img):
+        # Use fresh image if available, unless it's just a site's favicon logo and we already have a real image.
+        # A repository's own logo is the picture of it (merge() makes the same exception), and replaces GitHub's generated card.
+        if fresh_img and (fresh_kind != "logo" or existing_kind == "logo" or not existing_img or analysis.get("category") == "github_repo"):
             new_image = fresh_img
             new_kind = fresh_kind
         else:
