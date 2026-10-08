@@ -147,7 +147,7 @@ async def bing_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> t
 
 def _relevant(query: str, hit: Hit) -> bool:
     """Does a result share at least a fifth of the query's significant words (site: and quotes aside)? Junk shares none."""
-    wanted = _words(re.sub(r"site:\S+", " ", query))
+    wanted = _words(re.sub(r"\bsite:\S+", " ", query))
     return not wanted or len(wanted & (_words(hit.title) | _slug_words(hit.url))) / len(wanted) >= 0.2
 
 

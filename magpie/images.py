@@ -5,10 +5,12 @@ header, the site's icon). Some are dead links, tracking pixels, badges or tiny i
 the candidates in order of preference and use the first one that is a real picture.
 """
 
+import hashlib
 import io
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urljoin, urlsplit
 
@@ -51,9 +53,76 @@ def _attr(tag: str, name: str) -> str | None:
     return m.group(1) if m else None
 
 
-def looks_usable(url: str) -> bool:
-    """Cheap check on the URL alone: not an SVG, tracker or ad."""
-    return bool(url) and url.startswith(("http://", "https://")) and not _NOT_A_PICTURE.search(url)
+def looks_usable(url: str, allow_svg: bool = False) -> bool:
+    """Cheap check on the URL alone: not an SVG (unless `allow_svg`), tracker or ad."""
+    if not url or not url.startswith(("http://", "https://")):
+        return False
+    return not _NOT_A_PICTURE.search(_SVG.sub("", url) if allow_svg else url)
+
+
+_SVG = re.compile(r"\.svg(?=[?#]|$)", re.I)
+
+
+def _is_svg_url(url: str) -> bool:
+    return bool(_SVG.search(url))
+
+
+# Logos are often only published as SVG, which browsers show but the iOS app can't decode. Magpie draws them to a PNG
+# kept next to the screenshots and serves it as /media/<name>, which every client can load.
+_store: Path | None = None
+SVG_MAX_BYTES = 400_000
+SVG_RENDER_WIDTH = 512
+# anything that makes the renderer read another file or run something: such a logo is not drawn
+_SVG_UNSAFE = re.compile(rb"<image[ \t\r\n/>]|<foreignObject|<script|<!ENTITY|file:|<use[ \t\r\n][^>]*href=[\"'](?!#)", re.I)
+
+
+def set_store(path: Path | None) -> None:
+    """The folder drawn logos are kept in (the uploads folder); without one, SVG logos are not used."""
+    global _store
+    _store = path
+
+
+def render_svg(data: bytes, max_aspect: float = MAX_ASPECT) -> bytes | None:
+    """A PNG of an SVG logo, or None when it can't be drawn safely, is too small or is too wide."""
+    if len(data) > SVG_MAX_BYTES or b"<svg" not in data[:2000].lower() or _SVG_UNSAFE.search(data):
+        return None
+    try:
+        import resvg_py
+        from PIL import Image
+        png = bytes(resvg_py.svg_to_bytes(svg_string=data.decode("utf-8", "replace"), width=SVG_RENDER_WIDTH, resources_dir=None))
+        with Image.open(io.BytesIO(png)) as im:
+            w, h = im.size
+            if im.getchannel("A").getextrema()[1] < 16:   # drawn but empty
+                return None
+    except Exception as e:   # resvg missing, a broken SVG, an unsupported feature
+        log.info("Couldn't draw an SVG: %s", e)
+        return None
+    return png if min(w, h) >= MIN_SIDE and max(w, h) / max(1, min(w, h)) <= max_aspect else None
+
+
+async def svg_logo(http: httpx.AsyncClient, url: str, max_aspect: float = MAX_ASPECT) -> str | None:
+    """The address (/media/logo-<hash>.png) of an SVG drawn as a PNG, or None. The same SVG is drawn once."""
+    if _store is None:
+        return None
+    name = f"logo-{hashlib.sha1(url.encode()).hexdigest()[:20]}.png"
+    target = _store / name
+    if target.is_file():
+        return f"/media/{name}"
+    try:
+        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/svg+xml,*/*;q=0.5"}, timeout=8)
+    except (httpx.HTTPError, BlockedURL) as e:
+        log.info("Couldn't fetch SVG %s: %s", url, e)
+        return None
+    png = render_svg(r.content, max_aspect) if r.status_code == 200 else None
+    if not png:
+        return None
+    try:
+        _store.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(png)
+    except OSError as e:
+        log.warning("Couldn't keep the drawn logo %s: %s", name, e)
+        return None
+    return f"/media/{name}"
 
 
 def github_raw(url: str) -> str:
@@ -109,18 +178,26 @@ PROBE_BYTES = 1_500_000
 async def picture_is_opaque(http: httpx.AsyncClient, url: str) -> bool | None:
     """Whether a cover picture has no transparent areas, so the card can show it whole over a blurred copy of itself.
     A logo with a transparent background looks wrong that way and keeps the plain themed cover. None: couldn't tell."""
-    try:
-        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/*,*/*;q=0.5",
-                                                "Range": f"bytes=0-{PROBE_BYTES - 1}"}, timeout=8)
-    except (httpx.HTTPError, BlockedURL) as e:
-        log.info("Couldn't probe image %s: %s", url, e)
-        return None
-    if r.status_code not in (200, 206):
+    if url.startswith("/media/"):   # a drawn SVG logo kept on this server
+        try:
+            content = (_store / url.removeprefix("/media/")).read_bytes() if _store else None
+        except OSError:
+            content = None
+        status = 200 if content else 0
+    else:
+        try:
+            r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/*,*/*;q=0.5",
+                                                    "Range": f"bytes=0-{PROBE_BYTES - 1}"}, timeout=8)
+        except (httpx.HTTPError, BlockedURL) as e:
+            log.info("Couldn't probe image %s: %s", url, e)
+            return None
+        content, status = r.content, r.status_code
+    if status not in (200, 206):
         return None
     try:
         from PIL import Image, ImageFile
         ImageFile.LOAD_TRUNCATED_IMAGES = True   # the top of a large picture is enough to see its transparency
-        with Image.open(io.BytesIO(r.content[:PROBE_BYTES])) as im:
+        with Image.open(io.BytesIO(content[:PROBE_BYTES])) as im:
             if im.format == "JPEG":
                 return True
             if im.mode in ("RGBA", "LA", "PA"):
@@ -134,7 +211,8 @@ async def picture_is_opaque(http: httpx.AsyncClient, url: str) -> bool | None:
 
 
 async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], base: str | None = None,
-                     last_resort: str | None = None, verified_only: bool = False, max_aspect: float = MAX_ASPECT) -> str | None:
+                     last_resort: str | None = None, verified_only: bool = False, max_aspect: float = MAX_ASPECT,
+                     allow_svg: bool = False) -> str | None:
     """The first candidate that is a real picture. When none could be checked, the first that
     couldn't be ruled out (unless `verified_only`); `last_resort` (e.g. a generated card) is used without a check."""
     seen: list[str] = []
@@ -142,10 +220,14 @@ async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], 
         if not c or not isinstance(c, str):
             continue
         url = urljoin(base, c.strip()) if base else c.strip()
-        if looks_usable(url) and url not in seen:
+        if looks_usable(url, allow_svg) and url not in seen:
             seen.append(url)
     unknown = None
     for url in seen[:MAX_CHECKS]:
+        if allow_svg and _is_svg_url(url):
+            if drawn := await svg_logo(http, url, max_aspect):
+                return drawn
+            continue
         verdict = await verify_image(http, url, max_aspect)
         if verdict:
             return url
@@ -325,6 +407,8 @@ def site_logos(page: Any) -> list[str]:
     icons = [l for l in getattr(page, "links", []) if "apple-touch-icon" in l["rel"]
              or ("icon" in l["rel"].split() and side(l) >= 120)]
     out = [l["href"] for l in sorted(icons, key=side, reverse=True)]
+    # a vector icon (<link rel="icon" href="/logo.svg">) has no size and draws sharply at any
+    out += [l["href"] for l in getattr(page, "links", []) if "icon" in l["rel"].split() and _is_svg_url(l.get("href") or "")]
     out += [page.meta[k] for k in ("msapplication-square310x310logo", "msapplication-TileImage") if page.meta.get(k)]
     for node in page.ld:
         out += _ld_logos(node)
@@ -364,7 +448,7 @@ def _unique(urls: Iterable[str]) -> list[str]:
     return out
 
 
-def _resolve_readme_src(src: str, full_name: str, base: str | None = None) -> str | None:
+def _resolve_readme_src(src: str, full_name: str, base: str | None = None, allow_svg: bool = False) -> str | None:
     src = (src or "").strip()
     if not src or src.startswith("data:"):
         return None
@@ -378,7 +462,7 @@ def _resolve_readme_src(src: str, full_name: str, base: str | None = None) -> st
         else:
             return None
     src = github_raw(src)
-    return src if looks_usable(src) and not _README_NOISE.search(src) else None
+    return src if looks_usable(src, allow_svg) and not _README_NOISE.search(src) else None
 
 
 _README_IMG = re.compile(r'!\[[^\]]*\]\(\s*<?([^)\s>]+)|<img\b[^>]*?\bsrc=(?:["\']([^"\']+)["\']|([^\s>"\']+))', re.I)
@@ -415,7 +499,7 @@ def readme_logos(markdown: str, full_name: str, limit: int = 3, base: str | None
     for block in _CENTER_BLOCK.finditer(text[:2500]):
         for im in _README_IMG.finditer(block.group(1)):
             raw = im.group(1) or im.group(2) or im.group(3) or ""
-            resolved = _resolve_readme_src(raw, full_name, base)
+            resolved = _resolve_readme_src(raw, full_name, base, allow_svg=True)
             if resolved:
                 centered_srcs.add(resolved)
 
@@ -429,7 +513,7 @@ def readme_logos(markdown: str, full_name: str, limit: int = 3, base: str | None
                _attr(attrs, "src") or _attr(attrs, "data-src") or _attr(attrs, "data-original"))
         if not raw:
             continue
-        src = _resolve_readme_src(raw, full_name, base)
+        src = _resolve_readme_src(raw, full_name, base, allow_svg=True)
         if not src:
             continue
         alt = _attr(attrs, "alt") or ""
@@ -444,7 +528,7 @@ def readme_logos(markdown: str, full_name: str, limit: int = 3, base: str | None
     # 2. Markdown images ![alt](url)
     for m in _MD_IMG_FULL.finditer(text):
         raw = m.group("src") or ""
-        src = _resolve_readme_src(raw, full_name, base)
+        src = _resolve_readme_src(raw, full_name, base, allow_svg=True)
         if not src:
             continue
         alt = m.group("alt") or ""

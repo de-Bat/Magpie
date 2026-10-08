@@ -78,10 +78,15 @@ struct ItemImage: View {
     }
 
     private func load() async {
-        if !preferScreenshot, let s = item.imageUrl, let url = URL(string: s),
-           let poster = await ImageCache.shared.image(for: URLRequest(url: url)) {
-            image = poster
-            return
+        if !preferScreenshot, let s = item.imageUrl {
+            // a logo the server drew from an SVG is kept on the server (/media/...), which needs the access token
+            let request: URLRequest? = s.hasPrefix("/media/")
+                ? ServerSettings.client?.mediaRequest(String(s.dropFirst("/media/".count)))
+                : URL(string: s).map { URLRequest(url: $0) }
+            if let request, let poster = await ImageCache.shared.image(for: request) {
+                image = poster
+                return
+            }
         }
         image = await ItemImage.screenshot(for: item)
     }

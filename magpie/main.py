@@ -32,7 +32,7 @@ from .links import URL_TOO_LONG, normalize_url
 from . import __version__, config, releases
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, Settings, mask
 from .models import check_key
-from . import convlog, limits, plugins, websearch
+from . import convlog, images, limits, plugins, websearch
 from .plugins import loader as plugin_loader
 from .db import Database
 from .pipeline import Pipeline
@@ -134,6 +134,7 @@ def create_app(
     rt.open_database()
     convlog.configure(settings)   # read live: turning logging on in the app takes effect at once
     websearch.configure(settings)
+    images.set_store(settings.uploads_dir)   # SVG logos are drawn to PNG files kept here
 
     def log_setup_code() -> None:
         log.warning("No access token is set. Setup code for changing settings in the web app: %s "

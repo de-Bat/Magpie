@@ -10,7 +10,7 @@ import httpx
 import pytest
 from PIL import Image
 
-from magpie import findlink, websearch
+from magpie import findlink, images, websearch
 from magpie.enrich import Page, page_picture
 from magpie.findlink import find_article_url, search_results
 
@@ -136,3 +136,67 @@ async def test_a_wide_wordmark_alone_is_not_used_as_the_logo():
     async with mock_http({"https://site.example/wordmark.png": png((600, 120))}) as http:
         picture, kind = await page_picture(http, page)
     assert kind != "logo"
+
+
+SQUARE_SVG = ('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">'
+              '<circle cx="100" cy="100" r="90" fill="#c33"/></svg>')
+WIDE_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="100"><rect width="600" height="100" fill="#333"/></svg>'
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(images, "_store", tmp_path)
+    return tmp_path
+
+
+def svg(body: str):
+    return httpx.Response(200, text=body, headers={"content-type": "image/svg+xml"})
+
+
+async def test_an_svg_logo_is_drawn_to_a_png_the_server_keeps(store):
+    url = "https://project.example/logo.svg"
+    async with mock_http({url: svg(SQUARE_SVG)}) as http:
+        got = await images.best_image(http, [url], verified_only=True, allow_svg=True)
+        again = await images.best_image(http, [url], verified_only=True, allow_svg=True)
+    assert got == again and got.startswith("/media/logo-") and got.endswith(".png")
+    with Image.open(store / got.removeprefix("/media/")) as im:
+        assert im.format == "PNG" and im.size == (512, 512) and im.mode == "RGBA"
+    assert await images.picture_is_opaque(None, got) is False   # round, so it has transparent corners
+
+
+async def test_svg_is_refused_unless_a_logo_is_wanted_or_no_folder_is_set(store, monkeypatch):
+    url = "https://project.example/logo.svg"
+    async with mock_http({url: svg(SQUARE_SVG)}) as http:
+        assert await images.best_image(http, [url], verified_only=True) is None
+        monkeypatch.setattr(images, "_store", None)
+        assert await images.best_image(http, [url], verified_only=True, allow_svg=True) is None
+
+
+@pytest.mark.parametrize("body", [
+    WIDE_SVG,
+    SQUARE_SVG.replace("</svg>", '<image href="file:///etc/passwd" width="10" height="10"/></svg>'),
+    SQUARE_SVG.replace("</svg>", '<script>alert(1)</script></svg>'),
+    "<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'></svg>",
+    "not a picture",
+])
+async def test_svgs_that_are_wide_unsafe_empty_or_not_svg_are_not_drawn(store, body):
+    url = "https://project.example/logo.svg"
+    async with mock_http({url: svg(body)}) as http:
+        assert await images.best_image(http, [url], verified_only=True, allow_svg=True, max_aspect=2.0) is None
+    assert list(store.iterdir()) == []
+
+
+def test_a_readmes_svg_logo_is_a_candidate_but_its_svg_screenshots_are_not():
+    md = """<p align="center"><img src="docs/logo.svg" alt="logo"></p>
+
+![shot](docs/shot.svg)"""
+    assert images.readme_logos(md, "o/r") == ["https://raw.githubusercontent.com/o/r/HEAD/docs/logo.svg"]
+    assert images.readme_images(md, "o/r") == []
+
+
+async def test_a_pages_svg_icon_becomes_its_logo(store):
+    page = Page(url="https://site.example/post", meta={}, ld=[], title="", html="",
+                links=[{"rel": "icon", "href": "/logo.svg", "sizes": ""}])
+    async with mock_http({"https://site.example/logo.svg": svg(SQUARE_SVG)}) as http:
+        picture, kind = await page_picture(http, page)
+    assert kind == "logo" and picture.startswith("/media/logo-")

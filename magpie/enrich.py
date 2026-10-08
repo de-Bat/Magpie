@@ -231,7 +231,7 @@ async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient,
     if owner.get("type") == "Organization" and owner.get("avatar_url"):
         logo_candidates.append(owner["avatar_url"])
 
-    logo = await best_image(http, logo_candidates, verified_only=True)
+    logo = await best_image(http, logo_candidates, verified_only=True, allow_svg=True)
     if logo:
         return logo, "logo"
 
@@ -1078,7 +1078,7 @@ async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = N
             return share, None
     # the app manifest's icons are the largest square ones (192 and 512 px), so they go first
     logos = [*await manifest_icons(http, page), *site_logos(page)]
-    found = await best_image(http, logos, page.url, verified_only=True, max_aspect=LOGO_ASPECT)
+    found = await best_image(http, logos, page.url, verified_only=True, max_aspect=LOGO_ASPECT, allow_svg=True)
     if found:
         return found, "logo"
     return (await best_image(http, pictures, page.url) or lead), None
