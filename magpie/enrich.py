@@ -20,7 +20,7 @@ from . import readability
 from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
 from .related import outbound_related, readme_related, same_site, text_related
-from .images import (best_image, manifest_icons, oembed_thumbnail, origin_icons, package_logos, page_image_candidates,
+from .images import (LOGO_ASPECT, best_image, manifest_icons, oembed_thumbnail, origin_icons, package_logos, page_image_candidates,
                      page_pictures, readme_images, readme_logos, site_logos, verify_image, youtube_thumbnails)
 
 log = logging.getLogger(__name__)
@@ -1021,7 +1021,7 @@ async def enrich_web(analysis: dict, settings: Settings, http: httpx.AsyncClient
         thumb = await best_image(http, youtube_thumbnails(url)) or (await archived_picture(url, http) if page_refused(url) else None)
         if thumb:
             return Enrichment(image_url=thumb, source="archive", canonical_url=strip_tracking(url))
-        logo = await best_image(http, origin_icons(url), verified_only=True) if page_refused(url) else None
+        logo = await best_image(http, origin_icons(url), verified_only=True, max_aspect=LOGO_ASPECT) if page_refused(url) else None
         return Enrichment(image_url=logo, image_kind="logo", canonical_url=strip_tracking(url)) if logo else None
     if analysis.get("category") == "recipe":
         found = recipe_from_page(page)
@@ -1076,8 +1076,9 @@ async def page_picture(http: httpx.AsyncClient, page: Page, lead: str | None = N
     for share in pictures[:2]:
         if await verify_image(http, share) is None:
             return share, None
-    logos = [*site_logos(page)[:3], *await manifest_icons(http, page), *site_logos(page)[3:]]
-    found = await best_image(http, logos, page.url, verified_only=True)
+    # the app manifest's icons are the largest square ones (192 and 512 px), so they go first
+    logos = [*await manifest_icons(http, page), *site_logos(page)]
+    found = await best_image(http, logos, page.url, verified_only=True, max_aspect=LOGO_ASPECT)
     if found:
         return found, "logo"
     return (await best_image(http, pictures, page.url) or lead), None

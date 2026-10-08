@@ -199,6 +199,9 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 | `TMDB_API_KEY` | optional | Posters, overview, cast, genres, streaming providers (v3 key or v4 read token) |
 | `OMDB_API_KEY` | optional | IMDb rating, Rotten Tomatoes, Metacritic |
 | `GITHUB_TOKEN` | optional | Raises the GitHub API limit from 60 to 5000 requests/hour |
+| `MAGPIE_SEARCH_PROVIDER` | `none` | Web search used to find an article's real address: `brave`, `tavily`, `serper`, `serpapi` (each has a free tier) or `searxng` (self-hosted). `none` scrapes DuckDuckGo, which refuses servers after a few searches |
+| `BRAVE_SEARCH_API_KEY` / `TAVILY_API_KEY` / `SERPER_API_KEY` / `SERPAPI_API_KEY` | optional | Key for the chosen search provider |
+| `MAGPIE_SEARXNG_URL` | optional | Your SearXNG server, e.g. `http://searxng:8080` (enable `json` under `search.formats` in its settings.yml) |
 | `RADARR_URL`, `RADARR_API_KEY` | optional | Adds an "Add to Radarr" button to film cards. Also `RADARR_ROOT_FOLDER`, `RADARR_QUALITY_PROFILE`, `RADARR_SEARCH`. See [Plugins](#plugins-radarr-sonarr) |
 | `SONARR_URL`, `SONARR_API_KEY` | optional | Adds an "Add to Sonarr" button to TV show cards. Also `SONARR_ROOT_FOLDER`, `SONARR_QUALITY_PROFILE`, `SONARR_MONITOR`, `SONARR_SEARCH` |
 | `MAGPIE_ALLOW_PLUGIN_INSTALL` | optional | `true` lets Settings → Plugins install plugins from a git repository or a file. Off by default: plugins run code on the server. See [docs/PLUGINS.md](docs/PLUGINS.md) |

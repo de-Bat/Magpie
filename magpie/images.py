@@ -27,6 +27,8 @@ BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 "
 
 _CACHE: dict[str, tuple[float, bool | None]] = {}
 _CACHE_SECONDS = 3600
+_UNKNOWN_SECONDS = 60
+LOGO_ASPECT = 2.0       # a logo wider than this is a wordmark: a thin strip on the card's square tile
 
 # Never a picture of the thing, wherever it appears. Kept narrow: an article about a Pixel phone or a
 # badge collection still gets its photo.
@@ -60,20 +62,22 @@ def github_raw(url: str) -> str:
     return f"https://raw.githubusercontent.com/{m.group(1)}/{m.group(2)}/{m.group(3)}" if m else url
 
 
-async def verify_image(http: httpx.AsyncClient, url: str) -> bool | None:
-    """True: a real picture of a usable size. False: dead, not an image, or too small.
+async def verify_image(http: httpx.AsyncClient, url: str, max_aspect: float = MAX_ASPECT) -> bool | None:
+    """True: a real picture of a usable size. False: dead, not an image, too small, or longer than `max_aspect` to 1.
     None: couldn't tell (the host refuses server requests or timed out); browsers may still load it."""
-    hit = _CACHE.get(url)
-    if hit and time.monotonic() - hit[0] < _CACHE_SECONDS:
+    key = (url, max_aspect)
+    hit = _CACHE.get(key)
+    # "couldn't tell" is often a passing timeout: remembered only briefly, so the next look can still get the picture
+    if hit and time.monotonic() - hit[0] < (_CACHE_SECONDS if hit[1] is not None else _UNKNOWN_SECONDS):
         return hit[1]
-    result = await _verify(http, url)
+    result = await _verify(http, url, max_aspect)
     if len(_CACHE) > 500:
         _CACHE.clear()
-    _CACHE[url] = (time.monotonic(), result)
+    _CACHE[key] = (time.monotonic(), result)
     return result
 
 
-async def _verify(http: httpx.AsyncClient, url: str) -> bool | None:
+async def _verify(http: httpx.AsyncClient, url: str, max_aspect: float = MAX_ASPECT) -> bool | None:
     try:
         r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/*,*/*;q=0.5",
                                                 "Range": f"bytes=0-{CHECK_BYTES - 1}"}, timeout=8)
@@ -96,7 +100,7 @@ async def _verify(http: httpx.AsyncClient, url: str) -> bool | None:
             w, h = im.size
     except Exception:  # Pillow missing, or a truncated progressive file: the content type will have to do
         return True
-    return min(w, h) >= MIN_SIDE and max(w, h) / max(1, min(w, h)) <= MAX_ASPECT
+    return min(w, h) >= MIN_SIDE and max(w, h) / max(1, min(w, h)) <= max_aspect
 
 
 PROBE_BYTES = 1_500_000
@@ -130,7 +134,7 @@ async def picture_is_opaque(http: httpx.AsyncClient, url: str) -> bool | None:
 
 
 async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], base: str | None = None,
-                     last_resort: str | None = None, verified_only: bool = False) -> str | None:
+                     last_resort: str | None = None, verified_only: bool = False, max_aspect: float = MAX_ASPECT) -> str | None:
     """The first candidate that is a real picture. When none could be checked, the first that
     couldn't be ruled out (unless `verified_only`); `last_resort` (e.g. a generated card) is used without a check."""
     seen: list[str] = []
@@ -142,7 +146,7 @@ async def best_image(http: httpx.AsyncClient, candidates: Iterable[str | None], 
             seen.append(url)
     unknown = None
     for url in seen[:MAX_CHECKS]:
-        verdict = await verify_image(http, url)
+        verdict = await verify_image(http, url, max_aspect)
         if verdict:
             return url
         if verdict is None and unknown is None:
@@ -311,20 +315,19 @@ def page_pictures(page: Any, extra: Iterable[str | None] = ()) -> list[str]:
 
 
 def site_logos(page: Any) -> list[str]:
-    """The site's logo, largest first: the publisher logo from structured data, the declared touch and app icons
-    (by size), then the conventional addresses."""
-    out: list[str] = []
-    for node in page.ld:
-        out += _ld_logos(node)
-    out += [page.meta[k] for k in ("msapplication-TileImage", "msapplication-square310x310logo") if page.meta.get(k)]
-
+    """The site's logo, square ones first since the card shows it on a square tile: the declared touch and app icons
+    (largest first), the Windows tiles, then the publisher logo from structured data (often a wide wordmark), then
+    the conventional addresses."""
     def side(l: dict) -> int:
         m = re.match(r"\d+", l.get("sizes") or "")
         return int(m.group(0)) if m else (180 if "apple-touch-icon" in l["rel"] else 0)
 
     icons = [l for l in getattr(page, "links", []) if "apple-touch-icon" in l["rel"]
              or ("icon" in l["rel"].split() and side(l) >= 120)]
-    out += [l["href"] for l in sorted(icons, key=side, reverse=True)]
+    out = [l["href"] for l in sorted(icons, key=side, reverse=True)]
+    out += [page.meta[k] for k in ("msapplication-square310x310logo", "msapplication-TileImage") if page.meta.get(k)]
+    for node in page.ld:
+        out += _ld_logos(node)
     out = [urljoin(page.url, u) for u in out if u]
     return _unique([*out, *origin_icons(page.url)])
 

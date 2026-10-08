@@ -31,3 +31,11 @@ def fresh_page_cache():
     yield
     for cache in (enrich._PAGE_CACHE, enrich._REFUSED, images._CACHE):
         cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def fresh_search_state(monkeypatch):
+    """DuckDuckGo's cooldown and the chosen search provider are process-wide: every test starts with neither."""
+    from magpie import findlink, websearch
+    monkeypatch.setattr(findlink, "_ddg_blocked_until", 0.0)
+    monkeypatch.setattr(websearch, "_settings", None)

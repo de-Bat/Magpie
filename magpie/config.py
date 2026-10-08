@@ -139,6 +139,20 @@ SPECS: list[Spec] = [
          "IMDb, Rotten Tomatoes and Metacritic scores. https://www.omdbapi.com/apikey.aspx"),
     Spec("github_token", "GITHUB_TOKEN", "secret", None, "Lookups", "GitHub token",
          "Raises the GitHub rate limit from 60 to 5000 requests/hour."),
+    Spec("search_provider", "MAGPIE_SEARCH_PROVIDER", "choice", "none", "Web search", "Search provider",
+         "Used to find an article's real address when a model gets it wrong or gives none. None: DuckDuckGo's web page, "
+         "free but it refuses servers after a few searches, so links are found one time and not the next. The others "
+         "answer reliably and each has a free tier: Brave (https://brave.com/search/api), Tavily (https://tavily.com), "
+         "Serper (https://serper.dev), SerpApi (https://serpapi.com). SearXNG is free when you run it yourself. "
+         "DuckDuckGo is still tried when the provider fails or finds nothing.",
+         ("none", "brave", "tavily", "serper", "serpapi", "searxng")),
+    Spec("brave_search_api_key", "BRAVE_SEARCH_API_KEY", "secret", None, "Web search", "Brave Search API key",
+         "https://api-dashboard.search.brave.com"),
+    Spec("tavily_api_key", "TAVILY_API_KEY", "secret", None, "Web search", "Tavily API key", "https://app.tavily.com"),
+    Spec("serper_api_key", "SERPER_API_KEY", "secret", None, "Web search", "Serper API key", "https://serper.dev/api-key"),
+    Spec("serpapi_api_key", "SERPAPI_API_KEY", "secret", None, "Web search", "SerpApi API key", "https://serpapi.com/manage-api-key"),
+    Spec("searxng_url", "MAGPIE_SEARXNG_URL", "str", None, "Web search", "SearXNG URL",
+         "Your SearXNG server, e.g. http://searxng:8080. Its settings.yml must list json under search.formats."),
     Spec("debug", "MAGPIE_DEBUG", "bool", False, "Logging", "Debug mode",
          "Records every conversation with the AI models, together with the screenshot or link that went in and the card that came "
          "out, and adds a Debug view to the app to browse them. Implies the two logging settings below; for troubleshooting, "
@@ -242,6 +256,13 @@ class Settings:
     tmdb_api_key: str | None = field(default_factory=_from_env("tmdb_api_key"))
     omdb_api_key: str | None = field(default_factory=_from_env("omdb_api_key"))
     github_token: str | None = field(default_factory=_from_env("github_token"))
+    # Web search used to find an article's real address (see websearch.py)
+    search_provider: str = field(default_factory=_from_env("search_provider"))
+    brave_search_api_key: str | None = field(default_factory=_from_env("brave_search_api_key"))
+    tavily_api_key: str | None = field(default_factory=_from_env("tavily_api_key"))
+    serper_api_key: str | None = field(default_factory=_from_env("serper_api_key"))
+    serpapi_api_key: str | None = field(default_factory=_from_env("serpapi_api_key"))
+    searxng_url: str | None = field(default_factory=_from_env("searxng_url"))
     # When set, every API/media request must present this token (clients: Bearer header).
     api_token: str | None = field(default_factory=_from_env("api_token"))
 

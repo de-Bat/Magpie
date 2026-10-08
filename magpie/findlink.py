@@ -10,15 +10,16 @@ import base64
 import html as html_lib
 import logging
 import re
-from typing import NamedTuple
+import time
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import httpx
 
-from . import convlog
+from . import convlog, websearch
 from .enrich import Page, canonical_link, fetch_page, link_is_gone, strip_tracking
 from .fetch import BlockedURL, safe_get
 from .related import AGGREGATOR_HOSTS, NOISE_HOSTS, _TEXT_URL, _host
+from .websearch import Hit
 
 log = logging.getLogger(__name__)
 
@@ -26,7 +27,9 @@ log = logging.getLogger(__name__)
 REPAIRABLE = {"article", "video", "product", "place", "event", "course", "app", "podcast", "music", "other"}
 _STOP = {"the", "and", "for", "with", "that", "this", "from", "your", "you", "are", "was", "how", "why", "what", "into", "have", "has"}
 SEARCH_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-
+# DuckDuckGo answers a server's too-frequent searches with HTTP 202 (a challenge page): asking again only extends the block
+DDG_COOLDOWN = 600
+_ddg_blocked_until = 0.0
 
 
 def is_aggregator_host(host: str) -> bool:
@@ -114,11 +117,6 @@ def _unwrap_bing(href: str) -> str | None:
     return href if href.startswith("http") and not host.endswith(("bing.com", "microsoft.com", "msn.com")) else None
 
 
-class Hit(NamedTuple):
-    url: str
-    title: str = ""
-
-
 def _text(fragment: str) -> str:
     return html_lib.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
 
@@ -140,17 +138,33 @@ async def bing_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> t
             found.append(Hit(url, _text(title)))
         if len(found) >= limit:
             break
-    return found, "ok" if found else "no results (blocked or changed page?)"
+    if not found:
+        return [], "no results (blocked or changed page?)"
+    # Bing answers servers without its cookies with results for one word of the query ("5 old GPUs ..." -> sport5.co.il)
+    relevant = [h for h in found if _relevant(query, h)]
+    return relevant, "ok" if relevant else f"unrelated results only ({len(found)}): a page for bots"
+
+
+def _relevant(query: str, hit: Hit) -> bool:
+    """Does a result share at least a fifth of the query's significant words (site: and quotes aside)? Junk shares none."""
+    wanted = _words(re.sub(r"site:\S+", " ", query))
+    return not wanted or len(wanted & (_words(hit.title) | _slug_words(hit.url))) / len(wanted) >= 0.2
 
 
 async def search_results(query: str, http: httpx.AsyncClient, limit: int = 6, trace: list | None = None) -> list[Hit]:
-    """Results for a query: DuckDuckGo's HTML page (no key), then Bing's. Empty when both refuse. `trace` collects how
-    each engine answered, so a failed search can be told from a search that found nothing."""
+    """Results for a query: the search API chosen in the settings, then DuckDuckGo's HTML page (no key), then Bing's.
+    Empty when all refuse. `trace` collects how each engine answered, so a failed search can be told from a search
+    that found nothing; "blocked" marks a search where no engine answered at all."""
     outcome: dict = {"query": query, "engines": {}}
-    hits, outcome["engines"]["duckduckgo"] = await ddg_results(query, http, limit)
+    hits: list[Hit] = []
+    if (provider := websearch.active()):
+        hits, outcome["engines"][provider] = await websearch.api_results(query, http, limit)
+    if not hits:
+        hits, outcome["engines"]["duckduckgo"] = await ddg_results(query, http, limit)
     if not hits:
         hits, outcome["engines"]["bing"] = await bing_results(query, http, limit)
     outcome["results"] = len(hits)
+    outcome["blocked"] = not hits and not any(v.startswith(("ok", "no results")) for v in outcome["engines"].values())
     if trace is not None:
         trace.append(outcome)
     return hits
@@ -158,6 +172,9 @@ async def search_results(query: str, http: httpx.AsyncClient, limit: int = 6, tr
 
 async def ddg_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> tuple[list[Hit], str]:
     """Results (address and title) from DuckDuckGo's HTML page (no key), and how the search went."""
+    global _ddg_blocked_until
+    if time.monotonic() < _ddg_blocked_until:
+        return [], "skipped: refused us a moment ago"
     try:
         r = await safe_get(http, "https://html.duckduckgo.com/html/", params={"q": query},
                            headers={"User-Agent": SEARCH_UA, "Accept": "text/html"}, timeout=12)
@@ -165,6 +182,8 @@ async def ddg_results(query: str, http: httpx.AsyncClient, limit: int = 6) -> tu
         log.info("Search failed: %s", e)
         return [], f"failed: {type(e).__name__}"
     if r.status_code != 200:
+        if r.status_code in (202, 403, 429):
+            _ddg_blocked_until = time.monotonic() + DDG_COOLDOWN
         return [], f"refused (HTTP {r.status_code})"
     found: list[Hit] = []
     for href, title in re.findall(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r.text, re.S):
@@ -198,6 +217,15 @@ def _share(title: str, text_words: set[str]) -> float:
 
 def _site(url: str) -> str:
     return (urlsplit(url).hostname or "").removeprefix("www.")
+
+
+def _on_site(url: str, hosts: list[str], publisher: str | None = None) -> bool:
+    """Is `url` on one of `hosts`, or on the site of a publisher named without its domain ("XDA" -> xda-developers.com)?"""
+    site = _site(url)
+    if any(site == h or site.endswith("." + h) for h in hosts):
+        return True
+    key = re.sub(r"[^a-z0-9]", "", (publisher or "").lower())
+    return len(key) >= 3 and "." not in (publisher or "") and key in re.sub(r"[^a-z0-9.]", "", site).split(".")[0]
 
 
 def _clean(url: str) -> str:
@@ -286,9 +314,11 @@ async def _outbound_article_link(page: Page, title: str, wanted_hosts: list[str]
     return None
 
 
-async def judge(title: str, url: str, search_title: str, wanted_hosts: list[str], http: httpx.AsyncClient) -> tuple[str, str | None]:
+async def judge(title: str, url: str, search_title: str, wanted_hosts: list[str], http: httpx.AsyncClient,
+                publisher: str | None = None, trusted: bool = False) -> tuple[str, str | None]:
     """(verdict, address) for a candidate page. When the page can't be opened (a bot wall), the search result's own
-    title and the address's slug stand in for it: they must fit the title and the site must be one we were looking at."""
+    title and the address's slug stand in for it: they must fit the title and the site must be one we were looking at.
+    `trusted`: the model's own web search read this page for the item, so on the right site a partial fit will do."""
     if is_aggregator(url):
         return "aggregator link", None
     page = await fetch_page(url, http)
@@ -300,9 +330,11 @@ async def judge(title: str, url: str, search_title: str, wanted_hosts: list[str]
     if link_is_gone(url):
         return "gone", None
     # The page is walled off. A real article's search title is its headline, and its address carries the headline's words.
+    if search_title and _site("https://" + search_title.strip().lower()) == _site(url):
+        search_title = ""   # Gemini names its sources by their domain ("xda-developers.com"), not their headline
     evidence = _share(title, _words(search_title) | _slug_words(url))
-    on_site = any(_site(url) == h or _site(url).endswith("." + h) for h in wanted_hosts)
-    if evidence >= (0.6 if on_site else 0.85):
+    on_site = _on_site(url, wanted_hosts, publisher)
+    if evidence >= ((0.25 if trusted else 0.6) if on_site else 0.85):
         return "accepted from the result's title (page blocked)", _clean(url)
     return "page blocked, title doesn't fit", None
 
@@ -331,11 +363,11 @@ async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncC
     trace: list[dict] = []
     checked: list[dict] = []
 
-    async def check(hit: Hit, origin: str) -> str | None:
+    async def check(hit: Hit, origin: str, trusted: bool = False) -> str | None:
         if hit.url in tried or is_aggregator(hit.url):
             return None
         tried.add(hit.url)
-        verdict, found = await judge(title, hit.url, hit.title, wanted, http)
+        verdict, found = await judge(title, hit.url, hit.title, wanted, http, publisher, trusted)
         checked.append({"url": hit.url, "title": hit.title or None, "from": origin, "verdict": verdict})
         return found
 
@@ -344,10 +376,10 @@ async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncC
 
     # the pages Gemini's (or any model's) web search read: best first, those on the site we're after
     clean_sources = [u for u in sources if not is_aggregator(u)]
-    ordered = sorted(dict.fromkeys(clean_sources), key=lambda u: not any(_site(u) == h or _site(u).endswith("." + h) for h in wanted))
+    ordered = sorted(dict.fromkeys(clean_sources), key=lambda u: not _on_site(u, wanted, publisher))
     for url in ordered[:6]:
         hit_title = (source_titles or {}).get(url, "")
-        if (found := await check(Hit(url, hit_title), "the model's web search")):
+        if (found := await check(Hit(url, hit_title), "the model's web search", trusted=True)):
             report(found)
             return found
     for query in queries:
@@ -355,6 +387,8 @@ async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncC
             if (found := await check(hit, query)):
                 report(found)
                 return found
+        if trace and trace[-1].get("blocked"):
+            break   # every engine refused: the next queries would only be refused too, and prolong the block
     report(None)
     return None
 
@@ -377,8 +411,11 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
     if is_aggregator_name(publisher):
         publisher = None
 
-    if not url and title and analysis.get("category") == "article" and "link" not in (analysis.get("_analyzer") or []):
-        # the model named the article but found no address for it: look it up
+    sites = capture_sites(analysis)
+    category = analysis.get("category")
+    if (not url and title and "link" not in (analysis.get("_analyzer") or [])
+            and (category == "article" or (category in REPAIRABLE and (sites or publisher)))):
+        # the model named the article (or a page on a site the capture names) but found no address for it: look it up
         found = await find_article_url(title, None, http, publisher, capture_sites(analysis), sources, source_titles=source_titles)
         return {**analysis, "canonical_url": found} if found else analysis
 

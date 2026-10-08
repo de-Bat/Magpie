@@ -139,6 +139,8 @@ kbd { font: 11px ui-monospace, Menlo, monospace; border: 1px solid var(--border)
 /* a site's or project's logo: whole, with a transparent background, in the upper part of the themed cover; the title stays readable below */
 .cover.logo-img .cover-img { inset: auto; left: 50%; top: 23%; width: 42%; height: auto; aspect-ratio: 1; transform: translateX(-50%);
   object-fit: contain; padding: 7%; box-sizing: border-box; background: transparent; border-radius: 18%; filter: drop-shadow(0 4px 12px rgb(0 0 0 / .28)); }
+/* a logo with a transparent background (a dark mark would vanish on a dark cover) gets a light tile behind it */
+.cover.logo-img.clear .cover-img { background: rgb(255 255 255 / .92); }
 .cover.logo-img .glyph { visibility: hidden; }
 .cover-title { position: absolute; left: 7%; right: 7%; bottom: 7%; font-weight: 800; line-height: 1.02; letter-spacing: -.02em;
   text-wrap: balance; overflow-wrap: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--lines, 2);
