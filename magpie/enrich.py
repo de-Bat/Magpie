@@ -149,14 +149,16 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
             r, found_by_search = await http.get(f"https://api.github.com/repos/{found}", headers=headers), True
     if r is None or r.status_code != 200:
         log.info("GitHub lookup for %s failed: %s", guess or analysis.get("title"), r.status_code if r is not None else "no repo name")
+        if r is not None and r.status_code in (403, 429) and guess and "/" in guess:
+            return await github_page_only(guess, http)   # rate limited (60 an hour without a token): the web pages still answer
         return None
     repo = r.json()
     full_name = repo["full_name"]
     try:
         rr = await http.get(f"https://api.github.com/repos/{full_name}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"})
-        readme = rr.text if rr.status_code == 200 else ""
+        readme = rr.text if rr.status_code == 200 else await raw_readme(full_name, http)   # the API's limit may be spent
     except httpx.HTTPError:
-        readme = ""
+        readme = await raw_readme(full_name, http)
     hero, hero_kind = await github_image(full_name, headers, http, readme=readme, repo=repo)
     release = await _latest_release(full_name, headers, http)
     meta = {
@@ -200,6 +202,25 @@ async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncCli
         source="github",
         matched_title=None if found_by_search and not (guess and "/" in guess) else full_name,
     )
+
+
+async def raw_readme(full_name: str, http: httpx.AsyncClient) -> str:
+    """The README from raw.githubusercontent.com, which has no API rate limit ("" when there is none)."""
+    for name in ("README.md", "readme.md", "README.rst", "README"):
+        try:
+            r = await http.get(f"https://raw.githubusercontent.com/{full_name}/HEAD/{name}", timeout=10)
+        except httpx.HTTPError:
+            continue
+        if r.status_code == 200:
+            return r.text
+    return ""
+
+
+async def github_page_only(full_name: str, http: httpx.AsyncClient) -> Enrichment | None:
+    """A repository's picture from its web page and README alone, for when the API refuses us (its limit is 60 requests an
+    hour without a GITHUB_TOKEN). Nothing here confirms the repository's facts, so it doesn't count as verified."""
+    hero, kind = await github_image(full_name, {}, http, readme=await raw_readme(full_name, http))
+    return Enrichment(image_url=hero, image_kind=kind, canonical_url=f"https://github.com/{full_name}", source="github-page")
 
 
 async def _latest_release(full_name: str, headers: dict, http: httpx.AsyncClient) -> dict | None:

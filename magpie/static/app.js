@@ -2306,7 +2306,7 @@ function coverHtml(item, { chip = true } = {}) {
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
   const label = item.status === "error" ? (item.retry_at ? "Waiting" : "Failed") : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
-  return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? `logo-img${item.metadata?.image_opaque === false ? " clear" : ""}` : wide ? `wide-img${backdrop ? " bd" : ""}` : "has-img") : ""} ${busy ? "busy" : ""}">${
+  return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? `wide-img${backdrop ? " bd" : ""}` : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
     `${typeIcon(themeOf(item.category), "glyph")}${coverTitleHtml(item)}`}${
     // no-referrer: many sites refuse images to pages on other sites but serve them without a Referer

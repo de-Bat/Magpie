@@ -130,7 +130,7 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
         metadata.update({k: v for k, v in e.metadata.items() if not _empty(v)})
         canonical_url = e.canonical_url or canonical_url
         if e.image_url:
-            if e.image_kind == "logo" and image_url and image_kind != "logo" and e.source != "github" and analysis.get("category") != "github_repo":
+            if e.image_kind == "logo" and image_url and image_kind != "logo" and not (e.source or "").startswith("github") and analysis.get("category") != "github_repo":
                 pass  # Keep the specific item picture from analysis over a generic site logo
             else:
                 image_url, image_kind = e.image_url, e.image_kind
@@ -402,7 +402,8 @@ class Pipeline:
 
         # Use fresh image if available, unless it's just a site's favicon logo and we already have a real image.
         # A repository's own logo is the picture of it (merge() makes the same exception), and replaces GitHub's generated card.
-        if fresh_img and (fresh_kind != "logo" or existing_kind == "logo" or not existing_img or analysis.get("category") == "github_repo"):
+        if fresh_img and (fresh_kind != "logo" or existing_kind == "logo" or not existing_img
+                         or analysis.get("category") == "github_repo" or any((e.source or "").startswith("github") for e in enrichments)):
             new_image = fresh_img
             new_kind = fresh_kind
         else:

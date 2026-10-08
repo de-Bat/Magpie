@@ -222,3 +222,21 @@ def test_refreshing_a_repository_replaces_githubs_generated_card_with_its_readme
         after = client.post(f"/api/items/{item_id}/refresh-metadata").json()
     assert after["image_url"].startswith("/media/logo-") and after["metadata"]["image_kind"] == "logo"
     assert after["metadata"]["image_opaque"] is False
+
+
+def test_a_rate_limited_github_api_still_gives_the_repository_its_readme_logo(tmp_path):
+    from fastapi.testclient import TestClient
+    from magpie.config import Settings
+    from magpie.main import create_app
+    from tests.test_magpie import FakeAnalyzer, analysis, png_bytes
+
+    raw = "https://raw.githubusercontent.com/astral-sh/uv/HEAD/"
+    routes = {"https://api.github.com/": httpx.Response(403, json={"message": "API rate limit exceeded"}),
+              raw + "README.md": httpx.Response(200, text='<img src="assets/icon.svg" alt="logo">'),
+              raw + "assets/icon.svg": svg(SQUARE_SVG)}
+    settings = Settings(data_dir=tmp_path, tmdb_api_key=None, omdb_api_key=None, github_token=None)
+    client = TestClient(create_app(settings, analyzer=FakeAnalyzer(analysis()), http=mock_http(routes)))
+    with client:
+        item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+    assert item["image_url"].startswith("/media/logo-") and item["metadata"]["image_kind"] == "logo"
