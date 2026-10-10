@@ -1,6 +1,6 @@
 [
   {
-    "version": "next",
+    "version": "0.25.0",
     "features": [
       {
         "title": "Clean up photos",
@@ -10,7 +10,8 @@
         "title": "Repository logos",
         "text": "Refresh metadata lets a repository's own logo replace GitHub's generated card, and logos still load when GitHub's API limit is reached. Transparent logos no longer sit on a light tile."
       }
-    ]
+    ],
+    "date": "2026-10-10"
   },
   {
     "version": "0.24.0",
