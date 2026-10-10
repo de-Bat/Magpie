@@ -90,6 +90,35 @@ def test_cleanup_forgets_deleted_captures(settings):
         assert check(client, shrink(original))["match"] is False
 
 
+def test_the_hash_of_the_photo_before_conversion_matches_exactly_and_finds_duplicates(settings):
+    client, _ = make_client(settings, analysis(), ROUTES)
+    with client:
+        on_phone = screenshot(5, fmt="JPEG")   # stands in for a HEIC the app converted before upload
+        uploaded = shrink(on_phone, width=390)
+        original_sha = hashlib.sha256(on_phone).hexdigest()
+        item = client.post("/api/items", files={"file": ("s.jpg", uploaded, "image/jpeg")},
+                           data={"original_sha256": original_sha.upper()}).json()
+        assert item["original_hash"] == original_sha
+
+        r = check(client, shrink(on_phone), sha256=original_sha)
+        assert r["match"] and r["how"] == "exact" and r["item_id"] == item["id"]
+
+        # converted again (a different encoder run), but the same photo on the phone: already saved
+        again = client.post("/api/items", files={"file": ("s.jpg", shrink(on_phone, width=380), "image/jpeg")},
+                            data={"original_sha256": original_sha}).json()
+        assert again["duplicate"] is True and again["id"] == item["id"]
+
+        bad = client.post("/api/items", files={"file": ("s.jpg", uploaded, "image/jpeg")}, data={"original_sha256": "nope"})
+        assert bad.status_code == 422
+
+
+def test_shape_keys_let_a_shortcut_skip_photos_by_lookup():
+    from magpie.cleanup import shape_keys
+    keys = shape_keys([390 / 844, 2.1645])
+    assert "462" in keys and "453" in keys and "471" in keys and "440" not in keys and "500" not in keys
+    assert {"2165", "2,165", "2.165"} <= keys.keys()
+
+
 def test_cleanup_says_so_when_the_photo_cannot_be_read(settings):
     client, _ = make_client(settings, analysis(), ROUTES)
     with client:

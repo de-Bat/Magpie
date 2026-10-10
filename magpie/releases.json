@@ -1,5 +1,14 @@
 [
   {
+    "version": "next",
+    "features": [
+      {
+        "title": "Faster, surer photo cleanup",
+        "text": "The cleanup Shortcut skips photos that aren't shaped like a capture instead of sending every one. Photos the iOS app converted from HEIC before saving are now recognised exactly, and saving the same photo twice is caught."
+      }
+    ]
+  },
+  {
     "version": "0.25.0",
     "features": [
       {

@@ -12,6 +12,7 @@ Anything else might still turn out wrong, and then the photo is the only copy wo
 import hashlib
 import io
 import json
+import math
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +83,7 @@ class Capture:
     title: str
     image_file: str
     image_hash: str | None
+    original_hash: str | None = None   # the photo on the device, when the client converted it before upload
 
 
 class CleanupIndex:
@@ -96,17 +98,17 @@ class CleanupIndex:
     def captures(self) -> list[Capture]:
         """The screenshots of every finished capture, including further screenshots merged into it."""
         rows = self.db.conn.execute(
-            "SELECT id, title, image_file, image_hash, captures FROM items "
+            "SELECT id, title, image_file, image_hash, original_hash, captures FROM items "
             "WHERE kind = 'screenshot' AND status = 'ready' AND image_file != '' "
             "AND (corrected = 1 OR confidence IS NULL OR confidence >= ?) "
             "AND id NOT IN (SELECT item_id FROM batch_jobs)", (REVIEW_THRESHOLD,)).fetchall()
         result = []
         for row in rows:
             title = row["title"] or "Untitled"
-            result.append(Capture(row["id"], title, row["image_file"], row["image_hash"]))
+            result.append(Capture(row["id"], title, row["image_file"], row["image_hash"], row["original_hash"]))
             for extra in _json_list(row["captures"]):
                 if extra.get("image_file"):
-                    result.append(Capture(row["id"], title, extra["image_file"], extra.get("image_hash")))
+                    result.append(Capture(row["id"], title, extra["image_file"], extra.get("image_hash"), extra.get("original_hash")))
         return result
 
     def fingerprints(self, captures: list[Capture]) -> dict[str, Fingerprint]:
@@ -135,14 +137,15 @@ class CleanupIndex:
         captures = self.captures()
         known = self.fingerprints(captures)
         shapes = sorted({round(known[c.image_file].aspect, 4) for c in captures if c.image_file in known})
-        return {"shapes": shapes, "tolerance": SHAPE_TOLERANCE, "captures": len({c.item_id for c in captures})}
+        return {"shapes": shapes, "tolerance": SHAPE_TOLERANCE, "captures": len({c.item_id for c in captures}),
+                "keys": shape_keys(shapes)}
 
     def check(self, data: bytes, sha256: str | None = None) -> dict:
         """Is this photo a finished capture? `sha256` is the hash of the original when `data` is a shrunk copy."""
         captures = self.captures()
         hashes = {h for h in (sha256 and sha256.strip().lower(), hashlib.sha256(data).hexdigest()) if h}
         for c in captures:
-            if c.image_hash and c.image_hash in hashes:
+            if hashes & {c.image_hash, c.original_hash}:
                 return {"match": True, "how": "exact", "distance": 0, "item_id": c.item_id, "title": c.title}
 
         photo = fingerprint(data)
@@ -170,6 +173,22 @@ class CleanupIndex:
                 (self._known or {}).pop(f, None)
             with self.db.conn as conn:
                 conn.executemany("DELETE FROM fingerprints WHERE image_file = ?", [(f,) for f in image_files])
+
+
+def shape_keys(shapes: list[float]) -> dict[str, bool]:
+    """The shapes as a lookup table for an iOS Shortcut, which can't easily loop over a list with a tolerance:
+    key = round(1000 * width / height), every key within the tolerance of a shape is present. Numbers of 1000 and
+    up are also given with the thousands separators a phone's locale may add when Shortcuts turns them into text."""
+    keys: dict[str, bool] = {}
+    for aspect in shapes:
+        lo, hi = math.floor(1000 * aspect * (1 - SHAPE_TOLERANCE)), math.ceil(1000 * aspect * (1 + SHAPE_TOLERANCE))
+        for k in range(max(lo, 1), hi + 1):
+            keys[str(k)] = True
+            if k >= 1000:
+                grouped = f"{k:,}"
+                for sep in (",", ".", " ", " ", "'"):
+                    keys[grouped.replace(",", sep)] = True
+    return keys
 
 
 def _json_list(value) -> list[dict]:

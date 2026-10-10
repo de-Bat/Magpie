@@ -137,6 +137,7 @@ struct Item: Codable, Identifiable, Equatable {
     var batchPending: Bool
     var kind: String                   // screenshot | url
     var sourceUrl: String?             // the shared link (kind == "url")
+    var originalHash: String?          // SHA256 of the photo before the app converted it for upload
 
     // Local-only state
     var localImage: String?            // file name in AppGroup.images
@@ -151,6 +152,7 @@ struct Item: Codable, Identifiable, Equatable {
         case confidenceReason = "confidence_reason", needsReview = "needs_review"
         case usage, batchPending = "batch_pending"
         case kind, sourceUrl = "source_url"
+        case originalHash = "original_hash"
     }
 
     init(localID: String, localImage: String, note: String?, createdAt: Date) {
@@ -212,6 +214,7 @@ struct Item: Codable, Identifiable, Equatable {
         batchPending = (try? c.decodeIfPresent(Bool.self, forKey: .batchPending)) ?? false
         kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? "screenshot"
         sourceUrl = try? c.decodeIfPresent(String.self, forKey: .sourceUrl)
+        originalHash = try? c.decodeIfPresent(String.self, forKey: .originalHash)
         if imageFile?.isEmpty == true { imageFile = nil }  // links have no screenshot
         localImage = try c.decodeIfPresent(String.self, forKey: .localImage)
         pendingUpload = try c.decodeIfPresent(Bool.self, forKey: .pendingUpload) ?? false

@@ -236,13 +236,14 @@ final class PhotoCleanup: ObservableObject {
         }
     }
 
-    /// The photo's original bytes, if they are on this phone (iCloud-only originals are skipped, not downloaded).
+    /// The photo's bytes as it looks now (with any crop or markup), if they are on this phone (iCloud-only ones are skipped,
+    /// not downloaded). The same version the photo picker and Share hand to the app, so the hashes can match.
     private nonisolated static func originalData(_ asset: PHAsset) async -> Data? {
         await withCheckedContinuation { cont in
             let options = PHImageRequestOptions()
             options.isNetworkAccessAllowed = false
             options.deliveryMode = .highQualityFormat
-            options.version = .original           // the bytes as saved, so the hash can match the upload exactly
+            options.version = .current            // the bytes as shared, so the hash can match the upload exactly
             PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { data, _, _, _ in
                 cont.resume(returning: data)
             }

@@ -125,6 +125,7 @@ struct APIClient {
         field("created_at", item.createdAt)
         if let note = item.note, !note.isEmpty { field("note", note) }
         if !item.tags.isEmpty { field("tags", item.tags.joined(separator: ",")) }
+        if let hash = item.originalHash { field("original_sha256", hash) }
         let ext = (filename as NSString).pathExtension
         body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n")
         body.append("Content-Type: \(ImageFormat.mime(forExtension: ext))\r\n\r\n")

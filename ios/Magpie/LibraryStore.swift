@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UIKit
 
@@ -72,7 +73,12 @@ final class LibraryStore: ObservableObject {
             return nil
         }
         let trimmedNote = note?.trimmingCharacters(in: .whitespacesAndNewlines)
-        items.insert(Item(localID: id, localImage: filename, note: trimmedNote?.isEmpty == false ? trimmedNote : nil, createdAt: createdAt), at: 0)
+        var item = Item(localID: id, localImage: filename, note: trimmedNote?.isEmpty == false ? trimmedNote : nil, createdAt: createdAt)
+        if imageData != data {
+            // converted (HEIC to JPEG): the server keeps the hash of the photo as it is in the library, so cleanup can match it exactly
+            item.originalHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        items.insert(item, at: 0)
         pending.append(PendingOp(itemID: id, kind: .upload))
         save()
         return id

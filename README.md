@@ -153,7 +153,7 @@ Start with a dry run.
 
 **What counts as "already in Magpie":** the screenshot of a *finished* capture. A finished capture has been identified, is not flagged for review and is not still waiting in a batch; screenshots merged into a card count too. The server decides, so every app gives the same answer:
 
-1. **Same file.** The SHA256 of the original photo equals the uploaded screenshot's.
+1. **Same file.** The SHA256 of the photo equals the uploaded screenshot's, or, when the iOS app converted the photo before upload (HEIC to JPEG), the hash it recorded of the photo as it was.
 2. **Same picture.** A shrunk or re-saved copy matches when a perceptual hash finds it and a small grayscale thumbnail agrees almost pixel for pixel. Two different screenshots of the same app don't match, even when only one line of text differs.
 
 Clients first ask for the shapes (aspect ratios) of finished captures. Photos of any other shape are never uploaded. A photo that is checked is sent shrunk to 512 px, together with its SHA256.
@@ -161,7 +161,7 @@ Clients first ask for the shapes (aspect ratios) of finished captures. Photos of
 | Where | How |
 |---|---|
 | **iOS app** | Settings → **Clean up photos**. Pick a collection (Screenshots, All Photos, Recents, Favorites or one of your albums), then **Dry run** or **Delete all**. Matches go to *Recently Deleted*, where iOS keeps them for 30 days. Photos stored only in iCloud are skipped. |
-| **iPhone/iPad web app (PWA)** | Library → **Clean up photos** runs a Shortcut named *Magpie Cleanup*, which you build once from the steps shown in the card. **Copy my access token** gives you the value for its `Authorization` header. The Shortcut checks each photo in the album you set in it and deletes the matches after one iOS prompt. It has no shape filter, so it uploads every photo in that album (shrunk). |
+| **iPhone/iPad web app (PWA)** | Library → **Clean up photos** runs a Shortcut named *Magpie Cleanup*, which you build once from the steps shown in the card. **Copy my access token** gives you the value for its `Authorization` header. The Shortcut checks each photo in the album you set in it and deletes the matches after one iOS prompt. It looks up each photo's shape first, so only photos shaped like a capture are sent (shrunk). |
 | **Desktop Chrome / Edge** | Choose a folder. Matching files are deleted from it after you confirm. |
 | **Android and other browsers** | Pick photos. The matches are shown as a grid for you to delete in your gallery, because a browser can't delete phone photos. |
 
@@ -310,7 +310,7 @@ Before running on a device:
 | `GET` | `/api/health` | Reachability check (no auth); also `status` (`ok`/`warning`/`error`) and counts of `errors` and `warnings` |
 | `GET` | `/api/status` | Setup problems, most serious first: `{status, problems: [{level, key, message}]}` |
 | `GET` / `PUT` | `/api/settings` | Settings with their source (`ui`, `env`, `default`) and problems; secrets masked. PUT `{"changes": {"ENV_NAME": value}}` (`null` resets); invalid values → `422` with per-field `errors` |
-| `POST` | `/api/items` | Multipart form with **either** `file` (PNG/JPEG/WebP/GIF screenshot) **or** `url` (a link), plus optional `note`, `tags` (comma-separated), `id` (client-generated, idempotent), `created_at`. Returns `202`; identification runs in the background. A link that is already saved returns the existing item with `"duplicate": true` |
+| `POST` | `/api/items` | Multipart form with **either** `file` (PNG/JPEG/WebP/GIF screenshot) **or** `url` (a link), plus optional `note`, `tags` (comma-separated), `id` (client-generated, idempotent), `created_at`, `original_sha256` (SHA256 of the photo before the client converted it, so cleanup and duplicate detection can recognise it). Returns `202`; identification runs in the background. A link that is already saved returns the existing item with `"duplicate": true` |
 | `GET` | `/api/items` | `?q=` full-text, `?category=`, `?tag=` (repeatable), `?needs_review=true`, `?unverified=true` |
 | `GET` / `PATCH` / `DELETE` | `/api/items/{id}` | PATCH accepts `title`, `subtitle`, `summary`, `category`, `note`, `canonical_url`, `tags` |
 | `POST` | `/api/items/{id}/reanalyze` | Run identification again |
@@ -324,7 +324,7 @@ Before running on a device:
 | `GET` | `/api/sync?since=` | Delta sync: `{server_time, items, deleted}`. Pass `server_time` back as the next `since` |
 | `GET` | `/api/tags`, `/api/categories` | Counts for filters |
 | `GET` | `/api/usage?days=30` | Measured cost: totals, per screenshot, share sent to Claude, per analyzer, per day |
-| `GET` | `/api/cleanup/shapes` | Aspect ratios of finished captures and the `tolerance`, so cleanup clients can skip photos that can't match: `{shapes, tolerance, captures}` |
+| `GET` | `/api/cleanup/shapes` | Aspect ratios of finished captures and the `tolerance`, so cleanup clients can skip photos that can't match: `{shapes, tolerance, captures, keys}`. `keys` is the same as a lookup table for iOS Shortcuts: every `round(1000 × width ÷ height)` that fits a shape |
 | `POST` | `/api/cleanup/check` | Multipart `image` (a shrunk copy is enough) and optional `sha256` of the original. Returns `{match, how: "exact"/"similar", item_id, title}`, or `{match: false}` (`reason: "unreadable"` if the image can't be read) |
 | `GET` | `/media/{file}` | Original screenshots |
 

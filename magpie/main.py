@@ -375,7 +375,12 @@ def create_app(
         tags: str | None = Form(None, description="Comma-separated tags to add"),
         id: str | None = Form(None, description="Client-generated id; re-sending the same id is a no-op"),
         created_at: str | None = Form(None, description="When the screenshot was captured (ISO 8601)"),
+        original_sha256: str | None = Form(None, description="SHA256 of the photo as it is on the device, when the client converted it (e.g. HEIC to JPEG) before upload"),
     ):
+        if original_sha256 is not None:
+            original_sha256 = original_sha256.strip().lower() or None
+            if original_sha256 and not re.fullmatch(r"[0-9a-f]{64}", original_sha256):
+                raise HTTPException(422, "original_sha256 must be 64 hex characters")
         if id is not None:
             if not CLIENT_ID_RE.match(id):
                 raise HTTPException(422, "id must be 8-64 characters of [A-Za-z0-9_-]")
@@ -397,7 +402,7 @@ def create_app(
         if not data:
             raise HTTPException(400, "Empty file")
         image_hash = hashlib.sha256(data).hexdigest()
-        existing = db.find_by_image_hash(image_hash)
+        existing = db.find_by_image_hash(image_hash, original_sha256)
         if existing:
             return {**existing, "duplicate": True}
         name = uuid.uuid4().hex + IMAGE_TYPES[media_type]
@@ -405,6 +410,7 @@ def create_app(
         item = db.create_item(
             name, note=note or None, tags=[t for t in (tags or "").split(",") if t.strip()],
             item_id=id, created_at=_normalize_time(created_at), image_hash=image_hash,
+            original_hash=original_sha256 if original_sha256 != image_hash else None,
         )
         background.add_task(state["pipeline"].process, item["id"])
         return item

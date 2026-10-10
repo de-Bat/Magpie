@@ -114,7 +114,8 @@ MIGRATIONS = {
     "related": "TEXT NOT NULL DEFAULT '[]'",     # worth-a-look links: [{kind, label, url, why?}]
     "retry_at": "TEXT",                          # failed because a model hit its limit: retried automatically then
     "image_hash": "TEXT",                        # SHA256 hash for duplicate screenshot detection
-    "captures": "TEXT NOT NULL DEFAULT '[]'",    # further screenshots of the same thing: [{image_file, image_hash, created_at}]
+    "captures": "TEXT NOT NULL DEFAULT '[]'",    # further screenshots of the same thing: [{image_file, image_hash, original_hash?, created_at}]
+    "original_hash": "TEXT",                     # SHA256 of the photo as it was on the device, when the client converted it before upload
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -158,6 +159,7 @@ class Database:
                     self.conn.execute(f"ALTER TABLE items ADD COLUMN {column} {ddl}")
             self.conn.execute("CREATE INDEX IF NOT EXISTS items_source_url ON items(source_url)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS items_image_hash ON items(image_hash)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS items_original_hash ON items(original_hash)")
 
     def fail_interrupted(self, message: str) -> int:
         """Items left 'processing' by a previous run (the server stopped mid-analysis) would wait
@@ -180,6 +182,7 @@ class Database:
         kind: str = "screenshot",
         source_url: str | None = None,
         image_hash: str | None = None,
+        original_hash: str | None = None,
     ) -> dict:
         """Create an item. Clients may supply the id (so offline uploads can be retried safely)
         and the original capture time."""
@@ -187,9 +190,9 @@ class Database:
         ts = now()
         with self.conn:
             self.conn.execute(
-                "INSERT INTO items (id, created_at, updated_at, status, image_file, image_hash, note, kind, source_url) "
-                "VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, ?)",
-                (item_id, created_at or ts, ts, image_file, image_hash, note, kind, source_url),
+                "INSERT INTO items (id, created_at, updated_at, status, image_file, image_hash, original_hash, note, kind, source_url) "
+                "VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?)",
+                (item_id, created_at or ts, ts, image_file, image_hash, original_hash, note, kind, source_url),
             )
             self.conn.execute("DELETE FROM tombstones WHERE id = ?", (item_id,))
         if tags:
@@ -285,15 +288,17 @@ class Database:
         rows = self.conn.execute(sql, (*params, limit, offset)).fetchall()
         return [self._row_to_item(r) for r in rows]
 
-    def find_by_image_hash(self, image_hash: str) -> dict | None:
-        """Item with the same screenshot, if any."""
-        if not image_hash:
-            return None
-        row = self.conn.execute("SELECT id FROM items WHERE image_hash = ? ORDER BY created_at LIMIT 1", (image_hash,)).fetchone()
-        if not row:   # a screenshot merged into another card earlier
-            row = self.conn.execute("SELECT id FROM items WHERE captures LIKE ? ORDER BY created_at LIMIT 1",
-                                    (f'%"image_hash": "{image_hash}"%',)).fetchone()
-        return self.get_item(row["id"]) if row else None
+    def find_by_image_hash(self, *hashes: str | None) -> dict | None:
+        """Item with the same screenshot, if any: as uploaded, or as it was on the device before the client converted it."""
+        for h in dict.fromkeys(h for h in hashes if h):
+            row = self.conn.execute("SELECT id FROM items WHERE image_hash = ? OR original_hash = ? ORDER BY created_at LIMIT 1",
+                                    (h, h)).fetchone()
+            if not row:   # a screenshot merged into another card earlier
+                row = self.conn.execute("SELECT id FROM items WHERE captures LIKE ? OR captures LIKE ? ORDER BY created_at LIMIT 1",
+                                        (f'%"image_hash": "{h}"%', f'%"original_hash": "{h}"%')).fetchone()
+            if row:
+                return self.get_item(row["id"])
+        return None
 
     def merge_capture(self, new_id: str, into_id: str) -> dict | None:
         """The new item shows something already in the library: its screenshot joins the existing card
@@ -303,7 +308,9 @@ class Database:
             return target
         captures = list(target.get("captures") or [])
         if new.get("image_file"):
-            captures.append({"image_file": new["image_file"], "image_hash": new.get("image_hash"), "created_at": new["created_at"]})
+            captures.append({"image_file": new["image_file"], "image_hash": new.get("image_hash"),
+                             **({"original_hash": new["original_hash"]} if new.get("original_hash") else {}),
+                             "created_at": new["created_at"]})
             captures += new.get("captures") or []
         with self.conn:
             self.conn.execute("DELETE FROM items WHERE id = ?", (new_id,))

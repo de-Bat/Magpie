@@ -1450,13 +1450,19 @@ function cleanupHtml() {
       <details class="clean-help"><summary>Set up the shortcut (once)</summary>
         <ol>
           <li>In <b>Shortcuts</b> tap <b>+</b> and name it <b>${CLEAN_SHORTCUT}</b>. In its details, let it receive <b>Text</b> input.</li>
+          <li><b>Get Contents of URL</b> <code>${esc(location.origin)}/api/cleanup/shapes</code>, header <code>Authorization</code> = <code>Bearer <i>your token</i></code>. Then <b>Get Dictionary Value</b> <code>keys</code> and <b>Set Variable</b> <i>Shapes</i>.</li>
           <li><b>Find Photos</b>: filter <b>Album</b> is <b>Screenshots</b> (or any album you want cleaned).</li>
           <li><b>Repeat with Each</b> photo:
             <ol>
-              <li><b>Generate Hash</b> (SHA256) of <i>Repeat Item</i>.</li>
-              <li><b>Convert Image</b> <i>Repeat Item</i> to JPEG, then <b>Resize Image</b> to width 512.</li>
-              <li><b>Get Contents of URL</b> <code>${esc(location.origin)}/api/cleanup/check</code>, method POST, header <code>Authorization</code> = <code>Bearer <i>your token</i></code>, body Form: <code>image</code> (File) = <i>Resized Image</i>, <code>sha256</code> (Text) = <i>Hash</i>.</li>
-              <li><b>Get Dictionary Value</b> <code>item_id</code>; <b>If</b> it <b>has any value</b>: <b>Add to Variable</b> <i>Matches</i> ← <i>Repeat Item</i>.</li>
+              <li><b>Get Details of Images</b>: <i>Width</i> of <i>Repeat Item</i>, and again for <i>Height</i>.</li>
+              <li><b>Calculate Expression</b> <code><i>Width</i> × 1000 ÷ <i>Height</i></code>, then <b>Round Number</b> to Ones.</li>
+              <li><b>Get Dictionary Value</b> for key <i>Rounded Number</i> in <i>Shapes</i>. <b>If</b> it <b>has any value</b> (a photo of any other shape can't match, so it is never sent):
+                <ol>
+                  <li><b>Generate Hash</b> (SHA256) of <i>Repeat Item</i>.</li>
+                  <li><b>Convert Image</b> <i>Repeat Item</i> to JPEG, then <b>Resize Image</b> to width 512.</li>
+                  <li><b>Get Contents of URL</b> <code>${esc(location.origin)}/api/cleanup/check</code>, method POST, the same header, body Form: <code>image</code> (File) = <i>Resized Image</i>, <code>sha256</code> (Text) = <i>Hash</i>.</li>
+                  <li><b>Get Dictionary Value</b> <code>item_id</code>; <b>If</b> it <b>has any value</b>: <b>Add to Variable</b> <i>Matches</i> ← <i>Repeat Item</i>.</li>
+                </ol></li>
             </ol></li>
           <li><b>If</b> <i>Shortcut Input</i> is <code>delete</code>: <b>Delete Photos</b> <i>Matches</i>. Otherwise: <b>Count</b> <i>Matches</i> and <b>Show Result</b>.</li>
         </ol>

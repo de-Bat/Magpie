@@ -45,7 +45,8 @@ struct LibraryView: View {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { pasteFromClipboard() } label: { Image(systemName: "doc.on.clipboard") }
                         .accessibilityLabel("Paste a screenshot or link")
-                    PhotosPicker(selection: $picked, maxSelectionCount: 20, matching: .images) {
+                    // .current: the photo's own bytes, not a JPEG copy, so cleanup can later recognise it by its hash
+                    PhotosPicker(selection: $picked, maxSelectionCount: 20, matching: .images, preferredItemEncoding: .current) {
                         Image(systemName: "plus")
                     }
                     .accessibilityLabel("Add screenshots")
