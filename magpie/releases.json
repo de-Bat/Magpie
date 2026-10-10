@@ -5,8 +5,72 @@
       {
         "title": "Clean up photos",
         "text": "Find the screenshots already saved in Magpie and delete them from your photos, or do a dry run first. In the iOS app pick Screenshots, All Photos or an album; on iPhone the web app runs a Shortcut; on desktop pick a folder."
+      },
+      {
+        "title": "Repository logos",
+        "text": "Refresh metadata lets a repository's own logo replace GitHub's generated card, and logos still load when GitHub's API limit is reached. Transparent logos no longer sit on a light tile."
       }
     ]
+  },
+  {
+    "version": "0.24.0",
+    "features": [
+      {
+        "title": "Search providers",
+        "text": "Choose a web search for finding an article's real address (Settings → Web search): Brave, Tavily, Serper or SerpApi, each with a free tier, or your own SearXNG. DuckDuckGo is still tried when the provider fails or finds nothing, and is given a rest after it refuses a search."
+      },
+      {
+        "title": "Better logos",
+        "text": "SVG logos are drawn to PNG so every app, including iOS, can show them. Square icons are preferred over wide wordmarks."
+      },
+      {
+        "title": "Bigger cover",
+        "text": "Tap the cover on a card, or ⤢, to enlarge it; ↗ opens the full image. The choice is remembered."
+      }
+    ],
+    "date": "2026-10-08"
+  },
+  {
+    "version": "0.23.0",
+    "features": [
+      {
+        "title": "Past the aggregator",
+        "text": "A link to daily.dev, Reddit, Hacker News, Flipboard or a social post now leads to the original article. The aggregator link is kept as \"Original post\"."
+      },
+      {
+        "title": "Refresh keeps the picture",
+        "text": "Refresh metadata keeps an item's own picture rather than swapping it for the site's logo, and fixes an aggregator link it finds on an older item."
+      }
+    ],
+    "date": "2026-10-05"
+  },
+  {
+    "version": "0.22.0",
+    "features": [
+      {
+        "title": "GitHub repo badges",
+        "text": "A repository card shows its language, license, latest release, how recently it was updated (green, amber, red), forks, open issues and whether it is archived."
+      },
+      {
+        "title": "Article pictures and links",
+        "text": "Articles get their own lead picture more often, even when the site blocks Magpie, and a link that opens is kept rather than dropped. With Gemini, the pages its search read help find the article's real address."
+      },
+      {
+        "title": "Open source",
+        "text": "Magpie is released under the MIT license."
+      }
+    ],
+    "date": "2026-10-05"
+  },
+  {
+    "version": "0.21.0",
+    "features": [
+      {
+        "title": "Languages",
+        "text": "The app speaks English, Hebrew, Spanish, German and French (Settings → Appearance; right-to-left for Hebrew). Movie and TV titles, descriptions and genres are fetched from TMDB in your content language (Settings → Lookups) and shown to anyone using that language."
+      }
+    ],
+    "date": "2026-10-03"
   },
   {
     "version": "0.20.0",
@@ -18,14 +82,6 @@
       {
         "title": "Compact main link",
         "text": "On a phone the card's source link is the site's icon and an arrow instead of 'Open …'."
-      },
-      {
-        "title": "Languages",
-        "text": "The app speaks English, Hebrew, Spanish, German and French (Settings → Appearance; right-to-left for Hebrew). Movie and TV titles, descriptions and genres are fetched from TMDB in your content language (Settings → Lookups) and shown to anyone using that language."
-      },
-      {
-        "title": "GitHub repo badges",
-        "text": "A repository card shows its language, license, latest release, how recently it was updated (green, amber, red), forks, open issues and whether it is archived."
       }
     ],
     "date": "2026-10-03"
