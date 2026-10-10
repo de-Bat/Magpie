@@ -88,6 +88,16 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        CleanupView()
+                    } label: {
+                        Label("Clean up photos", systemImage: "trash.slash")
+                    }
+                } footer: {
+                    Text("Find photos that are already saved in Magpie and delete them from your photo library.")
+                }
+
+                Section {
                     Button("Re-download library", role: .destructive) { confirmReset = true }
                 } footer: {
                     Text("Clears the offline copy and downloads everything from the server again. Changes waiting to sync are kept.")

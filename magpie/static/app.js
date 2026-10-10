@@ -1419,7 +1419,220 @@ function libraryHtml() {
       <label class="check"><input type="checkbox" id="bulk-skip" checked> Leave out items I corrected or confirmed, because re-analyzing replaces them</label>
       <button class="btn" type="button" data-bulk="reanalyze">↻ Re-analyze…</button>
     </div>
-    <div id="bulk-progress" class="bulk-progress" hidden aria-live="polite"></div>`;
+    <div id="bulk-progress" class="bulk-progress" hidden aria-live="polite"></div>
+    ${cleanupHtml()}`;
+}
+
+// ---- photo cleanup: delete photos that are already saved in Magpie -----------------------------------------------
+//
+// The server decides what counts as "already saved" (POST /api/cleanup/check: exact hash, or the same picture
+// by look, and only finished captures). Browsers can't see the photo library, so the photos come from:
+//  - iPhone/iPad: an iOS Shortcut, which can read any album, ask the server, and delete (one system prompt);
+//  - a computer: a folder (Chromium's folder picker), deleted from here;
+//  - other phones: the photo picker; matches are listed for the person to delete in their gallery.
+
+const CLEAN_SHORTCUT = "Magpie Cleanup";
+const CLEAN_IMAGE = /\.(jpe?g|png|webp|gif|bmp|avif|heic|heif)$/i;
+const isAppleMobile = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const cleanCanFolder = () => typeof window.showDirectoryPicker === "function" && !matchMedia("(pointer: coarse)").matches;
+let cleanUrls = [];   // object URLs of the last result's thumbnails
+
+function cleanupHtml() {
+  if (isAppleMobile()) {
+    return `
+    <div class="bulk-card" id="clean-card">
+      <h4>Clean up photos</h4>
+      <p>Deletes photos from an album (Screenshots, Recents…) that are already saved in Magpie. The “${CLEAN_SHORTCUT}” shortcut does it, because only Shortcuts can delete from Photos. iOS asks before deleting, and photos stay in Recently Deleted for 30 days.</p>
+      <div class="clean-actions">
+        <button class="btn" type="button" data-clean="shortcut-dry">Dry run</button>
+        <button class="btn danger" type="button" data-clean="shortcut-delete">Delete all matches</button>
+      </div>
+      <details class="clean-help"><summary>Set up the shortcut (once)</summary>
+        <ol>
+          <li>In <b>Shortcuts</b> tap <b>+</b> and name it <b>${CLEAN_SHORTCUT}</b>. In its details, let it receive <b>Text</b> input.</li>
+          <li><b>Find Photos</b>: filter <b>Album</b> is <b>Screenshots</b> (or any album you want cleaned).</li>
+          <li><b>Repeat with Each</b> photo:
+            <ol>
+              <li><b>Generate Hash</b> (SHA256) of <i>Repeat Item</i>.</li>
+              <li><b>Convert Image</b> <i>Repeat Item</i> to JPEG, then <b>Resize Image</b> to width 512.</li>
+              <li><b>Get Contents of URL</b> <code>${esc(location.origin)}/api/cleanup/check</code>, method POST, header <code>Authorization</code> = <code>Bearer <i>your token</i></code>, body Form: <code>image</code> (File) = <i>Resized Image</i>, <code>sha256</code> (Text) = <i>Hash</i>.</li>
+              <li><b>Get Dictionary Value</b> <code>item_id</code>; <b>If</b> it <b>has any value</b>: <b>Add to Variable</b> <i>Matches</i> ← <i>Repeat Item</i>.</li>
+            </ol></li>
+          <li><b>If</b> <i>Shortcut Input</i> is <code>delete</code>: <b>Delete Photos</b> <i>Matches</i>. Otherwise: <b>Count</b> <i>Matches</i> and <b>Show Result</b>.</li>
+        </ol>
+        <button class="btn" type="button" data-clean="copy-token">Copy my access token</button>
+      </details>
+      <p class="setting-help">Or check a few photos here, without deleting: <button class="link-btn" type="button" data-clean="start">choose photos…</button></p>
+      <div id="clean-result" class="bulk-progress" hidden aria-live="polite"></div>
+    </div>`;
+  }
+  const folder = cleanCanFolder();
+  return `
+    <div class="bulk-card" id="clean-card">
+      <h4>Clean up photos</h4>
+      <p>${folder
+        ? "Pick a folder of photos or screenshots. Any that are already saved in Magpie are found, and can be deleted."
+        : "Pick photos from your gallery. Any that are already saved in Magpie are shown, so you can delete them there (a browser can't)."}</p>
+      <select id="clean-mode" aria-label="Mode">
+        <option value="dry">Dry run: only list matches</option>
+        ${folder ? `<option value="delete">Delete all matches</option>` : ""}
+      </select>
+      <button class="btn" type="button" data-clean="start">${folder ? "Choose folder…" : "Choose photos…"}</button>
+      <div id="clean-result" class="bulk-progress" hidden aria-live="polite"></div>
+    </div>`;
+}
+
+// A small JPEG to send (the server only needs ~512 px), plus the SHA256 of the original for an exact match.
+async function cleanPayload(file, shapes) {
+  const bitmap = await createImageBitmap(file);
+  let blob;
+  try {
+    const aspect = bitmap.width / bitmap.height;
+    if (!shapes.shapes.some((s) => Math.abs(s - aspect) / Math.max(s, aspect) <= shapes.tolerance)) return null;   // can't match: don't send it
+    const scale = Math.min(1, 512 / bitmap.width);
+    const w = Math.max(1, Math.round(bitmap.width * scale)), h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, w, h);
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.85));
+  } finally {
+    bitmap.close?.();
+  }
+  let sha = "";
+  if (crypto.subtle) {   // only on https or localhost; without it the server matches by look
+    const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+    sha = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return { blob, sha };
+}
+
+async function cleanCheck(file, shapes) {
+  const payload = await cleanPayload(file, shapes);
+  if (!payload) return { match: false };
+  const { blob, sha } = payload;
+  const form = new FormData();
+  form.append("image", blob, "photo.jpg");
+  if (sha) form.append("sha256", sha);
+  return api("/api/cleanup/check", { method: "POST", body: form, timeout: 60000 });
+}
+
+// Every image under a folder, with the directory it sits in (needed to delete it).
+async function* folderImages(dir) {
+  for await (const [name, handle] of dir.entries()) {
+    if (handle.kind === "directory") yield* folderImages(handle);
+    else if (CLEAN_IMAGE.test(name)) yield { name, dir, getFile: () => handle.getFile() };
+  }
+}
+
+function pickPhotoFiles() {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file"; input.accept = "image/*"; input.multiple = true;
+    input.addEventListener("change", () => resolve([...input.files].map((f) => ({ name: f.name, dir: null, getFile: async () => f }))));
+    input.addEventListener("cancel", () => resolve(null));
+    input.click();
+  });
+}
+
+async function cleanAction(kind) {
+  if (kind === "start") return runCleanup();
+  if (kind === "shortcut-dry" || kind === "shortcut-delete") {
+    location.href = `shortcuts://run-shortcut?name=${encodeURIComponent(CLEAN_SHORTCUT)}&input=text&text=${kind === "shortcut-delete" ? "delete" : "dry"}`;
+    return;
+  }
+  if (kind === "copy-token") {
+    const token = await db.get("kv", "token");
+    if (!token) return toast("This server has no access token: leave the header out.");
+    try { await navigator.clipboard.writeText(token); toast("Token copied. Keep it private."); } catch { toast("Couldn't copy."); }
+  }
+}
+
+async function runCleanup() {
+  const out = $("#clean-result"), button = $('[data-clean="start"]');
+  const mode = $("#clean-mode")?.value || "dry";
+  if (button.disabled) return;
+  const say = (html) => { out.hidden = false; out.innerHTML = html; };
+  cleanUrls.forEach((u) => URL.revokeObjectURL(u));
+  cleanUrls = [];
+
+  // 1. What to look at.
+  let files;
+  const folder = cleanCanFolder() && !isAppleMobile();
+  try {
+    if (folder) {
+      const root = await window.showDirectoryPicker({ mode: mode === "delete" ? "readwrite" : "read", id: "magpie-cleanup", startIn: "pictures" });
+      files = [];
+      for await (const f of folderImages(root)) files.push(f);
+    } else {
+      files = await pickPhotoFiles();
+      if (!files) return;
+    }
+  } catch (e) {
+    if (e?.name !== "AbortError") toast(`Couldn't open that: ${e?.message || e}`);
+    return;
+  }
+  if (!files.length) return say("No photos there.");
+
+  // 2. Ask the server about each one, a few at a time.
+  button.disabled = true;
+  const matches = [];
+  let done = 0, unreadable = 0, failed = null;
+  try {
+    say("Reading your captures…");   // the first run fingerprints every capture on the server
+    let shapes;
+    try { shapes = await api("/api/cleanup/shapes", { timeout: 300000 }); } catch (e) { return say(`Couldn't check: ${esc(errorMessage(e))}`); }
+    if (!shapes.shapes.length) return say("Nothing to compare with yet: no finished captures.");
+    let next = 0;
+    const worker = async () => {
+      while (next < files.length && !failed) {
+        const f = files[next++];
+        try {
+          const r = await cleanCheck(await f.getFile(), shapes);
+          if (r.match) matches.push({ f, title: r.title });
+          else if (r.reason === "unreadable") unreadable++;
+        } catch (e) {
+          if (e instanceof HttpError) failed = e;   // the server said no: stop, every other photo would fail too
+          else unreadable++;                         // this browser can't decode it (e.g. HEIC on a computer)
+        }
+        done++;
+        say(`Checking photos… ${done} of ${files.length}`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (failed) return say(`Couldn't check: ${esc(errorMessage(failed))}`);
+
+    // 3. Delete (folders only), then report.
+    let deleted = 0, notDeleted = 0;
+    if (mode === "delete" && matches.length
+        && confirm(`Permanently delete ${matches.length} photo${matches.length > 1 ? "s" : ""} that ${matches.length > 1 ? "are" : "is"} already in Magpie?\n\nThey are removed from the folder, not moved to the Recycle Bin.`)) {
+      for (const m of matches) {
+        try { await m.f.dir.removeEntry(m.f.name); deleted++; m.gone = true; } catch { notDeleted++; }
+      }
+    }
+    const heading = mode === "delete" && deleted + notDeleted
+      ? `Deleted ${deleted} of ${matches.length} matching photos.${notDeleted ? ` ${notDeleted} couldn't be deleted.` : ""}`
+      : `${mode === "dry" ? "Dry run: " : ""}${matches.length} of ${files.length} photos are already in Magpie.`;
+    const note = unreadable ? `<br>${unreadable} couldn't be read.` : "";
+    if (folder) {
+      const rows = matches.slice(0, 100).map((m) => `<li>${esc(m.f.name)} → ${esc(m.title)}${m.gone ? " · deleted" : ""}</li>`).join("");
+      return say(`<strong>${esc(heading)}</strong>${note}${rows ? `<ul>${rows}</ul>` : ""}${matches.length > 100 ? `<p>and ${matches.length - 100} more</p>` : ""}`);
+    }
+    // Phones: show them, so they are easy to find and select in the gallery.
+    const tiles = [];
+    for (const m of matches.slice(0, 120)) {
+      const url = URL.createObjectURL(await m.f.getFile());
+      cleanUrls.push(url);
+      tiles.push(`<figure class="clean-tile"><img src="${url}" alt="" loading="lazy"><figcaption>${esc(m.title)}</figcaption></figure>`);
+    }
+    say(`<strong>${esc(heading)}</strong>${note}
+      ${tiles.length ? `<div class="clean-grid">${tiles.join("")}</div>${matches.length > 120 ? `<p>and ${matches.length - 120} more</p>` : ""}
+      <p>Select these in your gallery and delete them there.</p>` : ""}`);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // ---- conversation logs (Settings → Logging) -----------------------------------------------------------------------
@@ -3072,6 +3285,7 @@ document.addEventListener("click", async (e) => {
   if (t.dataset.findPick !== undefined) return addEntry(findResults[Number(t.dataset.findPick)]);
   if (t.dataset.findTyped !== undefined) return addEntry({ category: findKind, title: t.dataset.findTyped });
   if (t.dataset.bulk !== undefined) return startBulk(t.dataset.bulk);
+  if (t.dataset.clean !== undefined) return cleanAction(t.dataset.clean);
   if (t.dataset.bulkCancel !== undefined) return cancelBulk();
   if (t.dataset.tab !== undefined) {
     state.tab = t.dataset.tab;

@@ -45,6 +45,14 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 CREATE INDEX IF NOT EXISTS tags_tag ON tags(tag);
 
+-- Perceptual hashes of screenshots, for photo cleanup (cleanup.py). Computed on first use.
+CREATE TABLE IF NOT EXISTS fingerprints (
+    image_file TEXT PRIMARY KEY,    -- file name in the uploads directory
+    bits       TEXT NOT NULL,       -- 64 hex characters
+    aspect     REAL NOT NULL,       -- width / height
+    thumb      BLOB NOT NULL        -- 54x96 grayscale pixels
+);
+
 -- Deleted item ids, so offline clients learn about deletions when they sync.
 CREATE TABLE IF NOT EXISTS tombstones (
     id         TEXT PRIMARY KEY,

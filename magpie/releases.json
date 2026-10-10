@@ -1,5 +1,14 @@
 [
   {
+    "version": "next",
+    "features": [
+      {
+        "title": "Clean up photos",
+        "text": "Find the screenshots already saved in Magpie and delete them from your photos, or do a dry run first. In the iOS app pick Screenshots, All Photos or an album; on iPhone the web app runs a Shortcut; on desktop pick a folder."
+      }
+    ]
+  },
+  {
     "version": "0.20.0",
     "features": [
       {

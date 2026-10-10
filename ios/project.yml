@@ -25,7 +25,7 @@ targets:
         CFBundleDisplayName: Magpie
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
-        NSPhotoLibraryUsageDescription: Magpie saves the screenshots you pick so it can identify and catalogue them.
+        NSPhotoLibraryUsageDescription: Magpie saves the screenshots you pick so it can identify and catalogue them, and can delete photos it has already saved when you ask it to clean up.
         NSLocalNetworkUsageDescription: Magpie connects to your self-hosted Magpie server on your network.
         # Self-hosted servers are often plain http on a LAN / Tailscale address.
         NSAppTransportSecurity:

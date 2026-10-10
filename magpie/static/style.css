@@ -782,3 +782,9 @@ button.act-main:hover .act-text { text-decoration: underline; }
 .badge-aging { color: var(--warn); }
 .badge-stale, .badge-archived { color: var(--err); }
 .badge-release { color: var(--accent); }
+.clean-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.clean-tile { margin: 0; display: grid; gap: 4px; font-size: 12px; }
+.clean-tile img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 8px; background: var(--surface); }
+.clean-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.clean-help ol { margin: 8px 0; padding-left: 20px; display: grid; gap: 4px; }
+.clean-help code { word-break: break-all; }

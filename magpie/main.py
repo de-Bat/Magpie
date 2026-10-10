@@ -27,6 +27,7 @@ from .analyzer import CATEGORIES, AnalysisError
 from .analyzers import AnalyzerRouter
 from . import catalog
 from .bulk import BulkBusy, BulkRunner
+from .cleanup import CleanupIndex
 from .batch import BatchWorker
 from .links import URL_TOO_LONG, normalize_url
 from . import __version__, config, releases
@@ -214,6 +215,7 @@ def create_app(
 
     app = FastAPI(title="Magpie", lifespan=lifespan)
     app.state.db = db
+    cleanup_index = CleanupIndex(db, settings.uploads_dir)
     app.state.runtime = rt
 
     @app.exception_handler(Exception)
@@ -737,6 +739,25 @@ def create_app(
         db.delete_item(item_id)
         if item["image_file"]:
             (settings.uploads_dir / item["image_file"]).unlink(missing_ok=True)
+            cleanup_index.forget([item["image_file"]])
+
+    @app.get("/api/cleanup/shapes")
+    async def cleanup_shapes():
+        """Shapes (width/height) of finished captures: photos of any other shape can't match, so clients skip them."""
+        return await asyncio.to_thread(cleanup_index.shapes)
+
+    @app.post("/api/cleanup/check")
+    async def cleanup_check(
+        image: UploadFile = File(..., description="The photo, ideally shrunk (about 512 px is plenty)"),
+        sha256: str | None = Form(None, description="SHA256 of the original photo, if `image` is a shrunk copy"),
+    ):
+        """Is this photo already saved as a finished capture? Clients use it to delete photos from the device."""
+        data = await image.read()
+        if not data:
+            raise HTTPException(400, "Empty file")
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, "Photo is larger than 20 MB; send a shrunk copy")
+        return await asyncio.to_thread(cleanup_index.check, data, sha256)
 
     @app.get("/api/usage")
     def usage(days: int = Query(30, ge=1, le=366)):

@@ -190,6 +190,27 @@ struct APIClient {
         }
     }
 
+    /// Shapes of finished captures: photos of any other shape can't match, so cleanup skips them.
+    func cleanupShapes() async throws -> CleanupShapes {
+        try await send(request("api/cleanup/shapes", timeout: 300))   // the first call fingerprints every capture
+    }
+
+    /// Is this photo (a shrunk JPEG, plus the SHA256 of the original) already a finished capture?
+    func cleanupCheck(image: Data, sha256: String) async throws -> CleanupVerdict {
+        let boundary = "magpie-\(UUID().uuidString)"
+        var body = Data()
+        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"sha256\"\r\n\r\n\(sha256)\r\n")
+        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"image\"; filename=\"photo.jpg\"\r\n")
+        body.append("Content-Type: image/jpeg\r\n\r\n")
+        body.append(image)
+        body.append("\r\n--\(boundary)--\r\n")
+
+        var req = request("api/cleanup/check", method: "POST", timeout: 60)
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        req.httpBody = body
+        return try await send(req)
+    }
+
     /// Authenticated GET for server-hosted screenshots (/media/...).
     func mediaRequest(_ file: String) -> URLRequest {
         request("media/\(file)")
@@ -232,6 +253,28 @@ struct APIClient {
 
 private extension Data {
     mutating func append(_ string: String) { append(Data(string.utf8)) }
+}
+
+/// GET /api/cleanup/shapes
+struct CleanupShapes: Decodable, Sendable {
+    let shapes: [Double]
+    let tolerance: Double
+
+    func contains(_ aspect: Double) -> Bool {
+        shapes.contains { abs($0 - aspect) / max($0, aspect) <= tolerance }
+    }
+}
+
+/// POST /api/cleanup/check
+struct CleanupVerdict: Decodable, Sendable {
+    let match: Bool
+    let itemId: String?
+    let title: String?
+
+    enum CodingKeys: String, CodingKey {
+        case match, title
+        case itemId = "item_id"
+    }
 }
 
 /// GET /api/usage: measured cost of identifying screenshots.
