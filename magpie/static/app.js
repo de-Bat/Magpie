@@ -1420,7 +1420,31 @@ function libraryHtml() {
       <button class="btn" type="button" data-bulk="reanalyze">↻ Re-analyze…</button>
     </div>
     <div id="bulk-progress" class="bulk-progress" hidden aria-live="polite"></div>
-    ${cleanupHtml()}`;
+    ${cleanupHtml()}${shareShortcutHtml()}`;
+}
+
+// iOS doesn't let web apps into the share sheet; a Shortcut can be there, and it uploads straight to the server.
+function shareShortcutHtml() {
+  if (!isAppleMobile()) return "";   // Android and desktop Chrome: the installed app is in the share sheet already
+  return `
+    <div class="bulk-card">
+      <h4>Share from other apps</h4>
+      <p>iOS doesn't show web apps in the share sheet. A “Save to Magpie” shortcut can be there: Share → Save to Magpie from Photos, a screenshot or any app sends the picture straight to your server, and it appears here at the next sync. It needs the server to be reachable; nothing is queued offline.</p>
+      <details class="clean-help"><summary>Set up the shortcut (once)</summary>
+        <ol>
+          <li>In <b>Shortcuts</b> tap <b>+</b>, name it <b>Save to Magpie</b>. In its details turn on <b>Show in Share Sheet</b> and let it receive <b>Images</b>.</li>
+          <li><b>Repeat with Each</b> item in <i>Shortcut Input</i> (so several pictures can be shared at once):
+            <ol>
+              <li><b>Generate Hash</b> (SHA256) of <i>Repeat Item</i>: the picture as it is on the phone, so cleanup can recognise it later.</li>
+              <li><b>Convert Image</b> <i>Repeat Item</i> to <b>JPEG</b> (the server doesn't take HEIC).</li>
+              <li><b>Get Contents of URL</b> <code>${esc(location.origin)}/api/items</code>, method POST, header <code>Authorization</code> = <code>Bearer <i>your token</i></code>, body Form: <code>file</code> (File) = <i>Converted Image</i>, <code>original_sha256</code> (Text) = <i>Hash</i>.</li>
+            </ol></li>
+          <li><b>Show Notification</b> “Saved to Magpie”.</li>
+        </ol>
+        <p>Want a note with it (“Dana recommended”)? Add <b>Ask for Input</b> (Text) before the loop, and a form field <code>note</code> = <i>Provided Input</i>.</p>
+        <button class="btn" type="button" data-clean="copy-token">Copy my access token</button>
+      </details>
+    </div>`;
 }
 
 // ---- photo cleanup: delete photos that are already saved in Magpie -----------------------------------------------
