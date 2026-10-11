@@ -2781,6 +2781,12 @@ function toggleDetailCoverSize() {
   }
 }
 
+// A card action shown as its icon alone; the label is its tooltip and what screen readers say.
+function iconButton(action, icon, label) {
+  const text = esc(tr(label));
+  return `<button class="btn icon-btn" type="button" data-action="${action}" title="${text}" aria-label="${text}"><span aria-hidden="true">${icon}</span></button>`;
+}
+
 function renderDetail(source) {
   const item = localizedView(source), view = item;
   const m = item.metadata || {};
@@ -2819,18 +2825,18 @@ function renderDetail(source) {
       ${scoresHtml(m)}${repoBadgesHtml(item)}
       ${statusHtml(item)}${notice}
       <div class="actions primary-actions">
-        ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}" title="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span><span class="open-text">${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}</span> ↗</a>` : ""}
-        ${item.status === "ready" && fixing !== item.id ? `<button class="btn" data-action="fix">${esc(tr(item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it"))}</button>` : ""}
-        <span class="plugin-slot">${pluginButtonsHtml(item.id)}</span>
-        <details class="menu"><summary class="btn">${esc(tr("More"))} ▾</summary><div class="menu-list">
-          ${item.pending_upload ? "" : `<button class="btn" data-action="refresh" title="Look up the poster, cover, ratings and links again, without re-analyzing">⟳ ${esc(tr("Refresh metadata"))}</button>
-          <button class="btn" data-action="reanalyze">↻ ${esc(tr("Re-analyze"))}</button>`}
+        ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}" title="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span> ↗</a>` : ""}
+        ${item.status === "ready" && fixing !== item.id ? iconButton("fix", "✎", item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it") : ""}
+        ${item.pending_upload ? "" : iconButton("refresh", "⟳", "Refresh metadata")}
+        <details class="menu"><summary class="btn icon-btn" title="${esc(tr("More"))}" aria-label="${esc(tr("More"))}">⋯</summary><div class="menu-list">
+          ${item.pending_upload ? "" : `<button class="btn" data-action="reanalyze">↻ ${esc(tr("Re-analyze"))}</button>`}
           <label class="menu-select">${esc(tr("Type"))} <select id="category-edit">
             ${Object.entries(CATEGORY_LABELS).map(([k, label]) => `<option value="${k}" ${k === item.category ? "selected" : ""}>${label}</option>`).join("")}
           </select></label>
-          <button class="btn danger" data-action="delete">${esc(tr("Delete"))}</button>
+          <button class="btn danger" data-action="delete">🗑 ${esc(tr("Delete"))}</button>
         </div></details>
       </div>
+      <div class="actions plugin-actions"><span class="plugin-slot">${pluginButtonsHtml(item.id)}</span></div>
       ${fixing === item.id ? `<section>${correctionFormHtml(source)}</section>` : ""}
       <section><h3>${esc(tr("About"))}</h3>${about.length ? about.map((p) => `<p>${esc(p)}</p>`).join("") : `<p class="meta-line">${esc(tr("No description yet."))}${item.pending_upload ? "" : esc(tr(" Refresh metadata may find one."))}</p>`}</section>
       ${facts.length ? `<section><h3>${esc(tr(TYPE_BLOCK[item.category] || "Details"))}</h3><dl class="facts-table">${facts.map(([k, v]) => `<dt>${esc(tr(humanize(k)))}</dt><dd>${
@@ -2876,7 +2882,7 @@ function downloadChipHtml(p) {
   const percent = d.state === "downloading" ? Math.max(0, Math.min(100, Number(d.percent) || 0)) : null;
   const tip = [p.label, d.label, d.eta, d.detail].filter(Boolean).join(" · ");
   const count = d.total && d.state !== "downloaded" ? `<span class="dl-count">${esc(`${d.have ?? 0}/${d.total}`)}</span>` : "";
-  const inner = `<span class="dl-name">${esc(p.label)}</span><span class="dl-icon" aria-hidden="true">${DOWNLOAD_ICON[d.state] || "•"}</span><span class="dl-label">${esc(d.label)}</span>${count}`;
+  const inner = `<span class="dl-name">${pluginMark(p)}</span><span class="dl-icon" aria-hidden="true">${DOWNLOAD_ICON[d.state] || "•"}</span><span class="dl-label">${esc(d.label)}</span>${count}`;
   const cls = `btn plugin-added dl dl-${esc(d.state)}`, style = percent === null ? "" : ` style="--pct:${percent}%"`;
   return href ? `<a class="${cls}"${style} href="${esc(href)}" target="_blank" rel="noopener" title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</a>`
     : `<span class="${cls}"${style} title="${esc(tip)}" aria-label="${esc(tip)}">${inner}</span>`;
@@ -2903,20 +2909,34 @@ function pluginSectionsHtml(id) {
   }).join("");
 }
 
+// The plugin's icon (e.g. Radarr's own, served through Magpie), or its name when it has none or the icon won't load.
+function pluginMark(p, text = p.label) {
+  return p.icon ? `<img class="plugin-ico" src="${esc(p.icon)}" alt="" data-fallback="${esc(text)}">` : esc(text);
+}
+document.addEventListener("error", (e) => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.classList.contains("plugin-ico")) img.replaceWith(img.dataset.fallback || "");
+}, true);
+
 function pluginButtonsHtml(id) {
   return (pluginActions.get(id) || []).map((p) => {
     if (p.state === "added") {
       if (p.section?.download) {   // just a capsule that jumps to the plugin's section; the status itself is shown there
         const tip = `${p.label}: ${[p.section.download.label, p.section.download.eta].filter(Boolean).join(" · ")} — show details`;
-        return `<button type="button" class="btn plugin-added plugin-jump" data-jump-section="${esc(p.id)}" title="${esc(tip)}" aria-label="${esc(tip)}">${esc(p.label)} <span aria-hidden="true">↓</span></button>`;
+        return `<button type="button" class="btn plugin-added plugin-jump" data-jump-section="${esc(p.id)}" title="${esc(tip)}" aria-label="${esc(tip)}">${pluginMark(p)} <span aria-hidden="true">↓</span></button>`;
       }
       if (p.download) return downloadChipHtml(p);
-      const href = safeUrl(p.url);
-      const text = `✓ In ${esc(p.label)}`;
-      return href ? `<a class="btn plugin-added" href="${esc(href)}" target="_blank" rel="noopener">${text} ↗</a>` : `<span class="btn plugin-added">${text}</span>`;
+      const href = safeUrl(p.url), tip = esc(`In ${p.label}`);
+      const inner = `<span aria-hidden="true">✓</span> ${pluginMark(p, `In ${p.label}`)}`;
+      return href ? `<a class="btn plugin-added" href="${esc(href)}" target="_blank" rel="noopener" title="${tip}" aria-label="${tip}">${inner} ↗</a>`
+        : `<span class="btn plugin-added" title="${tip}" aria-label="${tip}">${inner}</span>`;
     }
-    if (p.state === "unavailable") return `<button class="btn" type="button" disabled title="${esc(p.message || "")}">${esc(p.action_label)}</button>`;
-    return `<button class="btn" type="button" data-plugin="${esc(p.id)}">＋ ${esc(p.action_label)}</button>`;
+    const label = esc(p.action_label);
+    if (p.state === "unavailable") {
+      const tip = esc([p.action_label, p.message].filter(Boolean).join(": "));
+      return `<button class="btn" type="button" disabled title="${tip}" aria-label="${tip}">${pluginMark(p, p.action_label)}</button>`;
+    }
+    return `<button class="btn" type="button" data-plugin="${esc(p.id)}" title="${label}" aria-label="${label}">＋ ${pluginMark(p, p.action_label)}</button>`;
   }).join("");
 }
 

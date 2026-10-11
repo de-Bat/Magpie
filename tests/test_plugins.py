@@ -34,6 +34,13 @@ class FakeArr:
         if request.headers.get("x-api-key") != self.key:
             return httpx.Response(401)
         path, k = request.url.path, self.kind
+        if path == "/":
+            return httpx.Response(200, html=('<link rel="mask-icon" href="/Content/Images/Icons/safari.svg">'
+                                             '<link rel="icon" type="image/png" sizes="16x16" href="/Content/Images/Icons/favicon-16x16.png">'
+                                             '<link rel="icon" type="image/png" sizes="32x32" href="/Content/Images/Icons/favicon-32x32.png">'
+                                             '<link rel="icon" href="https://elsewhere.example/evil.png">'))
+        if path == "/Content/Images/Icons/favicon-32x32.png":
+            return httpx.Response(200, content=b"\x89PNG32", headers={"content-type": "image/png"})
         if path == "/api/v3/system/status":
             return httpx.Response(200, json={"version": "5.0.0"})
         if path == "/api/v3/rootfolder":
@@ -198,6 +205,20 @@ def test_sonarr_v3_gets_a_language_profile(tmp_path):
     with client:
         assert client.post(f"/api/items/{item}/plugins/sonarr").status_code == 200
         assert sonarr.posted[0]["languageProfileId"] == 1
+
+
+def test_arr_buttons_get_the_icon_of_your_own_server(tmp_path):
+    radarr = FakeArr("movie", lookup=[FIGHT_CLUB])
+    client, item = make(tmp_path, radarr, **ARR_ON)
+    with client:
+        offered = client.get(f"/api/items/{item}/plugins").json()[0]
+        assert offered["icon"] == "/api/plugins/radarr/icon"
+        r = client.get("/api/plugins/radarr/icon")
+        assert r.status_code == 200 and r.content == b"\x89PNG32" and r.headers["content-type"] == "image/png"
+        assert "sandbox" in r.headers["content-security-policy"] and r.headers["x-content-type-options"] == "nosniff"
+        # Sonarr's fake server isn't running here: no icon, the button keeps its label
+        assert client.get("/api/plugins/sonarr/icon").status_code == 404
+        assert client.get("/api/plugins/nope/icon").status_code == 404
 
 
 def test_wrong_settings_give_readable_errors_and_never_leak_the_key(tmp_path):

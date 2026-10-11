@@ -105,3 +105,17 @@ A plugin's `status()` (and `run()`) result may include a `section`; the card sho
 ```
 
 Radarr shows the digital, cinema and physical release dates (even before the film is added); Sonarr shows the next and last aired episode and the show's status.
+
+## An icon for the buttons
+
+Set `has_icon = True` and return a small square picture from `icon()`; the web app then shows it on the plugin's buttons (＋ icon, ✓ icon, …) instead of its name, with the name as the tooltip:
+
+```python
+    has_icon = True
+
+    async def icon(self, settings, http):
+        r = await http.get(f"{settings.value('jellyseerr_url').rstrip('/')}/favicon.ico", timeout=10)
+        return (r.content, "image/x-icon") if r.status_code == 200 else None   # or None: the name is shown
+```
+
+The server fetches it and serves it at `GET /api/plugins/{id}/icon`, so it works even when your service is only reachable from the server or runs on plain http. It is kept for a day (a minute after a failure) and fetched again when the plugin's `<id>_url` setting changes. Allowed types: PNG, ICO, SVG, JPEG, WebP, GIF. Radarr and Sonarr (anything built on `ArrPlugin`) use the icon of your own server.

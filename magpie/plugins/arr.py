@@ -1,8 +1,10 @@
 """Shared code for the *arr download managers (Radarr, Sonarr): same API v3, same auth, same add flow."""
 from __future__ import annotations
 
+import html as html_lib
 import re
 from datetime import datetime, timezone
+from urllib.parse import urljoin
 
 import httpx
 
@@ -169,6 +171,31 @@ class ArrPlugin(Plugin):
             raise PluginError(f"{self.label} answered {r.status_code}: {_detail(r)}", 502)
         return r.json() if r.content else None
 
+    # ---- icon: the one the user's own server shows in its browser tab ----------------------------
+
+    has_icon = True
+
+    async def icon(self, settings, http):
+        base = self.base_url(settings)
+        headers = {"X-Api-Key": self.cfg(settings, "api_key") or ""}
+        candidates = []
+        try:   # the web UI's page (or its login page) names its icons
+            page = await http.get(f"{base}/", headers=headers, timeout=10, follow_redirects=True)
+            candidates = _page_icons(page.text, str(page.url)) if page.status_code < 400 else []
+        except httpx.HTTPError:
+            pass
+        for url in [*candidates, f"{base}/favicon.ico"]:
+            if _origin(url) != _origin(base):
+                continue   # only from the server you set up
+            try:
+                r = await http.get(url, headers=headers, timeout=10)
+            except httpx.HTTPError:
+                continue
+            media = r.headers.get("content-type", "").split(";")[0].strip().lower()
+            if r.status_code == 200 and media in ICON_TYPES and 0 < len(r.content) <= 200_000:
+                return r.content, media
+        return None
+
     async def test(self, settings, http, url=None, key=None):
         if url and key is None and _origin(url) != _origin(self.cfg(settings, "url")):
             raise PluginError("Enter the API key to test a different server.", 400)
@@ -242,6 +269,24 @@ class ArrPlugin(Plugin):
 
     def with_search(self, settings) -> bool:
         return bool(self.cfg(settings, "search"))
+
+
+ICON_TYPES = {"image/png", "image/x-icon", "image/vnd.microsoft.icon", "image/svg+xml", "image/jpeg", "image/webp", "image/gif"}
+_LINK = re.compile(r"<link\b[^>]*>", re.I)
+
+
+def _page_icons(html: str, page_url: str) -> list[str]:
+    """Icon addresses a web page names, the best for a small button first: a 32 px or so PNG, then the others."""
+    found = []
+    for tag in _LINK.findall(html or ""):
+        rel = re.search(r"""\brel\s*=\s*["']?([^"'>]+)""", tag, re.I)
+        href = re.search(r"""\bhref\s*=\s*["']?([^"'\s>]+)""", tag, re.I)
+        if not rel or not href or "icon" not in rel.group(1).lower() or "mask" in rel.group(1).lower():
+            continue
+        size = re.search(r"""\bsizes\s*=\s*["']?(\d+)""", tag, re.I)
+        px = int(size.group(1)) if size else 0
+        found.append((abs(px - 48) if px else 100, urljoin(page_url, html_lib.unescape(href.group(1)))))
+    return [u for _, u in sorted(found)]
 
 
 def _detail(r: httpx.Response) -> str:

@@ -282,7 +282,12 @@ dialog::backdrop { background: rgb(8 10 14 / .45); }
 .tag-editor input { border: 1px dashed var(--border); border-radius: 999px; padding: 3px 10px; background: transparent; color: var(--text); font: inherit; font-size: 13px; width: 120px; }
 .detail textarea { width: 100%; min-height: 64px; resize: vertical; border-radius: 10px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; padding: 9px 11px; }
 .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.primary-actions { position: relative; }
+/* a card's own actions: one row of icons (the main link stretches); plugin buttons get the row below */
+.primary-actions { position: relative; flex-wrap: nowrap; }
+.primary-actions .menu { margin-inline-start: auto; }
+.primary-actions .menu-list { inset-inline-start: auto; inset-inline-end: 0; }
+.btn.icon-btn { padding: 8px 0; width: 40px; justify-content: center; font-size: 17px; line-height: 1; flex: none; }
+.plugin-actions:not(:has(.btn)) { display: none; }
 .menu { position: relative; }
 .menu summary { list-style: none; cursor: pointer; }
 .menu summary::-webkit-details-marker { display: none; }
@@ -641,6 +646,8 @@ dialog:has(.settings-panel) { width: min(860px, calc(100vw - 32px)); overflow: h
 
 /* Plugin actions (Radarr, Sonarr, ...) on a card */
 .plugin-slot { display: contents; }
+.plugin-ico { width: 20px; height: 20px; object-fit: contain; vertical-align: middle; }
+.btn:disabled .plugin-ico { filter: grayscale(1); opacity: .5; }
 .plugin-added { color: var(--ok); text-decoration: none; }
 /* download status chip: icon and label by state; while downloading it fills like a progress bar */
 .dl { position: relative; overflow: hidden; display: inline-flex; align-items: center; gap: 6px; }
@@ -762,13 +769,9 @@ button.act-main:hover .act-text { text-decoration: underline; }
 }
 .btn.plugin-jump { color: var(--text); }
 
-/* the main link: on a phone just the site's icon and the arrow, to save room */
-.open-ico { display: none; }
-@media (max-width: 640px) {
-  .open-src { display: inline-flex; align-items: center; gap: 6px; padding-inline: 12px; }
-  .open-src .open-ico { display: inline-flex; }
-  .open-src .open-text { display: none; }
-}
+/* the main link: the site's icon and the arrow; the address is its tooltip */
+.open-src { display: inline-flex; align-items: center; gap: 6px; padding-inline: 12px; flex: none; }
+.open-ico { display: inline-flex; }
 
 .lbl-short { display: none; }
 @media (max-width: 400px) { .subbar .lbl-short { display: inline; } }

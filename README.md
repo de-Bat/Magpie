@@ -136,7 +136,7 @@ These cost controls are on by default:
 - **Related.** Each item lists things connected to it that are worth a look: the repository, package or app an article is about, the paper behind a model, the company or project it names. They come from the model, from the article's own links and from the sources Magpie looks up, and dead or made-up addresses are dropped.
 - **To check.** Anything under 60% gets a "!" marker, and anything below 90% that no source (TMDB, GitHub, Open Library, the page itself) confirmed gets a "○". Both show up under the **To check** switch.
 - **Did you mean…** Claude lists up to 3 alternatives. Tap one to switch to it.
-- **Fix it.** Open an item → **Wrong? Fix it**:
+- **Fix it.** Open an item → **Wrong? Fix it** (✎ in the web app):
   - Change the **title, type, year or link**. Magpie keeps the facts about the post itself (who shared it, where, the screenshot text), throws away the wrong item's poster, scores and details, and looks up the right ones. The model isn't called again.
   - Or **describe it** ("it's the 2019 remake, not the original"). Claude looks at the screenshot again with your correction as authoritative context.
   - Corrected items show **Corrected by you** and are never flagged for review again. Tags you added yourself are kept; auto-generated tags are replaced.

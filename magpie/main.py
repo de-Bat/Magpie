@@ -520,6 +520,33 @@ def create_app(
     def list_plugins():
         return [p.describe(settings) for p in plugins.all()]
 
+    plugin_icons: dict[str, tuple[str, float, tuple[bytes, str] | None]] = {}   # id -> (server URL, when, icon)
+
+    @app.get("/api/plugins/{plugin_id}/icon")
+    async def plugin_icon(plugin_id: str):
+        """The plugin's icon, fetched by the server (from e.g. your own Radarr) and kept for a day, or a minute after a failure."""
+        plugin = plugins.get(plugin_id)
+        if plugin is None or not plugin.has_icon or not plugin.configured(settings):
+            raise HTTPException(404, "No icon")
+        # a different server means a different icon
+        where = str(settings.value(f"{plugin_id}_url") or "") if f"{plugin_id}_url" in SPEC_BY_ATTR else ""
+        cached = plugin_icons.get(plugin_id)
+        if cached and cached[0] == where and time.monotonic() - cached[1] < (86400 if cached[2] else 60):
+            found = cached[2]
+        else:
+            try:
+                found = await plugin.icon(settings, plugin_http())
+            except Exception as e:   # a plugin's mistake shouldn't break the card: no icon, its label is shown
+                log.info("Icon for plugin %s failed: %s", plugin_id, e)
+                found = None
+            plugin_icons[plugin_id] = (where, time.monotonic(), found)
+        if not found:
+            raise HTTPException(404, "No icon")
+        data, media = found
+        return Response(data, media_type=media, headers={
+            "Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox"})   # an SVG opened directly runs nothing
+
     @app.get("/api/items/{item_id}/plugins")
     async def item_plugins(item_id: str):
         """The plugin actions that apply to this item, with their current state (e.g. already in Radarr)."""

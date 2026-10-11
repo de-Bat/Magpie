@@ -83,10 +83,17 @@ def test_header_keeps_only_a_jump_capsule_and_phone_ratings_share_one_row():
     assert 'class="l-short"' in js and ".scores { flex-wrap: nowrap" in css
 
 
-def test_main_link_is_an_icon_and_arrow_on_phones():
+def test_main_link_is_an_icon_and_arrow_with_the_address_as_its_label():
     js, css, _ = source()
-    assert "function sourceIconHtml(" in js and 'class="open-text"' in js and 'tr("Open {host}"' in js
-    assert ".open-src .open-text { display: none; }" in css
+    assert "function sourceIconHtml(" in js and 'class="open-text"' not in js and 'tr("Open {host}"' in js
+    assert ".open-ico { display: inline-flex; }" in css
+
+
+def test_card_actions_are_one_row_of_icons_and_plugins_get_their_own_row():
+    js, css, _ = source()
+    assert 'iconButton("fix", "✎"' in js and 'iconButton("refresh", "⟳"' in js and '<div class="actions plugin-actions">' in js
+    assert ".primary-actions { position: relative; flex-wrap: nowrap; }" in css and ".plugin-actions:not(:has(.btn)) { display: none; }" in css
+    assert "function pluginMark(" in js and "img.dataset.fallback" in js   # plugin icons fall back to the name
 
 
 def test_the_app_is_localized_and_movie_texts_follow_the_viewers_language():

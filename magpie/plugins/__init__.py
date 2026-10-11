@@ -54,9 +54,17 @@ class Plugin:
         """Check the connection (optionally with values not saved yet). Raises PluginError."""
         raise PluginError("This plugin has no connection test.", 400)
 
+    has_icon: bool = False   # True when `icon` can supply a picture; the app then shows it on the plugin's buttons
+
+    async def icon(self, settings, http) -> tuple[bytes, str] | None:
+        """A small square picture for the plugin's buttons, as (bytes, media type), or None. Served to the app by
+        GET /api/plugins/{id}/icon, so it can come from a server only Magpie can reach (or one on plain http)."""
+        return None
+
     def describe(self, settings) -> dict:
         return {"id": self.id, "label": self.label, "action_label": self.action_label,
-                "categories": list(self.categories), "configured": self.configured(settings), "source": self.source}
+                "categories": list(self.categories), "configured": self.configured(settings), "source": self.source,
+                "icon": f"/api/plugins/{self.id}/icon" if self.has_icon and self.configured(settings) else None}
 
 
 _REGISTRY: dict[str, Plugin] = {}

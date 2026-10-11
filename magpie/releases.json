@@ -1,5 +1,14 @@
 [
   {
+    "version": "next",
+    "features": [
+      {
+        "title": "Card actions as icons",
+        "text": "A card's actions sit on one row: the site's icon to open it, ✎ to fix, ⟳ to refresh, ⋯ for the rest. Radarr and Sonarr buttons get their own row and show the icon of your own server."
+      }
+    ]
+  },
+  {
     "version": "0.26.0",
     "features": [
       {
