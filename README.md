@@ -236,6 +236,27 @@ The same list is logged at startup and served by `GET /api/status`. Items that w
 
 **Reaching the server from your phone.** Use the server's LAN IP (`http://192.168.1.20:8000`), a [Tailscale](https://tailscale.com) address, or a reverse proxy with HTTPS (Caddy, Traefik, nginx) in front of port 8000. With `MAGPIE_API_TOKEN` set, the web UI asks for the token once and keeps it in a cookie.
 
+### HTTPS at home (no internet, no account)
+
+The iPhone app only works offline over `https://`. If you'd rather not use Tailscale or a domain, the compose file includes [Caddy](https://caddyserver.com) set up for your home network only. It makes its own private certificate authority, so nothing is requested from or opened to the internet. You trust that authority on your phone once. Syncing then works whenever the phone is on your home Wi-Fi, and the app works offline everywhere else.
+
+1. **Give the server a fixed LAN address.** In your router, reserve its current IP (DHCP reservation), e.g. `192.168.1.20`. Phones trust the certificate for that address only.
+2. **Turn it on.** Add these lines to `.env` next to `docker-compose.yml`, then run `./deploy.sh` (or `docker compose up -d`):
+   ```
+   COMPOSE_PROFILES=https
+   MAGPIE_LAN_HOST=192.168.1.20
+   ```
+   If ports 80/443 are already taken on the server, add `MAGPIE_HTTP_PORT=8080` / `MAGPIE_HTTPS_PORT=8443` and use those ports in the addresses below. If the server has a firewall, open the ports (e.g. `sudo ufw allow 80,443/tcp`).
+3. **Trust the certificate on the iPhone** (once per phone):
+   1. In **Safari**, open `http://192.168.1.20/magpie-ca.crt` → **Allow**. iOS says *Profile Downloaded*.
+   2. **Settings → Profile Downloaded → Install** (enter your passcode, then **Install** again).
+   3. **Settings → General → About → Certificate Trust Settings** → switch on **Caddy Local Authority** → **Continue**.
+4. **Install the app.** Open `https://192.168.1.20` in Safari. It should load with no warning. Then **Share → Add to Home Screen**. Open the new icon once while on home Wi-Fi, enter your access token, and scroll your library so pictures are cached. To test, turn on Airplane Mode and reopen the app.
+
+Moving from an `http://` home-screen icon: open the old one on home Wi-Fi first so it syncs anything still waiting, then delete it. Each address keeps its own offline copy.
+
+The authority lives in `data/caddy/`. Back it up with the rest of `data/`: if it's lost, Caddy makes a new one and every phone has to trust it again (step 3). Plain `http://192.168.1.20:8000` keeps working for the native iOS app and other clients. A Mac or PC can trust the same certificate: download it and add it to Keychain Access / Windows' "Trusted Root Certification Authorities".
+
 ## Plugins (Radarr, Sonarr)
 
 Plugins add actions to a saved item. Two ship with Magpie:
@@ -266,7 +287,7 @@ The web UI is a Progressive Web App. On iPhone, open your server's address in **
 
 - **Works offline.** The app itself is cached by a service worker, and your library, queued screenshots and edits are stored in the browser (IndexedDB). You can browse, search, add screenshots (📷 → photo library), edit tags and notes, and correct identifications with no connection.
 - **Syncs when the server is back.** Queued changes are replayed in order, then changes made on other devices are pulled down. The status pill in the header shows *Synced*, *Offline · N waiting*, or *Syncing*. iOS doesn't let web apps sync in the background, so syncing happens whenever the app is open.
-- **Needs HTTPS.** Service workers (and therefore offline mode) only run on `https://` or `localhost`. Over plain `http://` on your LAN the app still works but needs the server. Easy ways to get HTTPS for a home server: `tailscale serve --bg 8000` (gives a `https://<machine>.<tailnet>.ts.net` address), or Caddy/Traefik with a domain.
+- **Needs HTTPS.** Service workers (and therefore offline mode) only run on `https://` or `localhost`. Over plain `http://` on your LAN the app still works but needs the server. Easy ways to get HTTPS for a home server: the built-in [HTTPS at home](#https-at-home-no-internet-no-account) setup (LAN only, no account), `tailscale serve --bg 8000` (gives a `https://<machine>.<tailnet>.ts.net` address), or Caddy/Traefik with a domain. If Safari says it *can't open the page because your iPhone is not connected to the internet* while offline, the app was installed from an `http://` address.
 - **Limitations vs. the native app:** iOS doesn't support the Web Share Target API, so the PWA can't appear in the share sheet. Pick screenshots with the ➕ button, or build a **Save to Magpie** shortcut: it appears in the share sheet and uploads the picture straight to your server (setup steps in Settings → Library on your iPhone; it needs the server to be reachable). The native app below has a Share Extension. On Android and desktop Chrome, the installed PWA *does* appear in the share sheet.
 
 ## Native iOS app

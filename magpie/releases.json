@@ -1,5 +1,14 @@
 [
   {
+    "version": "next",
+    "features": [
+      {
+        "title": "HTTPS at home",
+        "text": "An optional Caddy service gives your server an https:// address on your home network, with its own certificate and nothing opened to the internet. Trust it on your iPhone once and the installed app works offline. See README → HTTPS at home."
+      }
+    ]
+  },
+  {
     "version": "0.27.0",
     "features": [
       {

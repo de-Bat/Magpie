@@ -1,0 +1,27 @@
+# HTTPS for Magpie on your home network only (docker compose profile "https", see README).
+# Certificates come from Caddy's own private certificate authority: nothing is requested from
+# or exposed to the internet. Trust that authority on your phone once, via /magpie-ca.crt.
+{
+	local_certs
+	# Caddy runs in a container; there's no system trust store worth installing into.
+	skip_install_trust
+	# Browsers don't send a server name when connecting to an IP address; answer with this one.
+	default_sni {$MAGPIE_LAN_HOST}
+}
+
+https://{$MAGPIE_LAN_HOST} {
+	reverse_proxy magpie:8000
+}
+
+http://{$MAGPIE_LAN_HOST} {
+	# The authority's root certificate, served over plain HTTP so a phone can fetch it before trusting it.
+	handle /magpie-ca.crt {
+		root * /data/caddy/pki/authorities/local
+		rewrite * /root.crt
+		header Content-Type application/x-x509-ca-cert
+		file_server
+	}
+	handle {
+		redir https://{$MAGPIE_LAN_HOST}:{$MAGPIE_HTTPS_PORT}{uri}
+	}
+}
