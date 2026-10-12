@@ -231,13 +231,16 @@ async function removeItem(id, { keepDeleteOp = false } = {}) {
 }
 
 async function enqueue(op) {
+  op.at = Date.now();
   op.seq = await db.add("ops", op);
   state.ops.push(op);
+  renderSyncStatus();
 }
 
 async function dropOp(op) {
   state.ops = state.ops.filter((o) => o.seq !== op.seq);
   await db.del("ops", op.seq);
+  renderSyncStatus();
 }
 
 function hasPendingOps(id) { return state.ops.some((o) => o.id === id); }
@@ -626,7 +629,7 @@ async function deleteItem(id) {
   if (!item) return;
   const neverUploaded = item.pending_upload;
   await removeItem(id);
-  if (!neverUploaded) await enqueue({ type: "delete", id });  // the server never saw the others
+  if (!neverUploaded) await enqueue({ type: "delete", id, title: cardTitle(item) });  // the server never saw the others
   render();
   requestSync();
 }
@@ -2606,8 +2609,11 @@ function renderSyncStatus() {
     idle: pending ? ["⟳", `${pending} waiting`] : ["✓", "Synced"],
   };
   const [icon, text] = labels[state.sync] || labels.idle;
-  el.className = `sync-status ${state.sync}`;
-  el.innerHTML = `<span aria-hidden="true">${icon}</span><span class="sync-text">${esc(text)}</span>`;
+  el.className = `sync-status ${state.sync}${pending ? " has-pending" : ""}${pendingOpen && pending ? " open" : ""}`;
+  el.title = pending ? "" : "Sync status";   // the list below replaces the tooltip
+  el.setAttribute("aria-label", pending ? `${text}: ${state.ops.map(opLabel).join("; ")}` : text);
+  el.innerHTML = `<span aria-hidden="true">${icon}</span><span class="sync-text">${esc(text)}</span>${
+    pending ? `<span class="sync-badge" aria-hidden="true">${pending > 99 ? "99+" : pending}</span>${pendingList()}` : ""}`;
 
   const banner = $("#banner");
   const serverErrors = state.sync !== "offline" && state.server ? state.server.problems.filter((p) => p.level === "error") : [];
@@ -2629,6 +2635,32 @@ function renderSyncStatus() {
   banner.innerHTML = html;
   banner.hidden = !html;
 }
+
+// What a queued change will do on the server, for the list under the sync pill.
+const OP_VERB = { upload: "Upload", patch: "Save edits to", correct: "Send correction for", reanalyze: "Re-analyze", refresh: "Refresh metadata for", delete: "Delete" };
+const PATCH_FIELD = { tags: "tags", note: "note", title: "title", category: "type", verified: "verification", favorite: "favorite" };
+function opLabel(op) {
+  const item = state.items.get(op.id);
+  const name = item ? cardTitle(item) : op.title || "an item";
+  if (op.type === "upload") return item?.kind === "url" ? `Save link ${item.source_url}` : `Upload screenshot${item?.note ? ` “${item.note}”` : ""}`;
+  if (op.type === "patch") {
+    const fields = Object.keys(op.patch || {}).map((k) => PATCH_FIELD[k] || k.replace(/_/g, " "));
+    return `Save ${fields.length ? fields.join(", ") : "edits"} for “${name}”`;
+  }
+  return `${OP_VERB[op.type] || op.type} “${name}”`;
+}
+const OP_ICON = { upload: "⇧", patch: "✎", correct: "✎", reanalyze: "↻", refresh: "⟳", delete: "🗑" };
+function pendingList() {
+  const shown = state.ops.slice(0, 50);
+  const more = state.ops.length - shown.length;
+  const when = (t) => (t ? new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "");
+  return `<span class="sync-pending" role="tooltip">
+    <span class="sync-pending-head">${state.ops.length} change${state.ops.length > 1 ? "s" : ""} waiting for the server</span>
+    ${shown.map((op) => `<span class="sync-pending-row"><span aria-hidden="true">${OP_ICON[op.type] || "•"}</span><span class="sp-text">${esc(opLabel(op))}</span><span class="sp-time">${esc(when(op.at))}</span></span>`).join("")}
+    ${more > 0 ? `<span class="sync-pending-row meta-line">+${more} more</span>` : ""}
+  </span>`;
+}
+let pendingOpen = false;   // touch screens can't hover: a tap on the pill toggles the list
 
 function isStandalone() {
   return window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
@@ -3265,7 +3297,10 @@ document.addEventListener("keydown", (e) => {
   if (next) { e.preventDefault(); next.focus(); }
 });
 
-$("#sync-status").addEventListener("click", () => (state.sync === "auth" ? askToken() : requestSync()));
+$("#sync-status").addEventListener("click", () => {
+  if (state.ops.length && matchMedia("(hover: none)").matches) { pendingOpen = !pendingOpen; renderSyncStatus(); }
+  return state.sync === "auth" ? askToken() : requestSync();
+});
 
 async function askToken() {
   const token = prompt("Access token for this Magpie server (MAGPIE_API_TOKEN):");
@@ -3277,6 +3312,7 @@ async function askToken() {
 document.addEventListener("click", async (e) => {
   if (!e.target.closest("#add-menu, #fab-more")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
+  if (pendingOpen && !e.target.closest("#sync-status")) { pendingOpen = false; renderSyncStatus(); }   // and the pending-changes list
   const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed],[data-clean],.hero-cover .cover");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
