@@ -56,7 +56,7 @@ def validate(raw: bytes) -> dict:
 def _read_folder(folder: Path, builtin: bool) -> list[dict]:
     """The valid themes in a folder (a file that fails validation, or isn't named <id>.json, is skipped)."""
     out = []
-    for path in sorted(folder.glob("*.json")):
+    for path in sorted(folder.glob("*.json"), key=lambda p: p.stem):   # by id: "a-b" before "a-b-c" ("." sorts after "-")
         try:
             theme = validate(path.read_bytes())
         except (OSError, ThemeError):

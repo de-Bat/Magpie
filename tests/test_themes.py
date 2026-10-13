@@ -103,6 +103,12 @@ def test_builtin_themes_are_complete_valid_and_unique():
         assert all(c.startswith("#") and len(c) == 7 for c in t["colors"].values()), t["id"]
 
 
+def test_builtins_are_ordered_by_id_so_a_variation_follows_its_original():
+    ids = [t["id"] for t in themes.builtin_themes()]
+    assert ids == sorted(ids)
+    assert ids.index("atom-one-dark-vivid") == ids.index("atom-one-dark") + 1
+
+
 def test_builtin_backgrounds_match_their_base():
     for t in themes.builtin_themes():
         lum = _luminance(t["colors"]["bg"])
