@@ -1477,10 +1477,12 @@ function setSize(size) {
 function appearanceHtml() {
   const current = getTheme();
   const size = getSize();
-  const themeRows = customThemes.map((t) => `<div class="theme-row">
+  const themeRow = (t) => `<div class="theme-row">
       <button type="button" class="theme-pick" data-theme-choice="custom:${esc(t.id)}" aria-pressed="${current === `custom:${t.id}`}">
-        <span class="theme-swatch">${["bg", "surface", "text", "accent"].map((k) => `<i style="background:${esc(t.colors[k] || "transparent")}"></i>`).join("")}</span>${esc(t.name)}</button>
-      <button type="button" class="btn" data-theme-remove="${esc(t.id)}">${esc(tr("Remove"))}</button></div>`).join("");
+        <span class="theme-swatch">${["bg", "surface", "text", "accent"].map((k) => `<i style="background:${esc(t.colors[k] || "transparent")}"></i>`).join("")}</span>${esc(t.name)}</button>${
+      t.builtin ? "" : `<button type="button" class="btn" data-theme-remove="${esc(t.id)}">${esc(tr("Remove"))}</button>`}</div>`;
+  const themeGroup = (label, list) => list.length ? `<div class="theme-group">${esc(tr(label))}</div>${list.map(themeRow).join("")}` : "";
+  const themeRows = themeGroup("Built in", customThemes.filter((t) => t.builtin)) + themeGroup("Uploaded", customThemes.filter((t) => !t.builtin));
   const saved = (() => { try { return localStorage.getItem("magpie.lang") || ""; } catch { return ""; } })();
   return `<div class="setting"><div class="setting-text"><label>${esc(tr("Theme"))}</label><p class="setting-help">${esc(tr("This device only."))}</p></div>
     <div class="setting-control"><div class="segmented" role="group" aria-label="${esc(tr("Theme"))}">${

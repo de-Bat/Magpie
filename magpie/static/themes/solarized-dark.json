@@ -1,0 +1,4 @@
+{ "id": "solarized-dark", "name": "Solarized Dark", "base": "dark",
+  "colors": { "bg": "#002b36", "surface": "#073642", "surface-2": "#0d4351", "text": "#a8b5b5",
+              "muted": "#839496", "border": "#1d4b57", "accent": "#2aa198", "accent-soft": "#0a4a4f",
+              "on-accent": "#002b36", "ok": "#859900", "err": "#dc322f", "warn": "#b58900", "warn-soft": "#3b3300" } }

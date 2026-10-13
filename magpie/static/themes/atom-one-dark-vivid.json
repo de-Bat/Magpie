@@ -1,0 +1,4 @@
+{ "id": "atom-one-dark-vivid", "name": "Atom One Dark Vivid", "base": "dark",
+  "colors": { "bg": "#1e222a", "surface": "#252a33", "surface-2": "#2f3540", "text": "#d7dce5",
+              "muted": "#8f98a8", "border": "#3a4150", "accent": "#4db5ff", "accent-soft": "#16344d",
+              "on-accent": "#08121c", "ok": "#8ee05a", "err": "#ff6b7a", "warn": "#ffd36b", "warn-soft": "#40361a" } }

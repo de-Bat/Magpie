@@ -1,0 +1,4 @@
+{ "id": "gruvbox-dark", "name": "Gruvbox Dark", "base": "dark",
+  "colors": { "bg": "#282828", "surface": "#1d2021", "surface-2": "#3c3836", "text": "#ebdbb2",
+              "muted": "#a89984", "border": "#504945", "accent": "#fabd2f", "accent-soft": "#4a3f1c",
+              "on-accent": "#282828", "ok": "#b8bb26", "err": "#fb4934", "warn": "#fe8019", "warn-soft": "#4a2e14" } }
