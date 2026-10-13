@@ -2572,6 +2572,8 @@ function cardMeta(item) {
 const maxColumns = () => (window.innerWidth < 760 ? 4 : 8);
 window.addEventListener("resize", () => { if (state.cols) renderGrid(); });
 
+const cardMarkup = new WeakMap();   // card element -> the markup it was built from
+
 function renderGrid() {
   const items = filteredItems();
   $("#empty").hidden = items.length > 0;
@@ -2586,12 +2588,27 @@ function renderGrid() {
   const wanted = ["0", ...Array.from({ length: max }, (_, i) => String(i + 1))];
   if (pick.options.length !== wanted.length) pick.innerHTML = wanted.map((v) => `<option value="${v}">${v === "0" ? "Auto" : v}</option>`).join("");
   pick.value = String(cols);
-  $("#grid").innerHTML = items.map((item) => `
+  // Cards whose markup is unchanged keep their element: rebuilding the whole grid on every sync made every picture
+  // vanish and reload (a flash on the phone each time settings were opened or a connection was tested).
+  const grid = $("#grid");
+  const kept = new Map([...grid.children].map((el) => [el.dataset.id, el]));
+  const nodes = items.map((item) => {
+    const html = `
     <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
       <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div>${item.status === "ready" && item.usage?.model ? `<div class="by-model" title="Resolved by ${esc(item.usage.model)}">${esc(item.usage.model)}</div>` : ""}</div>
       ${isUnverified(item) ? `<button class="verify-btn" type="button" data-verify="${esc(item.id)}" title="Mark this identification as correct">✓ Verify</button>` : ""}
-    </article>`).join("");
+    </article>`;
+    const old = kept.get(item.id);
+    if (old && cardMarkup.get(old) === html) return old;
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html.trim();
+    const el = tpl.content.firstElementChild;
+    cardMarkup.set(el, html);
+    return el;
+  });
+  const same = nodes.length === grid.children.length && nodes.every((el, i) => grid.children[i] === el);
+  if (!same) grid.replaceChildren(...nodes);
 
   const active = [];
   state.tags.forEach((t) => active.push(`<span class="chip active">#${esc(t)}<button data-clear-tag="${esc(t)}" aria-label="Remove ${esc(t)}">×</button></span>`));
