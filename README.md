@@ -272,6 +272,10 @@ Magpie finds the title in Radarr/Sonarr by IMDb or TMDB id when it has one, othe
 
 **Settings → Plugins** installs more plugins from a public git repository (one repository can hold many) or from a single `.py` file (a link or an upload), and updates or removes them. Because a plugin runs code on the server, this is **off** until you set `MAGPIE_ALLOW_PLUGIN_INSTALL=true` in the server's environment (`.env`) and restart; it can't be switched on from the app. Only install plugins you trust. How to write one, with a full example: [docs/PLUGINS.md](docs/PLUGINS.md).
 
+## Themes
+
+Besides Light and Dark, **Settings → Appearance** can use colour themes you upload as a small JSON file. They are stored on the server and shared by all devices; each device picks its own. Format and examples: [docs/THEMES.md](docs/THEMES.md).
+
 ## Languages
 
 - **App language** (per device): Settings → Appearance → Language. English, Hebrew (right-to-left), Spanish, German and French; "Automatic" follows the browser. Text is looked up by its English wording in `magpie/static/i18n.js`: to add a language or a string, add a column or a row there. Anything without a translation shows in English. Settings screens, logs and error messages are English only for now.
