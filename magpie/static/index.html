@@ -22,7 +22,21 @@
     // Apply this device's theme choice before the first paint (Settings → Appearance). No choice = follow the device.
     try {
       const t = localStorage.getItem("magpie.theme");
-      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+      const root = document.documentElement;
+      if (t === "light" || t === "dark") root.dataset.theme = t;
+      else if (t && t.startsWith("custom:")) {
+        const d = JSON.parse(localStorage.getItem("magpie.theme.data") || "null");
+        if (d && "custom:" + d.id === t && (d.base === "light" || d.base === "dark")) {
+          const ok = /^(#[0-9a-f]{3}|#[0-9a-f]{6}|#[0-9a-f]{8}|(rgb|rgba|hsl|hsla|oklch)\([0-9a-z.%,\/ -]*\))$/i;
+          const css = Object.entries(d.colors || {})
+            .filter(([k, v]) => /^[a-z0-9-]+$/.test(k) && typeof v === "string" && ok.test(v))
+            .map(([k, v]) => "--" + k + ":" + v).join(";");
+          root.dataset.theme = "custom"; root.dataset.base = d.base;
+          const s = document.createElement("style"); s.id = "magpie-theme";
+          s.textContent = ':root[data-theme="custom"][data-base]{' + css + "}";
+          document.head.append(s);
+        }
+      }
     } catch {}
   </script>
 </head>
