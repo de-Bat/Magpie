@@ -697,7 +697,7 @@ async function pollChanges() {
 async function sync() {
   if (syncing) { rerun = true; return; }
   syncing = true;
-  setSyncState("syncing");
+  if (state.sync !== "offline") setSyncState("syncing");   // offline retries stay quiet: flipping to "Syncing…" and back blinked the pill and banner
   try {
     do {
       rerun = false;
@@ -2629,8 +2629,9 @@ function renderSyncStatus() {
   el.className = `sync-status ${state.sync}${pending ? " has-pending" : ""}${pendingOpen && pending ? " open" : ""}`;
   el.title = pending ? "" : "Sync status";   // the list below replaces the tooltip
   el.setAttribute("aria-label", pending ? `${text}: ${state.ops.map(opLabel).join("; ")}` : text);
-  el.innerHTML = `<span aria-hidden="true">${icon}</span><span class="sync-text">${esc(text)}</span>${
+  const pillHtml = `<span aria-hidden="true">${icon}</span><span class="sync-text">${esc(text)}</span>${
     pending ? `<span class="sync-badge" aria-hidden="true">${pending > 99 ? "99+" : pending}</span>${pendingList()}` : ""}`;
+  if (el.dataset.html !== pillHtml) { el.dataset.html = pillHtml; el.innerHTML = pillHtml; }   // same content: leave the DOM alone
 
   const banner = $("#banner");
   const serverErrors = state.sync !== "offline" && state.server ? state.server.problems.filter((p) => p.level === "error") : [];
@@ -2649,7 +2650,7 @@ function renderSyncStatus() {
   } else if (showInstallHint()) {
     html = `Install Magpie: tap <b>Share</b> <span aria-hidden="true">⎋</span> then <b>Add to Home Screen</b>. <button class="btn" data-action="dismiss-install">Dismiss</button>`;
   }
-  banner.innerHTML = html;
+  if (banner.dataset.html !== html) { banner.dataset.html = html; banner.innerHTML = html; }
   banner.hidden = !html;
 }
 
