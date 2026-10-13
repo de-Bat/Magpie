@@ -1,0 +1,4 @@
+{ "id": "atom-one-light", "name": "Atom One Light", "base": "light",
+  "colors": { "bg": "#fafafa", "surface": "#ffffff", "surface-2": "#f0f0f1", "text": "#383a42",
+              "muted": "#696c77", "border": "#dbdbdc", "accent": "#4078f2", "accent-soft": "#dde7fd",
+              "on-accent": "#ffffff", "ok": "#50a14f", "err": "#e45649", "warn": "#986801", "warn-soft": "#f7ecd2" } }
