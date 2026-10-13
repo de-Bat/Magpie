@@ -19,6 +19,13 @@
   <meta name="theme-color" content="#151412" media="(prefers-color-scheme: dark)">
   <link rel="stylesheet" href="/static/style.css">
   <script>
+    // This device's text and icon size (Settings → Appearance → Size). Standard = no attribute.
+    try {
+      const z = localStorage.getItem("magpie.size");
+      if (z === "small" || z === "large" || z === "xlarge") document.documentElement.dataset.size = z;
+    } catch {}
+  </script>
+  <script>
     // Apply this device's theme choice before the first paint (Settings → Appearance). No choice = follow the device.
     try {
       const t = localStorage.getItem("magpie.theme");

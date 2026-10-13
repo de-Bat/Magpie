@@ -1453,8 +1453,30 @@ async function removeTheme(id) {
   await loadThemes();
 }
 
+// Text and icon size, one choice for both (this device only): the CSS reads it as --ui-scale.
+const UI_SIZES = [["small", "Small"], ["standard", "Standard"], ["large", "Large"], ["xlarge", "Extra large"]];
+
+function getSize() {
+  try {
+    const s = localStorage.getItem("magpie.size");
+    return UI_SIZES.some(([v]) => v === s) ? s : "standard";
+  } catch { return "standard"; }
+}
+
+function setSize(size) {
+  try {
+    if (size === "standard") localStorage.removeItem("magpie.size");
+    else localStorage.setItem("magpie.size", size);
+  } catch {}
+  if (size === "standard") delete document.documentElement.dataset.size;
+  else document.documentElement.dataset.size = size;
+  document.querySelectorAll("[data-size-choice]").forEach((b) =>
+    b.setAttribute("aria-pressed", String(b.dataset.sizeChoice === size)));
+}
+
 function appearanceHtml() {
   const current = getTheme();
+  const size = getSize();
   const themeRow = (t) => `<div class="theme-row">
       <button type="button" class="theme-pick" data-theme-choice="custom:${esc(t.id)}" aria-pressed="${current === `custom:${t.id}`}">
         <span class="theme-swatch">${["bg", "surface", "text", "accent"].map((k) => `<i style="background:${esc(t.colors[k] || "transparent")}"></i>`).join("")}</span>${esc(t.name)}</button>${
@@ -1466,6 +1488,11 @@ function appearanceHtml() {
     <div class="setting-control"><div class="segmented" role="group" aria-label="${esc(tr("Theme"))}">${
     [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
       `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${esc(tr(label))}</button>`).join("")
+  }</div></div></div>
+  <div class="setting"><div class="setting-text"><label>${esc(tr("Size"))}</label><p class="setting-help">${esc(tr("Text and icons. This device only."))}</p></div>
+    <div class="setting-control"><div class="segmented" role="group" aria-label="${esc(tr("Size"))}">${
+    UI_SIZES.map(([value, label]) =>
+      `<button type="button" data-size-choice="${value}" aria-pressed="${value === size}">${esc(tr(label))}</button>`).join("")
   }</div></div></div>
   <div class="setting"><div class="setting-text"><label>${esc(tr("Themes"))}</label><p class="setting-help">${esc(tr("Uploaded themes are shared by all devices; the choice is for this device only."))}</p></div>
     <div class="setting-control"><div class="theme-list" data-theme-list>${themeRows}</div>
@@ -3417,9 +3444,10 @@ document.addEventListener("click", async (e) => {
   if (!e.target.closest("#add-menu, #fab-more")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
   if (pendingOpen && !e.target.closest("#sync-status")) { pendingOpen = false; renderSyncStatus(); }   // and the pending-changes list
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-theme-remove],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed],[data-clean],.hero-cover .cover");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-size-choice],[data-theme-remove],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed],[data-clean],.hero-cover .cover");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
+  if (t.dataset.sizeChoice !== undefined) return setSize(t.dataset.sizeChoice);
   if (t.dataset.themeRemove !== undefined) return confirm(tr("Remove this theme?")) && removeTheme(t.dataset.themeRemove);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
   if (t.dataset.testKey !== undefined) return testKey(t.dataset.testKey);
