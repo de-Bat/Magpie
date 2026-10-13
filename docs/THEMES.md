@@ -1,7 +1,26 @@
 # Themes
 
-Besides Light and Dark, Magpie can use colour themes you upload. A theme is a small JSON file; it is stored on
-the server (`<data dir>/themes/`) and shows up on every device. Which theme a device uses is chosen per device.
+Besides Light and Dark, Magpie has built-in colour themes and can use ones you upload. A theme is a small JSON
+file. Uploaded themes are stored on the server (`<data dir>/themes/`) and show up on every device. Which theme a
+device uses is chosen per device, in **Settings → Appearance**.
+
+## Built-in themes
+
+| Theme | Base |
+| --- | --- |
+| Atom One Dark | dark |
+| Atom One Dark Vivid (a more saturated variation) | dark |
+| Atom One Light | light |
+| Dracula | dark |
+| Nord | dark |
+| Solarized Dark | dark |
+| Solarized Light | light |
+| Gruvbox Dark | dark |
+
+Built-in themes can't be removed, and an upload can't use their ids (`atom-one-dark`, `atom-one-dark-vivid`,
+`atom-one-light`, `dracula`, `nord`, `solarized-dark`, `solarized-light`, `gruvbox-dark`). To change one, upload
+your own file with a different `id`. A built-in theme is the same JSON format as below, in
+`magpie/static/themes/`; sending a pull request with another one is just adding a file there.
 
 ## Add a theme
 
@@ -13,11 +32,11 @@ Uploading a file with the same `id` replaces that theme.
 
 ```json
 {
-  "id": "nord",
-  "name": "Nord",
+  "id": "midnight",
+  "name": "Midnight",
   "base": "dark",
   "colors": {
-    "bg": "#2e3440", "surface": "#3b4252", "text": "#eceff4", "accent": "#88c0d0"
+    "bg": "#0b1020", "surface": "#141a2e", "text": "#e6e9f2", "accent": "#7aa2ff"
   }
 }
 ```
@@ -39,9 +58,10 @@ The file can be at most 8 KB.
 
 ## Examples
 
-[`docs/themes/nord.json`](themes/nord.json) (dark) and [`docs/themes/paper.json`](themes/paper.json) (light).
+[`docs/themes/paper.json`](themes/paper.json) (light). The built-in themes in
+[`magpie/static/themes/`](../magpie/static/themes/) are complete examples that set every colour.
 
 ## Remove
 
-Use **Remove** next to the theme, or delete its file from `<data dir>/themes/`. A device that was using a
+Use **Remove** next to an uploaded theme, or delete its file from `<data dir>/themes/`. A device that was using a
 removed theme goes back to System the next time it loads.

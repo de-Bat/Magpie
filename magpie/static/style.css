@@ -47,6 +47,8 @@
 /* uploaded themes (Settings → Appearance) */
 .theme-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .theme-row { display: flex; gap: 8px; align-items: center; }
+.theme-group { margin-top: 6px; font-size: .78rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.theme-group:first-child { margin-top: 0; }
 .theme-pick { flex: 1; display: flex; gap: 10px; align-items: center; text-align: left; padding: 8px 10px;
   border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); }
 .theme-pick[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
