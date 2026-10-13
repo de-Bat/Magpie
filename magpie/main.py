@@ -33,7 +33,7 @@ from .links import URL_TOO_LONG, normalize_url
 from . import __version__, config, releases
 from .config import HOSTED_LLMS, SPEC_BY_ATTR, Settings, mask
 from .models import check_key
-from . import convlog, images, limits, plugins, websearch
+from . import convlog, images, limits, plugins, themes, websearch
 from .plugins import loader as plugin_loader
 from .db import Database
 from .pipeline import Pipeline
@@ -670,6 +670,35 @@ def create_app(
         except plugin_loader.LoaderError as e:
             raise HTTPException(e.status, str(e))
         return settings_payload()
+
+    @app.get("/api/themes")
+    def list_themes():
+        return themes.list_themes(settings.data_dir)
+
+    @app.post("/api/themes")
+    async def upload_theme(request: Request, file: UploadFile = File(...)):
+        """Add or replace a colour theme. A validated JSON file is data, not code, so this needs only the same
+        access as changing settings, not the plugin-install switch."""
+        require_settings_access(request)
+        raw = await file.read(themes.MAX_BYTES + 1)
+        try:
+            theme = themes.validate(raw)
+            await asyncio.to_thread(themes.save, settings.data_dir, theme)
+        except themes.ThemeError as e:
+            raise HTTPException(e.status, str(e))
+        except OSError as e:
+            raise HTTPException(500, f"Couldn't save the theme: {e}")
+        return theme
+
+    @app.delete("/api/themes/{theme_id}", status_code=204)
+    def delete_theme(theme_id: str, request: Request):
+        require_settings_access(request)
+        try:
+            themes.remove(settings.data_dir, theme_id)
+        except themes.ThemeError as e:
+            raise HTTPException(e.status, str(e))
+        except OSError as e:
+            raise HTTPException(500, f"Couldn't remove the theme: {e}")
 
     @app.get("/api/bulk")
     def bulk_status():
