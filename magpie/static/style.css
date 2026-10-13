@@ -23,7 +23,7 @@
 }
 /* Dark theme: follows the device unless this device chose Light (Settings → Appearance), or forced with Dark. */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root:not([data-theme="light"]):not([data-theme="custom"]) {
     --bg: #0f1216; --surface: #171b21; --surface-2: #222830; --text: #eceff4; --muted: #9aa4b2; --border: #2b323c;
     --accent: #5cc8d0; --accent-soft: #123a3e; --ok: #4ade80; --err: #f87171; --warn: #f5b25a; --warn-soft: #3a2a12;
     --shadow: 0 1px 2px rgb(0 0 0 / .5);
@@ -32,7 +32,8 @@
     color-scheme: dark; --on-accent: #06272a; --logo-light-display: none; --logo-dark-display: block;
   }
 }
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+:root[data-theme="custom"][data-base="dark"] {
   --bg: #0f1216; --surface: #171b21; --surface-2: #222830; --text: #eceff4; --muted: #9aa4b2; --border: #2b323c;
   --accent: #5cc8d0; --accent-soft: #123a3e; --ok: #4ade80; --err: #f87171; --warn: #f5b25a; --warn-soft: #3a2a12;
   --shadow: 0 1px 2px rgb(0 0 0 / .5);
@@ -40,7 +41,17 @@
   --k-local: #cfd6e2; --k-batch: #5cc8d0; --k-realtime: #f0a35e; --k-hosted: #b79cff;
   color-scheme: dark; --on-accent: #06272a; --logo-light-display: none; --logo-dark-display: block;
 }
-:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="light"],
+:root[data-theme="custom"][data-base="light"] { color-scheme: light; }
+
+/* uploaded themes (Settings → Appearance) */
+.theme-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.theme-row { display: flex; gap: 8px; align-items: center; }
+.theme-pick { flex: 1; display: flex; gap: 10px; align-items: center; text-align: left; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); }
+.theme-pick[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.theme-swatch { display: inline-flex; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.theme-swatch i { width: 14px; height: 18px; display: block; }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }  /* never let a component's display rule override the hidden attribute */

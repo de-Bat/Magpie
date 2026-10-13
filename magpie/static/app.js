@@ -1349,14 +1349,44 @@ function getTheme() {
   try { return localStorage.getItem("magpie.theme") || "system"; } catch { return "system"; }
 }
 
+const THEME_COLOR_RE = /^(#[0-9a-f]{3}|#[0-9a-f]{6}|#[0-9a-f]{8}|(rgb|rgba|hsl|hsla|oklch)\([0-9a-z.%,\/ -]*\))$/i;
+let customThemes = [];   // uploaded themes, from the server
+
+// The cached data of the chosen "custom:<id>" theme, else null (also when the cache belongs to another theme).
+function customThemeData(theme = getTheme()) {
+  if (!theme.startsWith("custom:")) return null;
+  let d = null;
+  try { d = JSON.parse(localStorage.getItem("magpie.theme.data") || "null"); } catch {}
+  return d && `custom:${d.id}` === theme && (d.base === "light" || d.base === "dark") ? d : null;
+}
+
+// "light" or "dark" when the theme forces one, null when it follows the device.
+function themeBase(theme) {
+  return theme === "light" || theme === "dark" ? theme : customThemeData(theme)?.base || null;
+}
+
 function applyTheme(theme) {
   const root = document.documentElement;
-  if (theme === "light" || theme === "dark") root.dataset.theme = theme;
-  else delete root.dataset.theme;
+  const custom = customThemeData(theme);
+  const base = themeBase(theme);
+  if (custom) { root.dataset.theme = "custom"; root.dataset.base = custom.base; }
+  else {
+    delete root.dataset.base;
+    if (base) root.dataset.theme = base; else delete root.dataset.theme;
+  }
+  let style = document.getElementById("magpie-theme");
+  if (custom) {
+    if (!style) { style = document.createElement("style"); style.id = "magpie-theme"; document.head.append(style); }
+    const vars = Object.entries(custom.colors || {})
+      .filter(([k, v]) => /^[a-z0-9-]+$/.test(k) && typeof v === "string" && THEME_COLOR_RE.test(v))
+      .map(([k, v]) => `--${k}:${v}`).join(";");
+    style.textContent = `:root[data-theme="custom"][data-base]{${vars}}`;
+  } else style?.remove();
   // Browser/PWA chrome colour: forced themes override both media-specific values.
   document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
     const scheme = (m.media.match(/(light|dark)/) || [])[1] || "light";
-    m.content = THEME_COLORS[theme === "light" || theme === "dark" ? theme : scheme];
+    const own = custom?.colors?.bg;
+    m.content = own && THEME_COLOR_RE.test(own) ? own : THEME_COLORS[base || scheme];
   });
   installIcons(theme);
 }
@@ -1365,7 +1395,8 @@ function applyTheme(theme) {
 // icon, which can't adapt to the colour scheme by themselves: point them at the dark set when the app is dark.
 const prefersDark = window.matchMedia?.("(prefers-color-scheme: dark)");
 function installIcons(theme = getTheme()) {
-  const dark = theme === "dark" || (theme !== "light" && !!prefersDark?.matches);
+  const base = themeBase(theme);
+  const dark = base === "dark" || (base === null && !!prefersDark?.matches);
   const set = (selector, href) => { const el = document.querySelector(selector); if (el && el.getAttribute("href") !== href) el.setAttribute("href", href); };
   set('link[rel="manifest"]', dark ? "/static/manifest-dark.webmanifest" : "/static/manifest.webmanifest");
   set('link[rel="apple-touch-icon"]', dark ? "/static/icons/apple-touch-icon-dark.png" : "/static/icons/apple-touch-icon.png");
@@ -1374,22 +1405,69 @@ prefersDark?.addEventListener?.("change", () => installIcons());
 
 function setTheme(theme) {
   try {
-    if (theme === "system") localStorage.removeItem("magpie.theme");
-    else localStorage.setItem("magpie.theme", theme);
+    if (theme.startsWith("custom:")) {
+      const t = customThemes.find((c) => `custom:${c.id}` === theme);
+      if (!t) return;
+      localStorage.setItem("magpie.theme", theme);
+      localStorage.setItem("magpie.theme.data", JSON.stringify({ id: t.id, base: t.base, colors: t.colors }));
+    } else {
+      localStorage.removeItem("magpie.theme.data");
+      if (theme === "system") localStorage.removeItem("magpie.theme");
+      else localStorage.setItem("magpie.theme", theme);
+    }
   } catch {}
   applyTheme(theme);
-  document.querySelectorAll(".segmented [data-theme-choice]").forEach((b) =>
+  document.querySelectorAll("[data-theme-choice]").forEach((b) =>
     b.setAttribute("aria-pressed", String(b.dataset.themeChoice === theme)));
+}
+
+// Uploaded themes are kept on the server and shared by every device; which one is used is chosen per device.
+async function loadThemes() {
+  try { customThemes = await api("/api/themes"); } catch { return; }   // offline: keep the cached theme
+  const current = getTheme();
+  if (current.startsWith("custom:")) {
+    if (customThemes.some((t) => `custom:${t.id}` === current)) setTheme(current);   // refresh the cached colours
+    else setTheme("system");                                                          // deleted elsewhere
+  }
+  refreshAppearance();
+}
+
+function refreshAppearance() {
+  const section = document.querySelector("[data-theme-list]")?.closest(".settings-section");
+  if (section) section.innerHTML = `<h3>Appearance</h3>${appearanceHtml()}`;
+}
+
+async function uploadTheme(file) {
+  const body = new FormData();
+  body.append("file", file);
+  try {
+    const t = await apiWithSetup("/api/themes", { method: "POST", body });
+    toast(`Added the theme “${t.name}”.`);
+  } catch (e) { return toast(`Couldn't add the theme: ${e.message}`); }
+  await loadThemes();
+}
+
+async function removeTheme(id) {
+  try { await apiWithSetup(`/api/themes/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+  catch (e) { return toast(`Couldn't remove the theme: ${e.message}`); }
+  await loadThemes();
 }
 
 function appearanceHtml() {
   const current = getTheme();
+  const themeRows = customThemes.map((t) => `<div class="theme-row">
+      <button type="button" class="theme-pick" data-theme-choice="custom:${esc(t.id)}" aria-pressed="${current === `custom:${t.id}`}">
+        <span class="theme-swatch">${["bg", "surface", "text", "accent"].map((k) => `<i style="background:${esc(t.colors[k] || "transparent")}"></i>`).join("")}</span>${esc(t.name)}</button>
+      <button type="button" class="btn" data-theme-remove="${esc(t.id)}">${esc(tr("Remove"))}</button></div>`).join("");
   const saved = (() => { try { return localStorage.getItem("magpie.lang") || ""; } catch { return ""; } })();
   return `<div class="setting"><div class="setting-text"><label>${esc(tr("Theme"))}</label><p class="setting-help">${esc(tr("This device only."))}</p></div>
     <div class="setting-control"><div class="segmented" role="group" aria-label="${esc(tr("Theme"))}">${
     [["system", "System"], ["light", "Light"], ["dark", "Dark"]].map(([value, label]) =>
       `<button type="button" data-theme-choice="${value}" aria-pressed="${value === current}">${esc(tr(label))}</button>`).join("")
   }</div></div></div>
+  <div class="setting"><div class="setting-text"><label>${esc(tr("Themes"))}</label><p class="setting-help">${esc(tr("Uploaded themes are shared by all devices; the choice is for this device only."))}</p></div>
+    <div class="setting-control"><div class="theme-list" data-theme-list>${themeRows}</div>
+    <label class="btn">${esc(tr("Upload theme"))}<input id="theme-upload" type="file" accept=".json,application/json" hidden></label></div></div>
   <div class="setting"><div class="setting-text"><label for="ui-language">${esc(tr("Language"))}</label><p class="setting-help">${esc(tr("This device only."))}</p></div>
     <div class="setting-control"><select id="ui-language"><option value="">${esc(tr("Automatic"))}</option>${
     Object.entries(LANGUAGES).map(([code, name]) => `<option value="${code}"${saved === code ? " selected" : ""}>${esc(name)}</option>`).join("")}</select></div></div>`;
@@ -3143,6 +3221,12 @@ document.addEventListener("change", (e) => {
     render();
     return;
   }
+  if (e.target.id === "theme-upload") {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) uploadTheme(file);
+    return;
+  }
   if (e.target.id !== "plugin-upload" || !e.target.files[0]) return;
   const file = e.target.files[0];
   e.target.value = "";
@@ -3331,9 +3415,10 @@ document.addEventListener("click", async (e) => {
   if (!e.target.closest("#add-menu, #fab-more")) setAddMenu(false);   // click elsewhere closes the add menu
   if (!e.target.closest("#tag-pop, #tag-btn")) $("#tag-pop").hidden = true;   // click elsewhere closes the tags popover
   if (pendingOpen && !e.target.closest("#sync-status")) { pendingOpen = false; renderSyncStatus(); }   // and the pending-changes list
-  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed],[data-clean],.hero-cover .cover");
+  const t = e.target.closest("[data-debug-open],[data-debug-back],[data-debug-refresh],[data-debug-clear-item],[data-debug-item],[data-bulk],[data-bulk-cancel],[data-log-open],[data-log-save],[data-log-delete],[data-log-image],[data-logs-reload],[data-logs-clear],[data-verify],[data-tab],[data-show],[data-layout],#tag-btn,[data-usage-days],[data-usage-csv],[data-open-item],[data-tag],[data-clear-tag],.card,[data-action],[data-remove-tag],[data-alt],[data-reset],[data-focus],[data-theme-choice],[data-theme-remove],[data-settings-tab],[data-test-key],[data-load-models],[data-plugin],[data-test-plugin],[data-plugin-install],[data-plugin-update],[data-plugin-remove],[data-activity-dismiss],[data-activity-retry],[data-jump-section],[data-find],[data-find-pick],[data-find-typed],[data-clean],.hero-cover .cover");
   if (!t) return;
   if (t.dataset.themeChoice !== undefined) return setTheme(t.dataset.themeChoice);
+  if (t.dataset.themeRemove !== undefined) return confirm(tr("Remove this theme?")) && removeTheme(t.dataset.themeRemove);
   if (t.dataset.loadModels !== undefined) return loadModels(t.dataset.loadModels);
   if (t.dataset.testKey !== undefined) return testKey(t.dataset.testKey);
   if (t.dataset.activityDismiss !== undefined) return activityDismiss(t.dataset.activityDismiss);
@@ -3525,6 +3610,7 @@ setInterval(pollChanges, 8000);  // captures added on other devices show up, wit
 
 async function boot() {
   applyTheme(getTheme());
+loadThemes();
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/sw.js").catch((e) => console.warn("Service worker not registered:", e));
   }

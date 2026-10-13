@@ -1,0 +1,3 @@
+{ "id": "paper", "name": "Paper", "base": "light",
+  "colors": { "bg": "#f7f3ea", "surface": "#fffdf7", "text": "#2b2620", "muted": "#7a7064",
+              "border": "#ded6c4", "accent": "#a4472b", "accent-soft": "#f3dcd2", "on-accent": "#ffffff" } }
