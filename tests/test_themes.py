@@ -103,6 +103,13 @@ def test_builtin_themes_are_complete_valid_and_unique():
         assert all(c.startswith("#") and len(c) == 7 for c in t["colors"].values()), t["id"]
 
 
+def test_atom_one_dark_uses_the_one_dark_pro_palette():
+    # VS Code One Dark Pro: purple keywords as the accent, red errors, green ok, orange warnings
+    colors = {t["id"]: t["colors"] for t in themes.builtin_themes()}["atom-one-dark"]
+    assert (colors["bg"], colors["text"]) == ("#282c34", "#abb2bf")
+    assert (colors["accent"], colors["err"], colors["ok"], colors["warn"]) == ("#c678dd", "#e06c75", "#98c379", "#d19a66")
+
+
 def test_builtins_are_ordered_by_id_so_a_variation_follows_its_original():
     ids = [t["id"] for t in themes.builtin_themes()]
     assert ids == sorted(ids)

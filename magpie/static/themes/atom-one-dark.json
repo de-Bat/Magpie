@@ -1,4 +1,4 @@
 { "id": "atom-one-dark", "name": "Atom One Dark", "base": "dark",
   "colors": { "bg": "#282c34", "surface": "#21252b", "surface-2": "#2c313a", "text": "#abb2bf",
-              "muted": "#8b93a1", "border": "#3e4451", "accent": "#61afef", "accent-soft": "#2a3a52",
-              "on-accent": "#1b1f27", "ok": "#98c379", "err": "#e06c75", "warn": "#e5c07b", "warn-soft": "#3b3526" } }
+              "muted": "#8b93a1", "border": "#3e4451", "accent": "#c678dd", "accent-soft": "#3a2d49",
+              "on-accent": "#1b1f27", "ok": "#98c379", "err": "#e06c75", "warn": "#d19a66", "warn-soft": "#3d3225" } }
