@@ -35,3 +35,10 @@ def test_upload_and_remove_use_setup_code_aware_calls_and_report_errors():
     assert 'apiWithSetup("/api/themes"' in JS and "apiWithSetup(`/api/themes/${encodeURIComponent(id)}`" in JS
     assert "Couldn't add the theme" in JS and 'id="theme-upload"' in JS and 'accept=".json,application/json"' in JS
     assert "[data-theme-remove]" in JS
+
+
+def test_built_in_themes_are_grouped_and_have_no_remove_button():
+    body = JS.split("function appearanceHtml()")[1].split("const saved")[0]
+    assert 't.builtin ? "" : `<button type="button" class="btn" data-theme-remove=' in body
+    assert 'themeGroup("Built in"' in body and 'themeGroup("Uploaded"' in body
+    assert ".theme-group" in CSS
