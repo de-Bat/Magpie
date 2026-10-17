@@ -1736,3 +1736,23 @@ def test_items_can_be_flagged_and_unflagged_as_reviewed_and_filtered_by_it(setti
         assert client.get(f"/api/items/{first}").json()["reviewed"] is True
         assert client.patch(f"/api/items/{first}", json={"reviewed": False}).json()["reviewed"] is False
         assert client.get("/api/items", params={"reviewed": True}).json() == []
+
+
+def test_listed_shows_given_by_name_only_get_their_imdb_page(settings):
+    named = [{"title": "Slow Horses", "category": "tv_show", "year": 2022, "url": None},
+             {"title": "Paradise", "category": "tv_show", "year": 2025, "url": None},
+             {"title": "Nowhere Show", "category": "tv_show", "year": None, "url": None}]
+    suggestions = {
+        "Slow%20Horses": [{"id": "nm1", "l": "Slow Horses"}, {"id": "tt5875444", "l": "Slow Horses", "y": 2022, "qid": "tvSeries"}],
+        "Paradise": [{"id": "tt0001", "l": "Paradise", "y": 1991, "qid": "movie"}, {"id": "tt27444205", "l": "Paradise", "y": 2025, "qid": "tvSeries"}],
+    }
+    routes = {f"https://v3.sg.media-imdb.com/suggestion/x/{q}.json": httpx.Response(200, json={"d": d}) for q, d in suggestions.items()}
+    listicle = analysis(category="article", title="10 Best Mystery TV Shows", canonical_url="https://blog.example/mystery",
+                        details=blank_details(), mentions=named)
+    client, _ = make_client(settings, listicle, {**routes, "https://blog.example/mystery": httpx.Response(200, text="<title>x</title>")})
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["category"] == "tv_show" and len(item["metadata"]["mentions"]) == 3
+        assert [l["url"] for l in item["links"][:3]] == ["https://www.imdb.com/title/tt5875444/", "https://www.imdb.com/title/tt27444205/",
+                                                         "https://www.imdb.com/find/?q=Nowhere%20Show&s=tt&ttype=tv"]

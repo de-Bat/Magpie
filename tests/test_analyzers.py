@@ -407,6 +407,29 @@ def test_gemini_searches_the_web_with_google_search_grounding(tmp_path):
     assert run["cost_usd"] >= 2 * 0.014   # the searches are billed
 
 
+def test_a_gemini_answer_written_as_prose_is_asked_for_again_as_json(tmp_path):
+    seen = []
+    shows = [{"title": "Furious", "category": "tv_show", "year": 2026, "url": "https://www.imdb.com/title/tt1/"},
+             {"title": "Slow Horses", "category": "tv_show", "year": 2022, "url": "https://www.imdb.com/title/tt2/"}]
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body)
+        text = ("Here's a detailed analysis:" + chr(10) + "* **Category**: TV shows" + chr(10) + "* **Mentions**: Furious, Slow Horses" if "tools" in body
+                else json.dumps({**GOOD, "category": "tv_show", "title": "10 Best Mystery TV Shows", "mentions": shows}))
+        return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": text}]}}],
+                                         "usageMetadata": {"promptTokenCount": 1000 if "tools" in body else 300, "candidatesTokenCount": 100}})
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="g-key", analyzer="local", local_llm_url=None)
+    result = asyncio.run(LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler))).analyze(png(), "image/png"))
+    assert [("tools" in b, b["generationConfig"].get("responseMimeType")) for b in seen] == [(True, None), (False, "application/json")]
+    assert "Slow Horses" in seen[1]["contents"][0]["parts"][0]["text"]   # the prose it found, to be rewritten
+    assert [b["generationConfig"]["thinkingConfig"]["thinkingBudget"] for b in seen] == [16384, 512]   # room left for the answer
+    assert result["category"] == "tv_show" and [m["title"] for m in result["mentions"]] == ["Furious", "Slow Horses"]
+    run = result["_runs"][0]
+    assert run["requests"] == 2 and run["input_tokens"] == 1300 and run["output_tokens"] == 200
+
+
 def test_gemini_without_search_support_falls_back_to_the_screenshot_alone(tmp_path):
     seen = []
 

@@ -1,5 +1,6 @@
 """Screenshot -> analysis -> enrichment -> stored item."""
 
+import asyncio
 import json
 import logging
 import mimetypes
@@ -8,7 +9,7 @@ from datetime import timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import anthropic
 import httpx
@@ -100,6 +101,36 @@ def mentions_of(analysis: dict) -> list[dict]:
              and not any(same_app(h, links.github_repo_of(r["url"])) for h in homes)]
     return clean_mentions([{"title": r.get("label"), "category": "app", "url": r["url"]} for r in homes]
                           + [{"title": r.get("label"), "category": "github_repo", "url": r["url"]} for r in repos])
+
+
+IMDB_TYPES = {"movie": {"movie", "tvMovie"}, "tv_show": {"tvSeries", "tvMiniSeries"}}
+
+
+async def imdb_page(title: str, category: str, year: int | None, http: httpx.AsyncClient) -> str | None:
+    """The IMDb page of a film or show known only by name: IMDb's own title suggestions, the same name and type
+    (and year, when known, give or take one) taken."""
+    try:
+        r = await http.get(f"https://v3.sg.media-imdb.com/suggestion/x/{quote(title.strip())}.json", timeout=8)
+        found = r.json().get("d") or [] if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    for f in found:
+        if (isinstance(f, dict) and str(f.get("id", "")).startswith("tt") and f.get("qid") in IMDB_TYPES[category]
+                and titles_match(f.get("l"), title) and (not year or not f.get("y") or abs(f["y"] - year) <= 1)):
+            return f"https://www.imdb.com/title/{f['id']}/"
+    return None
+
+
+async def find_mention_pages(mentions: list[dict], http: httpx.AsyncClient) -> list[dict]:
+    """Films and shows a list names without their page (models often give the names only): their IMDb page,
+    else an IMDb search for the name, so every one of them can be opened from the card."""
+    async def page(m: dict) -> dict:
+        if m["url"] or m["category"] not in IMDB_TYPES:
+            return m
+        url = await imdb_page(m["title"], m["category"], m["year"], http)
+        kind = "tv" if m["category"] == "tv_show" else "ft"
+        return {**m, "url": url or f"https://www.imdb.com/find/?q={quote(m['title'])}&s=tt&ttype={kind}"}
+    return list(await asyncio.gather(*(page(m) for m in mentions)))
 
 
 def as_list(analysis: dict, keep_category: bool = False) -> dict:
@@ -596,6 +627,8 @@ class Pipeline:
         return run.to_dict()
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
+        if self.settings.enrich and sum(m["category"] in SCREEN for m in clean_mentions(analysis.get("mentions"))) >= 2:
+            analysis = {**analysis, "mentions": await find_mention_pages(clean_mentions(analysis["mentions"]), self.http)}
         analysis = as_list(analysis, keep_category=corrected)
         if not corrected and not is_multi(analysis):   # what you set yourself is never second-guessed
             analysis = reclassify(await resolve_app(analysis, self.settings, self.http))

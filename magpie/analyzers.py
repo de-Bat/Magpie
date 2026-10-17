@@ -152,6 +152,7 @@ GEMINI_SYSTEM_PROMPT = SYSTEM_PROMPT.replace(
     "Reply with a single JSON object matching the requested schema. Do not ask the user questions.",
 )
 GEMINI_NATIVE_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_THINKING_BUDGET = 16384   # tokens of thinking for an answer with search; the reply needs room after it
 GEMINI_SEARCH_USD = 0.014   # per search query (Gemini 3 list price)
 FULL_SCHEMA = SAVE_TOOL["input_schema"]
 
@@ -254,7 +255,9 @@ class LocalLLMAnalyzer:
         for c in content[1:]:
             mt, _, data = c["image_url"]["url"][5:].partition(";base64,")
             parts.append({"inlineData": {"mimeType": mt, "data": data}})
-        gen: dict = {"temperature": 0.1}
+        # Thinking is capped: left alone, Gemini can think through its whole output allowance on a long list
+        # ("10 best shows") and get cut off before it writes the answer.
+        gen: dict = {"temperature": 0.1, "thinkingConfig": {"thinkingBudget": GEMINI_THINKING_BUDGET}}
         if self.max_output_tokens:
             gen["maxOutputTokens"] = self.max_output_tokens
         req = {"systemInstruction": {"parts": [{"text": GEMINI_SYSTEM_PROMPT}]}, "contents": [{"role": "user", "parts": parts}],
@@ -277,17 +280,27 @@ class LocalLLMAnalyzer:
                 text = "".join(p.get("text", "") for p in cand["content"]["parts"] if not p.get("thought"))
             except (KeyError, IndexError, ValueError, TypeError) as e:
                 raise AnalysisError(f"Unexpected reply from Gemini: {r.text[:300]}") from e
+            extra: dict = {}
             grounding = cand.get("groundingMetadata") or {}
             queries = grounding.get("webSearchQueries") or []
             sources, titles = await self._grounding_sources(grounding)
             convlog.event("web_search", queries=queries, sources=sources)
-            result = normalize(parse_json(text))
+            try:
+                result = normalize(parse_json(text))
+            except AnalysisError:
+                # With the search tool on, Gemini can't be held to a schema and now and then writes its findings as
+                # prose: a second request, without search and with the schema, turns them into the JSON answer.
+                text, extra = await self._as_json(text)
+                result = normalize(parse_json(text))
             for k in ("canonical_url", "image_url"):
                 val = result.get(k)
                 if val and "vertexaisearch.cloud.google.com" in val:
                     target = await self._resolve_vertex_redirect(val)
                     if target:
                         result[k] = target
+            for m in result.get("mentions") or []:   # a listed show's page, given as Google's redirect link
+                if m.get("url") and "vertexaisearch.cloud.google.com" in m["url"]:
+                    m["url"] = await self._resolve_vertex_redirect(m["url"])
             collect_sources(result.get("links"), sources, titles)
             collect_sources(result.get("related"), sources, titles)
             if result.get("canonical_url"):
@@ -301,10 +314,33 @@ class LocalLLMAnalyzer:
             e.runs = [] if getattr(e, "unsent", False) else [self._finish_run(run, started, {})]
             raise
         u = data.get("usageMetadata") or {}
+        tokens = lambda m, k: m.get(k) or 0   # noqa: E731
         run.web_searches = len(queries)
-        result["_runs"] = [self._finish_run(run, started, {"prompt_tokens": u.get("promptTokenCount"),
-                                                           "completion_tokens": (u.get("candidatesTokenCount") or 0) + (u.get("thoughtsTokenCount") or 0)})]
+        result["_runs"] = [self._finish_run(run, started, {
+            "prompt_tokens": tokens(u, "promptTokenCount") + tokens(extra, "promptTokenCount"),
+            "completion_tokens": sum(tokens(m, k) for m in (u, extra) for k in ("candidatesTokenCount", "thoughtsTokenCount"))})]
+        result["_runs"][0]["requests"] += bool(extra)   # the second request that rewrote prose as JSON
         return result
+
+    async def _as_json(self, prose: str) -> tuple[str, dict]:
+        """Gemini's prose answer, rewritten as the JSON object the schema asks for (no search: nothing new is looked up)."""
+        gen: dict = {"temperature": 0, "responseMimeType": "application/json", "thinkingConfig": {"thinkingBudget": 512}}   # reformatting only
+        if self.max_output_tokens:
+            gen["maxOutputTokens"] = self.max_output_tokens
+        prompt = ("Rewrite this answer as a single JSON object matching the JSON schema below. Keep every fact, URL and "
+                  "listed item it gives; use null or [] for anything it doesn't.\n\n<answer>\n" + prose[:30000] +
+                  "\n</answer>\n\n<schema>\n" + json.dumps(FULL_SCHEMA) + "\n</schema>")
+        req = {"systemInstruction": {"parts": [{"text": GEMINI_SYSTEM_PROMPT}]}, "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+               "generationConfig": gen}
+        convlog.event("decision", what="reply_was_prose", note="asked Gemini again for the same answer as JSON")
+        r = await self._post(req, url=GEMINI_NATIVE_URL.format(model=self.model.removeprefix("models/")),
+                             headers={"x-goog-api-key": self.headers.get("Authorization", "").removeprefix("Bearer ")})
+        try:
+            data = r.json()
+            return ("".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"] if not p.get("thought")),
+                    data.get("usageMetadata") or {})
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            raise AnalysisError(f"Unexpected reply from Gemini: {r.text[:300]}") from e
 
     async def _resolve_vertex_redirect(self, uri: str | None) -> str | None:
         return await resolve_vertex_redirect(self.http, uri)
