@@ -116,6 +116,7 @@ MIGRATIONS = {
     "image_hash": "TEXT",                        # SHA256 hash for duplicate screenshot detection
     "captures": "TEXT NOT NULL DEFAULT '[]'",    # further screenshots of the same thing: [{image_file, image_hash, original_hash?, created_at}]
     "original_hash": "TEXT",                     # SHA256 of the photo as it was on the device, when the client converted it before upload
+    "reviewed": "INTEGER NOT NULL DEFAULT 0",    # the user has gone over this item (a flag of their own, whatever Magpie found)
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -126,7 +127,7 @@ VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "sche
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "related", "retry_at", "captures",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "reviewed", "related", "retry_at", "captures",
 }
 
 
@@ -253,6 +254,7 @@ class Database:
         needs_review: bool = False,
         unverified: bool = False,
         to_check: bool = False,
+        reviewed: bool | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -268,6 +270,9 @@ class Database:
         if category:
             where.append("i.category = ?")
             params.append(category)
+        if reviewed is not None:
+            where.append("i.reviewed = ?")
+            params.append(int(reviewed))
         if needs_review:
             where.append(f"i.status = 'ready' AND i.corrected = 0 AND i.confidence < {REVIEW_THRESHOLD}")
         for tag in tags or []:
@@ -506,6 +511,7 @@ class Database:
         )
         sources = (item.get("metadata") or {}).get("sources") or []
         item["confirmed"] = bool(item.get("confirmed"))
+        item["reviewed"] = bool(item.get("reviewed"))
         item["verified"] = (item["corrected"] or item["confirmed"] or bool(VERIFYING_SOURCES.intersection(sources))
                             or (item.get("confidence") or 0) >= self.verified_confidence())
         item["to_check"] = (item.get("status") == "error" or item["needs_review"]

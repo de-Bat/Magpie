@@ -1719,3 +1719,20 @@ def test_an_article_whose_related_links_name_several_tools_is_a_list_of_them():
     out = as_list(article_about(UV_HOME, UV_REPO, pip))   # uv's homepage and its repository are one tool
     assert out["category"] == "app" and [m["title"] for m in out["mentions"]] == ["uv", "pypa/pip"]
     assert as_list(article_about(UV_HOME, UV_REPO))["category"] == "article"   # one tool: resolve_app's case
+
+
+def test_items_can_be_flagged_and_unflagged_as_reviewed_and_filtered_by_it(settings):
+    client, analyzer = make_client(settings, analysis())
+    with client:
+        first = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        analyzer.result = analysis(title="pypa/pip", canonical_url="https://github.com/pypa/pip", details=blank_details())
+        second = client.post("/api/items", files={"file": ("b.png", png_bytes((50, 70)), "image/png")}).json()["id"]
+        assert client.get(f"/api/items/{first}").json()["reviewed"] is False
+        assert client.patch(f"/api/items/{first}", json={"reviewed": True}).json()["reviewed"] is True
+        assert [i["id"] for i in client.get("/api/items", params={"reviewed": True}).json()] == [first]
+        assert [i["id"] for i in client.get("/api/items", params={"reviewed": False}).json()] == [second]
+        assert len(client.get("/api/items").json()) == 2
+        client.post(f"/api/items/{first}/reanalyze")   # your flag outlives a new identification
+        assert client.get(f"/api/items/{first}").json()["reviewed"] is True
+        assert client.patch(f"/api/items/{first}", json={"reviewed": False}).json()["reviewed"] is False
+        assert client.get("/api/items", params={"reviewed": True}).json() == []

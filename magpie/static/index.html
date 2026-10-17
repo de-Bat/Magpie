@@ -64,6 +64,8 @@
     <div class="seg" role="group" aria-label="Show">
       <button type="button" data-show="all" aria-pressed="true" data-i18n="All">All</button>
       <button type="button" data-show="check" aria-pressed="false" title="Items Magpie isn't sure about, that no source confirmed, or that failed"><span class="lbl-full" data-i18n="To check">To check</span><span class="lbl-short" data-i18n="Check">Check</span> <span id="check-count" class="count"></span></button>
+      <button type="button" data-show="unreviewed" aria-pressed="false" title="Items you haven't marked as reviewed"><span class="lbl-full" data-i18n="Not reviewed">Not reviewed</span><span class="lbl-short" data-i18n="New">New</span> <span id="unreviewed-count" class="count"></span></button>
+      <button type="button" data-show="reviewed" aria-pressed="false" title="Items you marked as reviewed"><span class="lbl-full" data-i18n="Reviewed">Reviewed</span><span class="lbl-short" aria-hidden="true">✓</span> <span id="reviewed-count" class="count"></span></button>
     </div>
     <button id="tag-btn" class="pill-btn" type="button" aria-expanded="false" aria-controls="tag-pop" aria-label="Tags" title="Tags">#<span class="lbl" data-i18n="Tags"> Tags</span></button>
     <div id="active-filters" class="active-filters"></div>

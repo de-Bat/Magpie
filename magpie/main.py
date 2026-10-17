@@ -83,6 +83,7 @@ class ItemPatch(BaseModel):
     canonical_url: str | None = None
     tags: list[str] | None = None
     confirmed: bool | None = None   # the user says this identification is right
+    reviewed: bool | None = None    # the user has gone over this item
 
 
 class BulkRequest(BaseModel):
@@ -474,11 +475,12 @@ def create_app(
         needs_review: bool = False,
         unverified: bool = Query(False, description="Only items no metadata source (TMDB, GitHub, ...) confirmed and you haven't corrected"),
         to_check: bool = Query(False, description="Only items that failed, are unsure, or that nothing confirmed"),
+        reviewed: bool | None = Query(None, description="Only items you marked as reviewed (true) or haven't (false)"),
         limit: int = Query(200, le=500),
         offset: int = 0,
     ):
         return db.list_items(q=q, category=category, tags=tag, needs_review=needs_review, unverified=unverified, to_check=to_check,
-                             limit=limit, offset=offset)
+                             reviewed=reviewed, limit=limit, offset=offset)
 
     @app.get("/api/items/{item_id}")
     def get_item(item_id: str):
@@ -493,10 +495,11 @@ def create_app(
         tags = fields.pop("tags", None)
         if tags is not None:
             db.set_tags(item_id, tags)
-        if fields.get("confirmed") is not None:
-            fields["confirmed"] = int(bool(fields["confirmed"]))
-        else:
-            fields.pop("confirmed", None)
+        for flag in ("confirmed", "reviewed"):
+            if fields.get(flag) is not None:
+                fields[flag] = int(bool(fields[flag]))
+            else:
+                fields.pop(flag, None)
         return db.update_item(item_id, **fields)
 
     @app.post("/api/items/{item_id}/reanalyze", status_code=202)

@@ -579,6 +579,13 @@ function looksLikeUrl(text) {
 }
 
 // The user confirms an identification Magpie couldn't check itself.
+async function toggleReviewed(id) {
+  const item = state.items.get(id);
+  if (!item) return;
+  await editItem(id, { reviewed: !item.reviewed });
+  toast(tr(item.reviewed ? "Marked as not reviewed." : "Marked as reviewed."));
+}
+
 async function verifyItem(id) {
   await editItem(id, { confirmed: true });
   toast("Marked as correct.");
@@ -2356,6 +2363,8 @@ function filteredItems() {
     .filter((item) => {
       if (state.tab !== "all" && tabOf(item) !== state.tab) return false;
       if (state.show === "check" && !needsCheck(item)) return false;
+      if (state.show === "reviewed" && !item.reviewed) return false;
+      if (state.show === "unreviewed" && item.reviewed) return false;
       if (tags.some((t) => !(item.tags || []).some((x) => x === t || x.startsWith(t)))) return false;
       if (!words.length) return true;
       const tokens = searchBlob(item).split(/[^\p{L}\p{N}]+/u);
@@ -2611,6 +2620,9 @@ function renderFilters() {
     <button role="tab" data-tab="${t.id}" aria-selected="${state.tab === t.id}">${t.cats ? `<span class="tabicon t-${themeOf(t.cats[0])}">${typeIcon(themeOf(t.cats[0]))}</span>` : ""}${esc(tr(t.label))}<span class="count">${counts[t.id] || 0}</span></button>`).join("");
   const check = items.filter(needsCheck).length;
   $("#check-count").textContent = check || "";
+  const reviewed = items.filter((i) => i.reviewed).length;
+  $("#reviewed-count").textContent = reviewed || "";
+  $("#unreviewed-count").textContent = items.length - reviewed || "";
   document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
   document.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === state.layout)));
 
@@ -2665,6 +2677,7 @@ function coverHtml(item, { chip = true } = {}) {
     : item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
+  const reviewed = item.reviewed ? `<span class="rev-mark" title="${esc(tr("Reviewed"))}" aria-label="${esc(tr("Reviewed"))}">✓</span>` : "";
   const label = item.status === "error" ? (item.retry_at ? "Waiting" : "Failed") : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
   return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? `wide-img${backdrop ? " bd" : ""}` : "has-img") : ""} ${busy ? "busy" : ""}">${
     // the themed cover sits underneath, so it shows if the picture never loads
@@ -2673,7 +2686,7 @@ function coverHtml(item, { chip = true } = {}) {
     // wide pictures are shown whole, over a blurred, enlarged copy of themselves (the same URL, so no extra download)
     backdrop ? `<img class="cover-bd" src="${esc(pic)}" alt="" aria-hidden="true" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
-    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${multiBadge(item)}</span>` : ""}${flag}</div>`;
+    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${multiBadge(item)}</span>` : ""}${flag}${reviewed}</div>`;
 }
 
 function cardMeta(item) {
@@ -2708,7 +2721,7 @@ function renderGrid() {
   const kept = new Map([...grid.children].map((el) => [el.dataset.id, el]));
   const nodes = items.map((item) => {
     const html = `
-    <article class="card ${esc(item.status)}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
+    <article class="card ${esc(item.status)}${item.reviewed ? " reviewed" : ""}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
       <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div>${item.status === "ready" && item.usage?.model ? `<div class="by-model" title="Resolved by ${esc(item.usage.model)}">${esc(item.usage.model)}</div>` : ""}</div>
       ${isUnverified(item) ? `<button class="verify-btn" type="button" data-verify="${esc(item.id)}" title="Mark this identification as correct">✓ Verify</button>` : ""}
@@ -2990,6 +3003,7 @@ function renderDetail(source) {
       ${statusHtml(item)}${notice}
       <div class="actions primary-actions">
         ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}" title="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span> ↗</a>` : ""}
+        ${item.pending_upload ? "" : `<button class="btn icon-btn review-btn" type="button" data-action="review" aria-pressed="${!!item.reviewed}" title="${esc(tr(item.reviewed ? "Reviewed: mark as not reviewed" : "Mark as reviewed"))}" aria-label="${esc(tr(item.reviewed ? "Reviewed: mark as not reviewed" : "Mark as reviewed"))}"><span aria-hidden="true">${item.reviewed ? "✓" : "○"}</span></button>`}
         ${item.status === "ready" && fixing !== item.id ? iconButton("fix", "✎", item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it") : ""}
         ${item.pending_upload ? "" : iconButton("refresh", "⟳", "Refresh metadata")}
         <details class="menu"><summary class="btn icon-btn" title="${esc(tr("More"))}" aria-label="${esc(tr("More"))}">⋯</summary><div class="menu-list">
@@ -3560,6 +3574,7 @@ document.addEventListener("click", async (e) => {
       case "close": return $("#detail").close();
       case "toggle-cover-size": return toggleDetailCoverSize();
       case "verify": return verifyItem(id);
+      case "review": return toggleReviewed(id);
       case "fix": fixing = id; renderDetail(item); return $("#correct-form input[name=title]")?.focus();
       case "cancel-fix": fixing = null; return renderDetail(item);
       case "refresh": return refreshItemMetadata(id);
