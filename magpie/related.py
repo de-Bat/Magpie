@@ -124,6 +124,27 @@ def clean_related(items, exclude: list[str | None] = (), limit: int = MAX_RELATE
     return out[:limit]
 
 
+MENTION_KINDS = ("movie", "tv_show", "app", "github_repo")
+
+
+def clean_mentions(items) -> list[dict]:
+    """The films, shows, apps or repositories a capture lists ({title, category, year, url}): malformed ones and
+    repeats dropped, an address only when it is one."""
+    out, seen = [], set()
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict) or it.get("category") not in MENTION_KINDS:
+            continue
+        title = re.sub(r"\s+", " ", str(it.get("title") or "")).strip()[:120]
+        url = it.get("url") if isinstance(it.get("url"), str) and it["url"].startswith(("http://", "https://")) else None
+        key = norm_url(url) if url else title.lower()
+        if not title or key in seen:
+            continue
+        seen.add(key)
+        year = it.get("year") if isinstance(it.get("year"), int) and not isinstance(it.get("year"), bool) else None
+        out.append({"title": title, "category": it["category"], "year": year, "url": url.strip() if url else None})
+    return out
+
+
 async def drop_dead(items: list[dict], http, fetch_page, link_is_gone) -> list[dict]:
     """Keep the links that open (or that we simply can't check: blocked, slow); drop the ones that are gone, which is what
     a link a model made up looks like."""

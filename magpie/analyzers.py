@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 from .analyzer import CATEGORIES, PLATFORMS, SAVE_TOOL, SYSTEM_PROMPT, AnalysisError, RateLimited, ScreenshotAnalyzer, correction_prompt, prepare_image
 from .findlink import collect_sources, resolve_vertex_redirect
 from .config import HOSTED_LLMS, Settings
-from .related import clean_related
+from .related import clean_mentions, clean_related
 from .ocr import Ocr, OcrResult, Signals, extract_signals
 from . import convlog, limits
 from .usage import Run, local_cost, record_limits, token_cost
@@ -55,15 +55,15 @@ LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^2\. Use web search.*$", lambda _: NO_WEB_STE
     "Only report URLs, ratings and facts you actually saw in search results or the screenshot.",
     "Only report URLs, ratings and facts you saw in the screenshot or are certain of; ratings are looked up later.",
 )
-LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^6\. Also note what is connected.*\n", "", LOCAL_SYSTEM_PROMPT)   # no `related` field for them
-LOCAL_SYSTEM_PROMPT = LOCAL_SYSTEM_PROMPT.replace("7. If the user", "6. If the user").replace("8. Reply", "7. Reply")
+LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^7\. Also note what is connected.*\n", "", LOCAL_SYSTEM_PROMPT)   # no `related` field for them
+LOCAL_SYSTEM_PROMPT = LOCAL_SYSTEM_PROMPT.replace("8. If the user", "7. If the user").replace("9. Reply", "8. Reply")
 
 
 
 def blank_analysis() -> dict:
     return {
         "category": "other", "source_platform": "other", "title": "", "subtitle": None, "year": None,
-        "summary": "", "canonical_url": None, "image_url": None, "links": [], "related": [], "tags": [],
+        "summary": "", "canonical_url": None, "image_url": None, "links": [], "related": [], "mentions": [], "tags": [],
         "screenshot_text": "", "confidence": 0, "confidence_reason": "", "alternatives": [],
         "details": {k: ([] if k in ARRAY_DETAILS else None) for k in DETAIL_KEYS},
     }
@@ -105,6 +105,7 @@ def normalize(raw: dict) -> dict:
     out["tags"] = [str(t) for t in out["tags"]] if isinstance(out["tags"], list) else []
     out["links"] = [l for l in out["links"] if isinstance(l, dict) and l.get("url")] if isinstance(out["links"], list) else []
     out["related"] = clean_related(out["related"] if isinstance(out["related"], list) else [])
+    out["mentions"] = clean_mentions(out["mentions"])
     out["alternatives"] = [
         {"title": str(a.get("title")), "category": a.get("category") if a.get("category") in CATEGORIES else "other",
          "year": a.get("year") if isinstance(a.get("year"), int) else None,

@@ -24,13 +24,13 @@ const typeName = (c) => (CATEGORY_LABELS[c] || c || "Other").replace(/^\S+ /, ""
 const TABS = [
   { id: "all", label: "All" },
   { id: "screen", label: "Movies & TV", cats: ["movie", "tv_show"] },
-  { id: "repo", label: "Repos", cats: ["github_repo"] },
+  { id: "repo", label: "Apps & repos", cats: ["github_repo", "app"] },
   { id: "recipe", label: "Recipes", cats: ["recipe"] },
   { id: "book", label: "Books", cats: ["book"] },
   { id: "music", label: "Music & podcasts", cats: ["music", "podcast"] },
   { id: "read", label: "Articles & videos", cats: ["article", "video"] },
   { id: "place", label: "Places & events", cats: ["place", "event"] },
-  { id: "other", label: "Other", cats: ["other", "product", "app", "course"] },
+  { id: "other", label: "Other", cats: ["other", "product", "course"] },
 ];
 // One icon per type, drawn with the same stroke so they read as a set. Shown on every card, whether or not it has a picture.
 const TYPE_ICON_PATHS = {
@@ -72,8 +72,15 @@ const HIDDEN_META = new Set([
   "article_text", "excerpt", "word_count", "page_description",
   "screenshot_text", "sources", "confidence", "ingredients", "instructions", "imdb_rating", "rotten_tomatoes",
   "metacritic", "tmdb_rating", "stars", "rating", "rating_count", "description", "post_url", "imdb_votes", "tmdb_id",
-  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "image_opaque", "found_by",
+  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "image_opaque", "found_by", "mentions",
 ]);
+// A list of several films, shows, apps or repositories (a "10 shows to watch" article): how many it holds, else 0.
+const multiCount = (item) => ((item.metadata?.mentions || []).length >= 2 ? item.metadata.mentions.length : 0);
+const STACK_ICON = '<svg class="ticon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="8" width="13" height="13" rx="2"/><path d="M7 4h12a2 2 0 0 1 2 2v12"/></svg>';
+const multiBadge = (item) => {
+  const n = multiCount(item);
+  return n ? `<span class="multi" title="${esc(tr("{n} in one post", { n }))}">${STACK_ICON}×${n}</span>` : "";
+};
 
 const state = {
   q: "", tab: "all", show: "all", tags: [], cols: (() => { try { return Math.max(0, Math.min(8, parseInt(localStorage.getItem("magpie.columns"), 10) || 0)); } catch { return 0; } })(),
@@ -2666,13 +2673,13 @@ function coverHtml(item, { chip = true } = {}) {
     // wide pictures are shown whole, over a blurred, enlarged copy of themselves (the same URL, so no extra download)
     backdrop ? `<img class="cover-bd" src="${esc(pic)}" alt="" aria-hidden="true" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
-    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span></span>` : ""}${flag}</div>`;
+    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${multiBadge(item)}</span>` : ""}${flag}</div>`;
 }
 
 function cardMeta(item) {
   if (item.status === "error" && item.retry_at) return `Waiting for limit · retry ${untilText(item.retry_at)}`;
   if (item.status !== "ready") return item.status === "error" ? "Open to retry" : item.pending_upload ? "Saved on this device" : "Working on it…";
-  return [typeName(item.category), ...cardFacts(item).slice(0, 2)].join(" · ");
+  return [typeName(item.category) + (multiCount(item) ? ` ×${multiCount(item)}` : ""), ...cardFacts(item).slice(0, 2)].join(" · ");
 }
 
 // How many columns fit: up to 4 on a phone (a card needs room to be read), 8 on a wide screen.
@@ -2950,7 +2957,7 @@ function renderDetail(source) {
   const canonical = safeUrl(item.canonical_url);
   const facts = orderedFacts(item);
   const links = (item.links || []).filter((l) => safeUrl(l.url));
-  const metaLine = `<span class="eyebrow-type t-${themeOf(item.category)}">${typeIcon(themeOf(item.category))}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ");
+  const metaLine = `<span class="eyebrow-type t-${themeOf(item.category)}">${typeIcon(themeOf(item.category))}</span>` + [typeName(item.category), m.year].filter(Boolean).map(esc).join(" · ") + multiBadge(item);
 
   const dlg = $("#detail");
   dlg.dataset.id = item.id;

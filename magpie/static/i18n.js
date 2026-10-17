@@ -8,7 +8,7 @@ const TRANSLATIONS = (() => {
   const rows = [
     ["Search everything you saved", "חפש בכל מה ששמרת", "Busca todo lo que guardaste", "Alles Gespeicherte durchsuchen", "Rechercher dans tout ce que vous avez enregistré"],
     ["Movies & TV", "סרטים וסדרות", "Cine y TV", "Filme & Serien", "Films et séries"],
-    ["Repos", "מאגרים", "Repos", "Repos", "Dépôts"],
+    ["Apps & repos", "אפליקציות ומאגרים", "Apps y repos", "Apps & Repos", "Applis et dépôts"],
     ["Recipes", "מתכונים", "Recetas", "Rezepte", "Recettes"],
     ["Books", "ספרים", "Libros", "Bücher", "Livres"],
     ["Music & podcasts", "מוזיקה ופודקאסטים", "Música y pódcast", "Musik & Podcasts", "Musique et podcasts"],
@@ -108,6 +108,7 @@ const TRANSLATIONS = (() => {
     ["Your screenshot", "צילום המסך שלך", "Tu captura", "Dein Screenshot", "Votre capture"],
     ["View full size", "הצג בגודל מלא", "Ver tamaño completo", "Volle Größe anzeigen", "Voir en taille réelle"],
     ["Open {host}", "פתח {host}", "Abrir {host}", "{host} öffnen", "Ouvrir {host}"],
+    ["{n} in one post", "{n} בפוסט אחד", "{n} en una publicación", "{n} in einem Beitrag", "{n} dans une publication"],
     ["Digital release", "יציאה דיגיטלית", "Estreno digital", "Digitale Veröffentlichung", "Sortie numérique"],
     ["In cinemas", "בקולנוע", "En cines", "Im Kino", "Au cinéma"],
     ["Physical release", "יציאה פיזית", "Lanzamiento físico", "Physische Veröffentlichung", "Sortie physique"],

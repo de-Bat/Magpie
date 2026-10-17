@@ -8,6 +8,7 @@ from datetime import timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import anthropic
 import httpx
@@ -17,13 +18,13 @@ from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import convlog, links, readability
 from .findlink import is_aggregator, repair_link
-from .related import clean_related, drop_dead, same_site, text_related
+from .related import clean_mentions, clean_related, drop_dead, same_site, text_related
 from .images import best_image, picture_is_opaque
 from .enrich import fetch_page, link_is_gone
 from .catalog import entry_analysis
 from .config import Settings
 from .db import Database, normalize_tag
-from .enrich import Enrichment, run_enrichers
+from .enrich import Enrichment, github_homepage, is_multi, run_enrichers
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,122 @@ def reclassify(analysis: dict) -> dict:
     convlog.event("decision", what="category_from_link", was=analysis.get("category"), now="github_repo", repo=repo)
     details = {**(analysis.get("details") or {}), "github_full_name": (analysis.get("details") or {}).get("github_full_name") or repo}
     return {**analysis, "category": "github_repo", "details": details}
+
+
+def _key(text: str | None) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def same_app(home: dict, repo: str) -> bool:
+    """Is owner/repo the code of the app at this homepage ({label, url})? Going by the names they share."""
+    names = {_key(p) for p in re.split(r"[/.]", home.get("url") or "")} | {_key(home.get("label"))}
+    return bool({_key(p) for p in repo.split("/")} & names - {""})
+
+
+def subject_app(analysis: dict) -> tuple[dict | None, str | None]:
+    """The one app an "app" or "article" item is about, as the model's answer gives it: its homepage
+    ({label, url}) and its GitHub repository (owner/repo), either may be None. An article naming several apps or
+    repositories (a "10 tools" list) is about none of them."""
+    category, url = analysis.get("category"), analysis.get("canonical_url")
+    named = (analysis.get("details") or {}).get("github_full_name")
+    named = named if named and re.fullmatch(r"[\w.-]+/[\w.-]+", named) else None
+    related = [r for r in analysis.get("related") or [] if isinstance(r, dict) and (r.get("url") or "").startswith("http")]
+    repos = {links.github_repo_of(url)} if links.github_repo_of(url) else set()
+    repos |= {links.github_repo_of(r["url"]) for r in related if r.get("kind") == "repo" and links.github_repo_of(r["url"])}
+    repos |= {named} if named else set()
+    repos = {r.lower(): r for r in repos}   # one repository, however it was written
+    if category == "app":
+        home = {"label": analysis.get("title"), "url": url} if url and not links.github_repo_of(url) else None
+        return home, named or (next(iter(repos.values())) if len(repos) == 1 else None)
+    if category != "article":
+        return None, None
+    homes = {(urlsplit(r["url"]).hostname or "").lower(): r for r in related
+             if r.get("kind") == "app" and (urlsplit(r["url"]).hostname or "").lower().removeprefix("www.") != "github.com"}
+    if len(homes) > 1 or len(repos) > 1:
+        return None, None
+    home, repo = next(iter(homes.values()), None), next(iter(repos.values()), None)
+    if home and repo and not same_app(home, repo):
+        repo = None   # the repository is something else the article mentions (a library the app is built on)
+    return ({"label": home.get("label"), "url": home["url"]} if home else None), repo
+
+
+SCREEN, SOFTWARE = ("movie", "tv_show"), ("app", "github_repo")
+
+
+def mentions_of(analysis: dict) -> list[dict]:
+    """What a capture lists: the model's `mentions`, else, for an article, the apps and repositories its related links
+    name (an app's homepage and its own repository counted once)."""
+    found = clean_mentions(analysis.get("mentions"))
+    if found or analysis.get("category") != "article":
+        return found
+    related = [r for r in analysis.get("related") or [] if isinstance(r, dict) and isinstance(r.get("url"), str)]
+    homes = [r for r in related if r.get("kind") == "app" and not links.github_repo_of(r["url"])]
+    repos = [r for r in related if r.get("kind") == "repo" and links.github_repo_of(r["url"])
+             and not any(same_app(h, links.github_repo_of(r["url"])) for h in homes)]
+    return clean_mentions([{"title": r.get("label"), "category": "app", "url": r["url"]} for r in homes]
+                          + [{"title": r.get("label"), "category": "github_repo", "url": r["url"]} for r in repos])
+
+
+def as_list(analysis: dict, keep_category: bool = False) -> dict:
+    """A capture listing several films and shows, or several apps and repositories (a "10 shows to watch" article), is
+    one item of that kind that holds them all: filed under the kind most of them are, linking the article itself,
+    with each one among its links. Anything else has no `mentions`. With `keep_category` (you set the type yourself)
+    only a list of the type you chose counts, and the type stays."""
+    found = mentions_of(analysis)
+    family = max((SCREEN, SOFTWARE), key=lambda f: sum(m["category"] in f for m in found))
+    if keep_category:
+        family = next((f for f in (SCREEN, SOFTWARE) if analysis.get("category") in f), ())
+    kinds = [m["category"] for m in found if m["category"] in family]
+    if len(kinds) < 2:
+        return {**analysis, "mentions": []} if analysis.get("mentions") else analysis
+    category = analysis["category"] if keep_category else max(family, key=kinds.count)
+    listed = [{"label": m["title"] + (f" ({m['year']})" if m["year"] else ""), "url": m["url"]} for m in found if m["url"]]
+    urls = {l["url"] for l in listed}
+    if analysis.get("category") != category:
+        convlog.event("decision", what="list_of_several", was=analysis.get("category"), now=category, count=len(found))
+    return {**analysis, "category": category, "mentions": found,
+            "links": listed + [l for l in analysis.get("links") or [] if l.get("url") not in urls]}
+
+
+async def resolve_app(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> dict:
+    """An app, or an article about one app, is filed by where the app lives: its homepage when it has one (as an
+    "app", with the repository among the links), else its GitHub repository (a "github_repo"); an article about no
+    one app stays an article. A repository's homepage is taken from GitHub when the model didn't give one."""
+    if analysis.get("category") not in ("app", "article"):
+        return analysis
+    home, repo = subject_app(analysis)
+    if not home and not repo:
+        return analysis
+    if repo and not home and settings.enrich:
+        url = await github_homepage(repo, settings, http)
+        home = {"label": repo.split("/")[1], "url": url} if url else None
+    if analysis["category"] == "app" and home and not repo:
+        return analysis   # already filed by its homepage
+    was, url = analysis["category"], analysis.get("canonical_url")
+    article = url if was == "article" and not links.github_repo_of(url) else None
+    found = [{"label": f"Article: {analysis.get('title')}" if analysis.get("title") else "Article", "url": article}] if article else []
+    details = {**(analysis.get("details") or {}), **({"github_full_name": repo} if repo else {})}
+    if home:
+        if repo:
+            found.append({"label": "GitHub", "url": f"https://github.com/{repo}"})
+        title = analysis.get("title") if was == "app" else (home.get("label") or repo or analysis.get("title"))
+        out = {**analysis, "category": "app", "title": title, "canonical_url": home["url"]}
+    else:
+        out = {**analysis, "category": "github_repo", "title": analysis.get("title") if was == "app" else repo,
+               "canonical_url": f"https://github.com/{repo}"}
+    if was == "article":
+        out["image_url"] = None   # the article's lead picture isn't one of the app
+    out["details"], out["links"] = details, found + [l for l in analysis.get("links") or [] if l.get("url") not in {f["url"] for f in found}]
+    convlog.event("decision", what="app_from_article" if was == "article" else "app_located", was=was, now=out["category"],
+                  homepage=home and home["url"], repo=repo)
+    return out
+
+
+async def repair(analysis: dict, http: httpx.AsyncClient) -> dict:
+    """repair_link; a list of several things links the article holding them, so it is checked as an article."""
+    if not is_multi(analysis):
+        return await repair_link(analysis, http)
+    return {**await repair_link({**analysis, "category": "article"}, http), "category": analysis["category"]}
 
 
 def card_snapshot(item: dict) -> dict:
@@ -157,6 +274,8 @@ def merge(analysis: dict, enrichments: list[Enrichment]) -> dict:
             seen.add(url)
             unique_links.append({"label": link.get("label") or url, "url": url})
     metadata.pop("image_kind", None)
+    if is_multi(analysis):
+        metadata["mentions"] = analysis["mentions"]   # the card shows how many it holds
     if image_kind:
         metadata["image_kind"] = image_kind   # the card shows a logo whole on the themed cover instead of cropping it
     # links written in the capture itself: the tool's site, its repository or package, a paper
@@ -227,6 +346,7 @@ def corrected_analysis(previous: dict, correction: dict) -> dict:
         "confidence": 100,
         "confidence_reason": "Corrected by you.",
         "alternatives": [],
+        "mentions": list(previous.get("mentions") or []) if same_thing else [],
         **({"_tmdb": previous["_tmdb"]} if same_thing and previous.get("_tmdb") else {}),
     }
 
@@ -381,7 +501,7 @@ class Pipeline:
             },
         }
         skip_repair = item.get("kind") == "url" and not is_aggregator(item.get("canonical_url"))
-        repaired = await repair_link({**analysis, "_analyzer": ["link"] if skip_repair else []}, self.http) \
+        repaired = await repair({**analysis, "_analyzer": ["link"] if skip_repair else []}, self.http) \
             if self.settings.enrich else analysis
         analysis = {**analysis, **repaired}
         canonical_after_repair = analysis.get("canonical_url")
@@ -476,11 +596,12 @@ class Pipeline:
         return run.to_dict()
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
-        if not corrected:   # what you set yourself is never second-guessed
-            analysis = reclassify(analysis)
+        analysis = as_list(analysis, keep_category=corrected)
+        if not corrected and not is_multi(analysis):   # what you set yourself is never second-guessed
+            analysis = reclassify(await resolve_app(analysis, self.settings, self.http))
         if self.settings.enrich:
             before = analysis.get("canonical_url")
-            analysis = await repair_link(analysis, self.http)   # a made-up address becomes the real article's, or none
+            analysis = await repair(analysis, self.http)   # a made-up address becomes the real article's, or none
             if analysis.get("canonical_url") != before:
                 convlog.event("decision", what="link_repaired", model_gave=before, now=analysis.get("canonical_url"))
             offered = clean_related(analysis.get("related"))

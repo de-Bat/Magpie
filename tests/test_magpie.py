@@ -1374,13 +1374,71 @@ async def test_the_link_search_is_logged_with_why_each_page_was_taken_or_refused
 
 
 def test_an_item_whose_own_link_is_a_github_repo_is_one_whatever_the_model_said(settings):
-    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)}
-    for filed_as in ("other", "article", "app"):
+    bare = {**GITHUB_REPO, "homepage": None}
+    for filed_as, repo in (("other", GITHUB_REPO), ("article", bare), ("app", bare)):
+        routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=repo)}
         client, _ = make_client(settings, analysis(category=filed_as), routes)
         with client:
             item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
             item = client.get(f"/api/items/{item_id}").json()
             assert item["category"] == "github_repo" and item["metadata"]["stars"] == 70000, filed_as
+
+
+def test_an_app_whose_repository_has_a_homepage_is_filed_by_its_homepage(settings):
+    routes = {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO),
+              "https://docs.astral.sh/uv": httpx.Response(200, text="<html><head><title>uv</title></head></html>")}
+    client, _ = make_client(settings, analysis(category="app", title="uv"), routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["category"] == "app" and item["canonical_url"] == "https://docs.astral.sh/uv" and item["title"] == "uv"
+        assert {"label": "GitHub", "url": "https://github.com/astral-sh/uv"} in item["links"]
+
+
+def resolve(a, routes=None, settings=None):
+    import asyncio
+    from magpie.pipeline import resolve_app
+    settings = settings or Settings(data_dir=None, github_token=None)
+    return asyncio.run(resolve_app(a, settings, mock_http(routes or {})))
+
+
+def article_about(*related, **overrides):
+    return analysis(category="article", title="Why I switched to uv", canonical_url="https://blog.example/uv-review",
+                    image_url="https://blog.example/lead.jpg", details=blank_details(), related=list(related), **overrides)
+
+
+UV_REPO = {"kind": "repo", "label": "astral-sh/uv", "url": "https://github.com/astral-sh/uv", "why": "its code"}
+UV_HOME = {"kind": "app", "label": "uv", "url": "https://docs.astral.sh/uv/", "why": "its homepage"}
+
+
+def test_an_article_about_one_app_becomes_the_app_with_its_repository_and_the_article_as_links():
+    out = resolve(article_about(UV_HOME, UV_REPO))
+    assert out["category"] == "app" and out["title"] == "uv" and out["canonical_url"] == "https://docs.astral.sh/uv/"
+    assert out["links"][:2] == [{"label": "Article: Why I switched to uv", "url": "https://blog.example/uv-review"},
+                                {"label": "GitHub", "url": "https://github.com/astral-sh/uv"}]
+    assert out["details"]["github_full_name"] == "astral-sh/uv" and out["image_url"] is None
+
+
+def test_an_article_about_a_repository_takes_the_homepage_github_gives_else_is_the_repository():
+    out = resolve(article_about(UV_REPO), {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=GITHUB_REPO)})
+    assert out["category"] == "app" and out["title"] == "uv" and out["canonical_url"] == "https://docs.astral.sh/uv"
+    for homepage in (None, "", "https://github.com/astral-sh/uv"):
+        repo = {**GITHUB_REPO, "homepage": homepage}
+        out = resolve(article_about(UV_REPO), {"https://api.github.com/repos/astral-sh/uv": httpx.Response(200, json=repo)})
+        assert out["category"] == "github_repo" and out["canonical_url"] == "https://github.com/astral-sh/uv", homepage
+        assert out["title"] == "astral-sh/uv" and out["links"][0]["url"] == "https://blog.example/uv-review"
+    assert resolve(article_about(UV_REPO))["category"] == "github_repo"   # GitHub unreachable: still the repository
+
+
+def test_an_article_about_no_one_app_stays_an_article():
+    other = {"kind": "repo", "label": "pypa/pip", "url": "https://github.com/pypa/pip", "why": "compared"}
+    for related in ([], [UV_REPO, other], [UV_HOME, {**UV_HOME, "url": "https://pip.pypa.io/"}],
+                    [{"kind": "company", "label": "Astral", "url": "https://astral.sh", "why": "makes it"}]):
+        assert resolve(article_about(*related))["category"] == "article", related
+    # an app and an unrelated library it is built on: the app, without the library as its repository
+    out = resolve(article_about(UV_HOME, {"kind": "repo", "label": "tokio", "url": "https://github.com/tokio-rs/tokio", "why": "built on"}))
+    assert out["category"] == "app" and "github_full_name" not in {k for k, v in out["details"].items() if v}
+    assert all(l["label"] != "GitHub" for l in out["links"])
 
 
 def test_a_repo_named_without_an_address_gets_one_and_other_links_stay_as_filed(settings):
@@ -1613,3 +1671,51 @@ def test_refresh_metadata_preserves_candidate_image_on_walled_site(settings):
         assert item["image_url"] == lead_img
         assert (item.get("metadata") or {}).get("image_kind") != "logo"
 
+
+
+SHOWS = [{"title": "The Bear", "category": "tv_show", "year": 2022, "url": "https://www.imdb.com/title/tt14452776/"},
+         {"title": "Severance", "category": "tv_show", "year": 2022, "url": "https://www.imdb.com/title/tt11280740/"},
+         {"title": "Past Lives", "category": "movie", "year": 2023, "url": "https://www.imdb.com/title/tt13238346/"}]
+
+
+def test_an_article_listing_several_shows_is_one_tv_show_item_holding_them_all(settings):
+    listicle = analysis(category="article", title="10 shows to watch this fall", canonical_url="https://blog.example/fall-shows",
+                        details=blank_details(), mentions=SHOWS)
+    routes = {"https://blog.example/fall-shows": httpx.Response(200, text="<html><head><title>10 shows to watch this fall</title></head></html>")}
+    client, _ = make_client(settings, listicle, routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["category"] == "tv_show" and item["title"] == "10 shows to watch this fall"
+        assert item["canonical_url"] == "https://blog.example/fall-shows"
+        assert [l["label"] for l in item["links"][:3]] == ["The Bear (2022)", "Severance (2022)", "Past Lives (2023)"]
+        assert len(item["metadata"]["mentions"]) == 3 and "imdb_id" not in item["metadata"]   # no TMDB lookup by the headline
+        # refreshing it keeps it a list
+        item = client.post(f"/api/items/{item_id}/refresh-metadata").json()
+        assert item["category"] == "tv_show" and len(item["metadata"]["mentions"]) == 3 and "imdb_id" not in item["metadata"]
+        assert item["canonical_url"] == "https://blog.example/fall-shows"
+
+
+def test_as_list_files_a_list_by_the_kind_most_of_it_is():
+    from magpie.pipeline import as_list
+    out = as_list(analysis(category="article", details=blank_details(), mentions=SHOWS[2:] + [{**SHOWS[2], "title": "Aftersun", "url": None}]))
+    assert out["category"] == "movie" and len(out["mentions"]) == 2 and [l["label"] for l in out["links"]] == ["Past Lives (2023)"]
+    tools = [{"title": "uv", "category": "app", "year": None, "url": "https://docs.astral.sh/uv"},
+             {"title": "ruff", "category": "github_repo", "year": None, "url": "https://github.com/astral-sh/ruff"},
+             {"title": "rye", "category": "github_repo", "year": None, "url": "https://github.com/astral-sh/rye"}]
+    assert as_list(analysis(category="article", mentions=tools))["category"] == "github_repo"
+    assert as_list(analysis(category="article", mentions=tools[:2]))["category"] == "app"   # a tie: app
+    # one thing is not a list
+    single = as_list(analysis(category="movie", mentions=SHOWS[2:]))
+    assert single["category"] == "movie" and single["mentions"] == []
+    # you set the type yourself: it stays, and only a list of that type counts
+    assert as_list(analysis(category="tv_show", mentions=SHOWS), keep_category=True)["category"] == "tv_show"
+    assert as_list(analysis(category="article", mentions=SHOWS), keep_category=True)["mentions"] == []
+
+
+def test_an_article_whose_related_links_name_several_tools_is_a_list_of_them():
+    from magpie.pipeline import as_list
+    pip = {"kind": "repo", "label": "pypa/pip", "url": "https://github.com/pypa/pip", "why": "compared"}
+    out = as_list(article_about(UV_HOME, UV_REPO, pip))   # uv's homepage and its repository are one tool
+    assert out["category"] == "app" and [m["title"] for m in out["mentions"]] == ["uv", "pypa/pip"]
+    assert as_list(article_about(UV_HOME, UV_REPO))["category"] == "article"   # one tool: resolve_app's case

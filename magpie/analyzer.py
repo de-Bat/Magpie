@@ -125,6 +125,22 @@ SAVE_TOOL: dict[str, Any] = {
                     "additionalProperties": False,
                 },
             },
+            "mentions": {
+                "type": "array",
+                "description": "When the capture recommends several films, TV shows, apps or repositories (a '10 shows to watch' "
+                               "article, a list of tools): each of them, in order. Empty otherwise.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "category": {"type": "string", "enum": ["movie", "tv_show", "app", "github_repo"]},
+                        "year": {"type": ["integer", "null"]},
+                        "url": {**_nstr, "description": "Its own page: IMDb for films and TV, the homepage for an app, github.com for a repository."},
+                    },
+                    "required": ["title", "category", "year", "url"],
+                    "additionalProperties": False,
+                },
+            },
             "tags": {"type": "array", "items": {"type": "string"}, "description": "5-10 short lowercase retrieval tags (genre, topic, mood, cuisine, tech...)."},
             "screenshot_text": {"type": "string", "description": "The key text visible in the screenshot, condensed (max ~500 chars)."},
             "confidence": {
@@ -164,11 +180,12 @@ How to work:
 1. Read the screenshot carefully: the app/site chrome tells you the source platform; captions, overlays, handles, and partially visible titles tell you the subject.
 2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository and put its owner/repo in details.github_full_name (a project is often posted by name only: search for it); for recipes find the original recipe page; for articles find the article's own URL on the publisher's site (search its headline; the capture often shows the site's name), not a share link or aggregator copy, and the direct URL to its main lead/preview image in image_url.
 3. Only report URLs, ratings and facts you actually saw in search results or the screenshot. Use null rather than guessing.
-4. If the screenshot recommends several things, catalogue the most prominent one and mention the others in the summary.
-5. Be honest about confidence. Score it on evidence: a clearly visible title confirmed by a matching search result is 90+; an inference from partial text, a blurry poster, or an ambiguous title (remakes, same-name books and films) is lower. List the plausible alternatives.
-6. Also note what is connected to it in `related`: when an article or post is about a tool, name its repository, package or homepage; when it names a company, project, person, paper, product or event, link that; links written in the screenshot count too. Each link must be a page you saw, and must not be the item's own page. Use `why` to say in a few words how it's connected.
-7. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
-8. Finish by calling save_analysis once. Do not ask the user questions."""
+4. An article or post about one specific app or tool is catalogued as the app, not the article: find the app's homepage (a repository's homepage is often given on its GitHub page) and its GitHub repository. With a homepage, use category "app", the homepage as canonical_url, the repository in details.github_full_name and the article in links; with only a repository, use category "github_repo" and the repository as canonical_url; with neither, it stays an "article".
+5. If the screenshot recommends several films and TV shows, or several apps and repositories (a "10 shows to watch" article, a list of tools), catalogue the list itself: the category of that kind (the one most of them are), the post or article's headline as the title, its own URL as canonical_url, and every one of them in `mentions` with its own page. If it recommends several other things, catalogue the most prominent one and mention the others in the summary.
+6. Be honest about confidence. Score it on evidence: a clearly visible title confirmed by a matching search result is 90+; an inference from partial text, a blurry poster, or an ambiguous title (remakes, same-name books and films) is lower. List the plausible alternatives.
+7. Also note what is connected to it in `related`: when an article or post is about a tool, name its repository, package or homepage; when it names a company, project, person, paper, product or event, link that; links written in the screenshot count too. Each link must be a page you saw, and must not be the item's own page. Use `why` to say in a few words how it's connected.
+8. If the user has corrected an earlier identification, treat their correction as authoritative and look up what they describe.
+9. Finish by calling save_analysis once. Do not ask the user questions."""
 
 
 class AnalysisError(Exception):

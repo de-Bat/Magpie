@@ -134,13 +134,32 @@ async def find_repo(analysis: dict, guess: str | None, headers: dict, http: http
     return None
 
 
+def github_headers(settings: Settings) -> dict:
+    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    if settings.github_token:
+        headers["Authorization"] = f"Bearer {settings.github_token}"
+    return headers
+
+
+async def github_homepage(full_name: str, settings: Settings, http: httpx.AsyncClient) -> str | None:
+    """The website a repository names as its homepage, when it has one off GitHub itself."""
+    try:
+        r = await http.get(f"https://api.github.com/repos/{full_name}", headers=github_headers(settings), timeout=10)
+        home = r.json().get("homepage") if r.status_code == 200 else None
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    home = home.strip() if isinstance(home, str) else ""
+    if home and not home.startswith("http"):
+        home = "https://" + home
+    host = (urlsplit(home).hostname or "").lower().removeprefix("www.")
+    return home if host and host != "github.com" else None
+
+
 async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:
     guess = github_full_name(analysis)
     if not guess and analysis.get("category") != "github_repo":
         return None
-    headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-    if settings.github_token:
-        headers["Authorization"] = f"Bearer {settings.github_token}"
+    headers = github_headers(settings)
     r = await http.get(f"https://api.github.com/repos/{guess}", headers=headers) if guess else None
     found_by_search = False
     if r is None or r.status_code == 404:
@@ -1148,10 +1167,18 @@ DEFAULT_ENRICHERS = [enrich_web]
 URL_ENRICHERS = [(npm_package, enrich_npm), (hf_repo, enrich_huggingface)]
 
 
+def is_multi(analysis: dict) -> bool:
+    """Does the item hold several things (a list of shows or tools) rather than being one?"""
+    return len(analysis.get("mentions") or []) >= 2
+
+
 async def run_enrichers(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> list[Enrichment]:
     results = []
     if not settings.enrich:
         return results
+    if is_multi(analysis):   # its title is the article's headline: no film, repository or package to look it up by
+        e = await enrich_web(analysis, settings, http)
+        return [e] if e else []
     fns = list(ENRICHERS.get(analysis.get("category"), DEFAULT_ENRICHERS))
     for detect, fn in URL_ENRICHERS:
         if detect(analysis) and fn not in fns:
