@@ -1756,3 +1756,26 @@ def test_listed_shows_given_by_name_only_get_their_imdb_page(settings):
         assert item["category"] == "tv_show" and len(item["metadata"]["mentions"]) == 3
         assert [l["url"] for l in item["links"][:3]] == ["https://www.imdb.com/title/tt5875444/", "https://www.imdb.com/title/tt27444205/",
                                                          "https://www.imdb.com/find/?q=Nowhere%20Show&s=tt&ttype=tv"]
+
+
+def test_the_article_a_thing_was_found_through_is_among_its_links(settings):
+    review = analysis(category="movie", title="Past Lives", year=2023, canonical_url="https://www.imdb.com/title/tt13238346/",
+                      details=blank_details(imdb_id="tt13238346", article_url="https://blog.example/past-lives-review"))
+    client, _ = make_client(settings, review)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["category"] == "movie" and item["links"][0] == {"label": "Article", "url": "https://blog.example/past-lives-review"}
+
+
+def test_link_article_adds_the_article_once_and_never_to_an_article():
+    from magpie.pipeline import link_article
+    url = "https://blog.example/uv-review"
+    filed = lambda **kw: analysis(details=blank_details(article_url=url), **kw)   # noqa: E731
+    assert link_article(filed(category="article", canonical_url=url))["links"] == []
+    assert link_article(filed(category="tv_show", canonical_url=url + "/"))["links"] == []   # the list's own address already
+    once = link_article(filed(category="app", links=[{"label": "Article: Why uv", "url": url}]))["links"]
+    assert [l["url"] for l in once] == [url]
+    # an article about one app: the app, the article among its links exactly once
+    out = link_article(resolve(article_about(UV_HOME, UV_REPO)))
+    assert [l["url"] for l in out["links"]].count("https://blog.example/uv-review") == 1 and out["category"] == "app"

@@ -72,7 +72,7 @@ const HIDDEN_META = new Set([
   "article_text", "excerpt", "word_count", "page_description",
   "screenshot_text", "sources", "confidence", "ingredients", "instructions", "imdb_rating", "rotten_tomatoes",
   "metacritic", "tmdb_rating", "stars", "rating", "rating_count", "description", "post_url", "imdb_votes", "tmdb_id",
-  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "image_opaque", "found_by", "mentions",
+  "page_description", "page_title", "github_full_name", "year", "ocr_text", "image_kind", "image_opaque", "found_by", "mentions", "article_url",
 ]);
 // A list of several films, shows, apps or repositories (a "10 shows to watch" article): how many it holds, else 0.
 const multiCount = (item) => ((item.metadata?.mentions || []).length >= 2 ? item.metadata.mentions.length : 0);

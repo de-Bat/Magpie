@@ -46,7 +46,9 @@ NO_WEB_STEP = (
     "visible or you are certain; for articles, the headline exactly as shown and the site or publisher in "
     "details.publisher; for films, TV and books, the exact title and year. Give a canonical URL when it is written in the "
     "screenshot or you are certain it exists (a repository, an IMDb page, the publisher's article); Magpie opens every "
-    "address, so an invented one is dropped, but do not leave it out when you know it."
+    "address, so an invented one is dropped, but do not leave it out when you know it. When an article is about "
+    "something else you catalogue (a film, a show, an app) and its address is written in the screenshot, put it in "
+    "details.article_url."
 )
 LOCAL_SYSTEM_PROMPT = re.sub(r"(?m)^2\. Use web search.*$", lambda _: NO_WEB_STEP, SYSTEM_PROMPT).replace(
     "Finish by calling save_analysis once. Do not ask the user questions.",

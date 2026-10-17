@@ -171,7 +171,8 @@ async def resolve_app(analysis: dict, settings: Settings, http: httpx.AsyncClien
     was, url = analysis["category"], analysis.get("canonical_url")
     article = url if was == "article" and not links.github_repo_of(url) else None
     found = [{"label": f"Article: {analysis.get('title')}" if analysis.get("title") else "Article", "url": article}] if article else []
-    details = {**(analysis.get("details") or {}), **({"github_full_name": repo} if repo else {})}
+    details = {**(analysis.get("details") or {}), **({"github_full_name": repo} if repo else {}),
+               **({"article_url": article} if article else {})}
     if home:
         if repo:
             found.append({"label": "GitHub", "url": f"https://github.com/{repo}"})
@@ -186,6 +187,18 @@ async def resolve_app(analysis: dict, settings: Settings, http: httpx.AsyncClien
     convlog.event("decision", what="app_from_article" if was == "article" else "app_located", was=was, now=out["category"],
                   homepage=home and home["url"], repo=repo)
     return out
+
+
+def link_article(analysis: dict) -> dict:
+    """The article an item was found through stays one click away: filed as a film, an app or a list of shows,
+    the article it came from is among its links."""
+    url = (analysis.get("details") or {}).get("article_url")
+    if analysis.get("category") == "article" or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return analysis
+    known = {links.normalize_url(u) for u in [analysis.get("canonical_url"), *[l.get("url") for l in analysis.get("links") or []]] if u}
+    if links.normalize_url(url) in known:
+        return analysis
+    return {**analysis, "links": [{"label": "Article", "url": url}, *(analysis.get("links") or [])]}
 
 
 async def repair(analysis: dict, http: httpx.AsyncClient) -> dict:
@@ -471,7 +484,9 @@ class Pipeline:
         if not analysis.get("canonical_url"):
             analysis["canonical_url"] = url
         if analysis["canonical_url"] != url:
-            analysis.setdefault("links", []).insert(0, {"label": "Shared link", "url": url})
+            # a shared article about the film or app it was filed as: the article, one click away
+            is_article = bool(article and article.word_count >= 150) and analysis.get("category") != "article"
+            analysis.setdefault("links", []).insert(0, {"label": "Article" if is_article else "Shared link", "url": url})
         if article and article.text and not analysis.get("screenshot_text"):
             analysis["_ocr_text"] = article.text  # searchable, like a screenshot's OCR text
         if correction:
@@ -641,6 +656,7 @@ class Pipeline:
             analysis = {**analysis, "related": await drop_dead(offered, self.http, fetch_page, link_is_gone)}
             if len(analysis["related"]) != len(offered):
                 convlog.event("decision", what="dead_related_links_dropped", dropped=[r["url"] for r in offered if r not in analysis["related"]])
+        analysis = link_article(analysis)
         enrichments = await run_enrichers(analysis, self.settings, self.http)
         convlog.event("enrichment", sources=[e.source for e in enrichments], matched=[e.matched_title for e in enrichments if e.matched_title],
                       canonical_url=[e.canonical_url for e in enrichments if e.canonical_url], images=[e.image_url for e in enrichments if e.image_url])

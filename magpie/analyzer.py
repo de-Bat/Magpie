@@ -72,6 +72,7 @@ DETAILS_SCHEMA: dict[str, Any] = {
         # the post itself
         "posted_by": {**_nstr, "description": "Account/person who shared it in the screenshot"},
         "post_url": {**_nstr, "description": "URL of the social post/page itself, if visible"},
+        "article_url": {**_nstr, "description": "When an article is about the thing you catalogue (a review of a film, a post about an app): the article's own URL"},
     },
 }
 DETAILS_SCHEMA["required"] = list(DETAILS_SCHEMA["properties"])
@@ -178,7 +179,7 @@ Each screenshot usually shows a recommendation seen somewhere: a Facebook or Ins
 
 How to work:
 1. Read the screenshot carefully: the app/site chrome tells you the source platform; captions, overlays, handles, and partially visible titles tell you the subject.
-2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository and put its owner/repo in details.github_full_name (a project is often posted by name only: search for it); for recipes find the original recipe page; for articles find the article's own URL on the publisher's site (search its headline; the capture often shows the site's name), not a share link or aggregator copy, and the direct URL to its main lead/preview image in image_url.
+2. Use web search to confirm the identity and find the canonical source. For films and TV find the IMDb page and scores; for code find the github.com repository and put its owner/repo in details.github_full_name (a project is often posted by name only: search for it); for recipes find the original recipe page; for articles find the article's own URL on the publisher's site (search its headline; the capture often shows the site's name), not a share link or aggregator copy, and the direct URL to its main lead/preview image in image_url. When an article (or a post linking one) is about something else you catalogue, such as a film, a show or an app, also find the article's own URL and put it in details.article_url.
 3. Only report URLs, ratings and facts you actually saw in search results or the screenshot. Use null rather than guessing.
 4. An article or post about one specific app or tool is catalogued as the app, not the article: find the app's homepage (a repository's homepage is often given on its GitHub page) and its GitHub repository. With a homepage, use category "app", the homepage as canonical_url, the repository in details.github_full_name and the article in links; with only a repository, use category "github_repo" and the repository as canonical_url; with neither, it stays an "article".
 5. A list of several films and TV shows, or several apps and repositories (a "10 best shows to binge" article, a list of tools), is catalogued as the list itself, also when the capture shows only its headline: open the article to read what it lists. Use the category most of them are ("tv_show", "movie", "app" or "github_repo"; never "article" for such a list), the headline as the title, the article's own URL as canonical_url, and every one of them in `mentions`, in order, with its own page (the IMDb page for a film or show). If it recommends several other things, catalogue the most prominent one and mention the others in the summary.
