@@ -104,6 +104,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; font-size: calc(11px * var(--ui
 .bar2.low i { background: var(--err); }
 .meter { width: 44px; height: 5px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
 .meter span { display: block; height: 100%; background: var(--accent); }
+.cost-short { display: none; }
 
 /* ---- tabs and controls ---- */
 .tabs { display: flex; gap: 2px; padding: 8px 20px 0; overflow-x: auto; scrollbar-width: none; background: var(--surface); border-bottom: 1px solid var(--border); }
@@ -384,14 +385,20 @@ details pre { white-space: pre-wrap; font-size: calc(12px * var(--ui-scale)); ba
   .brand { flex: 1; }
   .sync-text { display: none; }
   .pill-btn { padding: 5px 10px; font-size: calc(12px * var(--ui-scale)); }
-  #cost-btn .meter { display: none; }
-  .limit-pill .lp-text { max-width: 44vw; overflow: hidden; text-overflow: ellipsis; }
+  #cost-btn .meter, #cost-btn .cost-long { display: none; }
+  #cost-btn .cost-short { display: inline; }
+  #cost-btn { gap: 0; }
+  .topbar:has(#limit-pill:not([hidden])) .brand { flex: none; }   /* room for the limit warning: the logo alone */
+  .topbar:has(#limit-pill:not([hidden])) .brand span { display: none; }
+  .limit-pill { flex: 1 1 0; min-width: 0; }   /* takes the room that's left, ellipsized, instead of wrapping to a second row */
+  .limit-pill .lp-text { max-width: 44vw; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .limit-pill .lp-mid { display: none; }   /* "⏳ Gemini in 25 min" */
   .tabs, .subbar, .content { padding-left: 16px; padding-right: 16px; }
   /* Show, Tags, columns and layout stay on one row: smaller buttons, tighter gaps */
   .subbar { gap: 6px; padding-top: 10px; padding-bottom: 10px; }
   .subbar .seg { padding: 2px; }
   .subbar .seg button { padding: 4px 9px; font-size: calc(12.5px * var(--ui-scale)); }
+  #reviewed-count, #unreviewed-count { display: none; }   /* the reviewed filters fit beside the others; their counts don't */
   .subbar #tag-btn { padding: 4px 10px; }
   .subbar .count { margin-left: 2px; }
   .cols-pick { padding: 2px 0 2px 8px; gap: 0; }
@@ -487,8 +494,11 @@ body { padding-bottom: env(safe-area-inset-bottom); -webkit-tap-highlight-color:
 @media (max-width: 400px) {
   .subbar .lbl, .subbar .lbl-full, .cols-icon { display: none; }
   #tag-btn .tagn::before { content: ""; }
-  .subbar #tag-btn { padding: 4px 11px; font-weight: 600; }
-  .subbar .seg button { padding: 4px 8px; }
+  .subbar #tag-btn { padding: 4px 8px; font-weight: 600; }
+  /* Show (four filters), Tags, columns and layout on one row, also at Extra large text */
+  .subbar { gap: 4px; }
+  .subbar .seg { padding: 1px; }
+  .subbar .seg button { padding: 4px 5px; }
 }
 @media (max-width: 340px) {
   .tabs, .subbar, .content { padding-left: 12px; padding-right: 12px; }

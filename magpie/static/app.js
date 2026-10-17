@@ -2387,6 +2387,13 @@ function cardFacts(item) {
   return facts;
 }
 
+// A sum at a glance, for the top bar: cents at most, whole dollars from $100 or when there are no cents.
+function pillUsd(v) {
+  if (!v) return "$0";
+  if (v < 0.01) return "<$0.01";
+  return v >= 100 || Number.isInteger(v) ? `$${Math.round(v)}` : `$${v.toFixed(2)}`;
+}
+
 function formatUsd(v) {
   if (!v) return "$0";
   return v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(v < 1 ? 3 : 2)}`;
@@ -2499,9 +2506,10 @@ function renderCostPill() {
   const b = $("#cost-btn"), r = state.usage;
   if (!r) { b.hidden = true; return; }
   const c = r.config;
+  // short on phones ("$1.24/$10", "$1.24/mo"): the top bar has to fit on one row, also at the larger text sizes
   b.innerHTML = c.monthly_budget_usd
-    ? `<span class="meter"><span style="width:${Math.min(100, c.month_spent_usd / c.monthly_budget_usd * 100)}%"></span></span>${esc(formatUsd(c.month_spent_usd))} of ${esc(formatUsd(c.monthly_budget_usd))}`
-    : `${esc(formatUsd(c.month_spent_usd))} this month`;
+    ? `<span class="meter"><span style="width:${Math.min(100, c.month_spent_usd / c.monthly_budget_usd * 100)}%"></span></span>${esc(pillUsd(c.month_spent_usd))}<span class="cost-long"> of </span><span class="cost-short">/</span>${esc(pillUsd(c.monthly_budget_usd))}`
+    : `${esc(pillUsd(c.month_spent_usd))}<span class="cost-long"> this month</span><span class="cost-short">/mo</span>`;
   b.title = c.monthly_budget_usd ? "Spent this month of your budget. Click for the full breakdown." : "Spent this month. Click for the full breakdown.";
   b.hidden = false;
 }
