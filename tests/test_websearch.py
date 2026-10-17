@@ -240,3 +240,19 @@ def test_a_rate_limited_github_api_still_gives_the_repository_its_readme_logo(tm
         item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
         item = client.get(f"/api/items/{item_id}").json()
     assert item["image_url"].startswith("/media/logo-") and item["metadata"]["image_kind"] == "logo"
+
+
+async def test_the_publishers_own_search_finds_an_article_the_engines_dont():
+    """A day-old How-To Geek article: DuckDuckGo refuses, Bing serves its bot page, howtogeek.com/search has it."""
+    title = "These 7 Docker containers run my entire home, and they need almost zero maintenence"
+    real = "https://www.howtogeek.com/these-7-docker-containers-run-my-entire-home-and-they-need-almost-zero-maintenence/"
+    results = ('<html><head><title>Search | How-To Geek</title></head><body><a href="/about/">About</a>'
+               '<a href="/these-7-docker-containers-run-my-entire-home-and-they-need-almost-zero-maintenence/">x</a></body></html>')
+    routes = {"https://html.duckduckgo.com/html/": httpx.Response(202),
+              "https://www.bing.com/search": bing_page(("https://m.sport5.co.il/", "Sport5")),
+              "https://howtogeek.com/search/": lambda r: httpx.Response(301, headers={"location": "https://www.howtogeek.com" + r.url.raw_path.decode()}),
+              "https://www.howtogeek.com/search/": httpx.Response(200, text=results, headers={"content-type": "text/html"}),
+              real: article(title)}
+    findlink._ddg_blocked_until = 0
+    async with mock_http(routes) as http:
+        assert await find_article_url(title, None, http, "How-To Geek") == real

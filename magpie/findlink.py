@@ -11,7 +11,7 @@ import html as html_lib
 import logging
 import re
 import time
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlsplit
 
 import httpx
 
@@ -314,6 +314,33 @@ async def _outbound_article_link(page: Page, title: str, wanted_hosts: list[str]
     return None
 
 
+SITE_SEARCHES = ("/search/?q={}", "/?s={}")   # Valnet sites (howtogeek, xda-developers, makeuseof...), then WordPress
+
+
+def publisher_hosts(publisher: str | None) -> list[str]:
+    """Where a publisher named without its domain probably lives ("How-To Geek" -> howtogeek.com)."""
+    key = re.sub(r"[^a-z0-9]", "", (publisher or "").lower())
+    return [f"{key}.com"] if len(key) >= 3 and "." not in (publisher or "") else []
+
+
+async def site_search_results(title: str, host: str, http: httpx.AsyncClient) -> list[Hit]:
+    """Articles on `host` whose address carries the title's words, from the site's own search page. A day-old
+    article the search engines haven't indexed yet (or engines that refuse a server) is often there already."""
+    query = re.sub(r"[^\w\s'-]", " ", title)
+    for pattern in SITE_SEARCHES:
+        page = await fetch_page(f"https://{host}" + pattern.format(quote_plus(" ".join(query.split()))), http)
+        if page is None or _site(page.url) != host.removeprefix("www."):
+            continue
+        found: list[Hit] = []
+        for href in re.findall(r'<a\b[^>]*?\bhref=["\']([^"\'#?]+)["\']', page.html or "", re.I):
+            url = urljoin(page.url, html_lib.unescape(href))
+            if _site(url) == _site(page.url) and url not in (h.url for h in found) and _share(title, _slug_words(url)) >= 0.6:
+                found.append(Hit(url, ""))
+        if found:
+            return sorted(found, key=lambda h: -_share(title, _slug_words(h.url)))[:3]
+    return []
+
+
 async def judge(title: str, url: str, search_title: str, wanted_hosts: list[str], http: httpx.AsyncClient,
                 publisher: str | None = None, trusted: bool = False) -> tuple[str, str | None]:
     """(verdict, address) for a candidate page. When the page can't be opened (a bot wall), the search result's own
@@ -389,6 +416,12 @@ async def find_article_url(title: str, wrong_url: str | None, http: httpx.AsyncC
                 return found
         if trace and trace[-1].get("blocked"):
             break   # every engine refused: the next queries would only be refused too, and prolong the block
+    # the site's own search: engines refuse servers, and haven't indexed yesterday's article anyway
+    for site in dict.fromkeys([*wanted, *publisher_hosts(publisher)]):
+        for hit in await site_search_results(title, site, http):
+            if (found := await check(hit, f"{site} search")):
+                report(found)
+                return found
     report(None)
     return None
 
