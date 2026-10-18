@@ -1759,6 +1759,34 @@ def test_an_article_listing_tools_without_the_schema_is_one_app_item_holding_the
     assert [m["category"] for m in repos["mentions"]] == ["github_repo", "github_repo", "app"]   # a homepage is no repository
 
 
+def test_a_list_article_read_from_the_headline_alone_takes_its_tools_from_the_article(settings):
+    # Gemini's search came back empty: the answer from the screenshot names one tool, and the next look none or no link
+    article = "https://www.xda-developers.com/open-source-local-ai-tools/"
+    page = ('<html><head><title>5 open-source local AI tools</title></head><body><article>'
+            '<p>First, <a href="https://github.com/LostRuins/koboldcpp">KoboldCpp</a>.</p>'
+            '<p>Then <a href="https://github.com/khoj-ai/khoj">Khoj</a> and <a href="https://github.com/Fosowl/agenticSeek">AgenticSeek</a>.</p>'
+            '<p>Tabby <a href="https://tabby.sh/">See at Official Site</a></p>'
+            '</article><footer><a href="https://xdaforums.com/">Forums</a> <a href="https://www.valnetinc.com/en/">Valnet Publishing Group</a></footer></body></html>')
+    headline = analysis(category="app", title="5 open-source local AI tools nobody talks about", canonical_url=article, details=blank_details(),
+                        mentions=[{"title": "KoboldCpp", "category": "app", "year": None, "url": "https://github.com/LostRuins/koboldcpp"}])
+    client, analyzer = make_client(settings, headline, {article: httpx.Response(200, html=page)})
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["category"] == "github_repo" and item["canonical_url"] == article
+        # the tool linked only by its homepage counts too; the publisher's own sites don't
+        assert [m["title"] for m in item["metadata"]["mentions"]] == ["KoboldCpp", "tabby.sh", "khoj-ai/khoj", "Fosowl/agenticSeek"]
+        # looked at again, its search found no address: the article found before is kept, and the list with it
+        analyzer.result = {**headline, "canonical_url": None, "mentions": []}
+        item = client.post(f"/api/items/{item_id}/reanalyze").json()
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["canonical_url"] == article and len(item["metadata"]["mentions"]) == 4
+    # a headline that counts nothing is no list, whatever it links to
+    from magpie.pipeline import LIST_HEADLINE
+    assert LIST_HEADLINE.match("Top 10 apps for 2026") and LIST_HEADLINE.match("The 7 best terminal emulators")
+    assert not LIST_HEADLINE.match("This app replaced 5 others for me") and not LIST_HEADLINE.match("2026 in review")
+
+
 def test_listed_shows_given_by_name_only_get_their_imdb_page(settings):
     named = [{"title": "Slow Horses", "category": "tv_show", "year": 2022, "url": None},
              {"title": "Paradise", "category": "tv_show", "year": 2025, "url": None},

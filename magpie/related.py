@@ -150,8 +150,8 @@ def clean_mentions(items, default_category: str | None = None) -> list[dict]:
         if not isinstance(it, dict):
             continue
         category = it.get("category")
-        if category not in MENTION_KINDS:
-            category = mention_kind(it.get("url") if isinstance(it.get("url"), str) else "", default_category)
+        if category not in MENTION_KINDS or category == "app":   # an "app" whose page is its repository is a repository
+            category = mention_kind(it.get("url") if isinstance(it.get("url"), str) else "", category if category in MENTION_KINDS else default_category)
         if category not in MENTION_KINDS:
             continue
         title = re.sub(r"\s+", " ", str(it.get("title") or it.get("name") or "")).strip()[:120]

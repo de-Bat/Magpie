@@ -19,7 +19,7 @@ from .analyzers import AnalyzerRouter, Deferred
 from .usage import Run, claude_cost
 from . import convlog, links, readability
 from .findlink import is_aggregator, repair_link
-from .related import clean_mentions, clean_related, drop_dead, same_site, text_related
+from .related import clean_mentions, clean_related, drop_dead, outbound_related, same_site, text_related
 from .images import best_image, picture_is_opaque
 from .enrich import fetch_page, link_is_gone
 from .catalog import entry_analysis
@@ -152,6 +152,28 @@ def as_list(analysis: dict, keep_category: bool = False) -> dict:
         convlog.event("decision", what="list_of_several", was=analysis.get("category"), now=category, count=len(found))
     return {**analysis, "category": category, "mentions": found,
             "links": listed + [l for l in analysis.get("links") or [] if l.get("url") not in urls]}
+
+
+# "5 open-source local AI tools ...", "Top 10 apps ...": a headline that counts what it lists
+HOMEPAGE_LINK = re.compile(r"\b(?:official\s+(?:site|website|page)|website|homepage|home\s+page|download|visit|get\s+it)\b", re.I)
+LIST_HEADLINE = re.compile(r"^\W*(?:the\s+)?(?:top\s+)?(?:\d{1,2}|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty)\s", re.I)
+
+
+async def list_from_article(analysis: dict, http: httpx.AsyncClient) -> dict:
+    """A list article the model couldn't read (it answered without search, from the headline alone) still names its
+    tools: the repositories and apps the article links to become its `mentions`, after the ones the model gave."""
+    url = analysis.get("canonical_url")
+    if not url or len(clean_mentions(analysis.get("mentions"))) >= 2 or not LIST_HEADLINE.match(analysis.get("title") or ""):
+        return analysis
+    page = await fetch_page(url, http)
+    # "See at Official Site", "Download": a plain site linked like that is a listed tool's homepage, named by its address
+    related = [{**r, "kind": "app", "label": urlsplit(r["url"]).hostname.removeprefix("www.")} if r["kind"] == "site" and HOMEPAGE_LINK.search(r["label"]) else r
+               for r in (outbound_related(page, limit=20) if page else [])]
+    found = mentions_of({"category": "article", "related": related})
+    if len(found) < 2:
+        return analysis
+    convlog.event("decision", what="list_read_from_article", article=url, mentions=[m["title"] for m in found])
+    return {**analysis, "mentions": clean_mentions((analysis.get("mentions") or []) + found)}
 
 
 async def resolve_app(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> dict:
@@ -649,6 +671,13 @@ class Pipeline:
         return run.to_dict()
 
     async def apply_analysis(self, item_id: str, analysis: dict, corrected: bool = False) -> dict | None:
+        # a new look that names the same thing but found no address (its search failed) keeps the one found before
+        known = self.db.get_item(item_id) or {}
+        if not analysis.get("canonical_url") and known.get("canonical_url") and titles_match(known.get("title"), analysis.get("title")):
+            analysis = {**analysis, "canonical_url": known["canonical_url"]}
+            convlog.event("decision", what="kept_previous_link", canonical_url=known["canonical_url"])
+        if self.settings.enrich:
+            analysis = await list_from_article(analysis, self.http)
         if self.settings.enrich and sum(m["category"] in SCREEN for m in clean_mentions(analysis.get("mentions"))) >= 2:
             analysis = {**analysis, "mentions": await find_mention_pages(clean_mentions(analysis["mentions"]), self.http)}
         analysis = as_list(analysis, keep_category=corrected)
