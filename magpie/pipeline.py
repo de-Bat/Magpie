@@ -166,6 +166,13 @@ async def resolve_app(analysis: dict, settings: Settings, http: httpx.AsyncClien
     if repo and not home and settings.enrich:
         url = await github_homepage(repo, settings, http)
         home = {"label": repo.split("/")[1], "url": url} if url else None
+    elif repo and home and settings.enrich and not same_app({"url": home["url"]}, repo.split("/")[1]):
+        # A homepage that doesn't carry the repository's name may be another project's: a script for Jellyfin
+        # given jellyfin.org. The repository's own homepage, as GitHub has it, decides; none means it is the repository.
+        url = await github_homepage(repo, settings, http)
+        if url is not None and links.normalize_url(url) != links.normalize_url(home["url"]):
+            convlog.event("decision", what="homepage_not_the_repositorys", model_gave=home["url"], repo=repo, github_gives=url or None)
+            home = {"label": analysis.get("title"), "url": url} if url else None
     if analysis["category"] == "app" and home and not repo:
         return analysis   # already filed by its homepage
     was, url = analysis["category"], analysis.get("canonical_url")

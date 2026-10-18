@@ -142,17 +142,20 @@ def github_headers(settings: Settings) -> dict:
 
 
 async def github_homepage(full_name: str, settings: Settings, http: httpx.AsyncClient) -> str | None:
-    """The website a repository names as its homepage, when it has one off GitHub itself."""
+    """The website a repository names as its homepage, when it has one off GitHub itself; "" when it has none,
+    None when GitHub couldn't be asked (rate limited, unreachable)."""
     try:
         r = await http.get(f"https://api.github.com/repos/{full_name}", headers=github_headers(settings), timeout=10)
-        home = r.json().get("homepage") if r.status_code == 200 else None
+        if r.status_code != 200:
+            return "" if r.status_code == 404 else None
+        home = r.json().get("homepage")
     except (httpx.HTTPError, ValueError, AttributeError):
         return None
     home = home.strip() if isinstance(home, str) else ""
     if home and not home.startswith("http"):
         home = "https://" + home
     host = (urlsplit(home).hostname or "").lower().removeprefix("www.")
-    return home if host and host != "github.com" else None
+    return home if host and host != "github.com" else ""
 
 
 async def enrich_github(analysis: dict, settings: Settings, http: httpx.AsyncClient) -> Enrichment | None:

@@ -1779,3 +1779,20 @@ def test_link_article_adds_the_article_once_and_never_to_an_article():
     # an article about one app: the app, the article among its links exactly once
     out = link_article(resolve(article_about(UV_HOME, UV_REPO)))
     assert [l["url"] for l in out["links"]].count("https://blog.example/uv-review") == 1 and out["category"] == "app"
+
+
+def test_a_homepage_that_is_another_projects_gives_way_to_the_repositorys_own():
+    helper = "https://api.github.com/repos/jellyfin/jellyfin-repo-helper-scripts"
+    script = analysis(category="app", title="Jellyfin install script", canonical_url="https://jellyfin.org/",
+                      details=blank_details(github_full_name="jellyfin/jellyfin-repo-helper-scripts"))
+    # the script's repository names no homepage: it is the repository, not the product's site
+    out = resolve(script, {helper: httpx.Response(200, json={"full_name": "jellyfin/jellyfin-repo-helper-scripts", "homepage": None})})
+    assert out["category"] == "github_repo" and out["canonical_url"] == "https://github.com/jellyfin/jellyfin-repo-helper-scripts"
+    # GitHub can't be asked: the model's answer stands
+    assert resolve(script, {helper: httpx.Response(403)})["canonical_url"] == "https://jellyfin.org/"
+    # a site named differently from its repository, which GitHub confirms, stays
+    vscode = analysis(category="app", title="VS Code", canonical_url="https://code.visualstudio.com",
+                      details=blank_details(github_full_name="microsoft/vscode"))
+    out = resolve(vscode, {"https://api.github.com/repos/microsoft/vscode": httpx.Response(200, json={"homepage": "https://code.visualstudio.com"})})
+    assert out["category"] == "app" and out["canonical_url"] == "https://code.visualstudio.com"
+    assert {"label": "GitHub", "url": "https://github.com/microsoft/vscode"} in out["links"]
