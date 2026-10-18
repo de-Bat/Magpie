@@ -166,6 +166,11 @@ kbd { font: 11px ui-monospace, Menlo, monospace; font-size: calc(11px * var(--ui
 .typechip { position: absolute; left: 10px; top: 10px; display: inline-flex; align-items: center; gap: 5px; font: 600 10.5px ui-monospace, Menlo, monospace; font-size: calc(10.5px * var(--ui-scale)); letter-spacing: .06em; text-transform: uppercase;
   background: var(--type-color); color: #fff; box-shadow: 0 0 0 1.5px rgb(255 255 255 / .55); padding: 3px 9px 3px 6px; border-radius: 999px; }
 .ticon { width: calc(14px * var(--ui-scale)); height: calc(14px * var(--ui-scale)); flex: none; }
+/* analyzing: a light, vivid amber no type chip uses (they are all dark), so work in progress stands out */
+.cover.busy .typechip { background: oklch(0.82 0.17 85); color: oklch(0.25 0.06 85); box-shadow: 0 0 0 1.5px rgb(0 0 0 / .25); }
+.typechip .elapsed { font-variant-numeric: tabular-nums; padding-left: 6px; margin-left: 1px; border-left: 1px solid currentColor; }
+.typechip .elapsed:empty { display: none; }
+.meta-line .elapsed { font-variant-numeric: tabular-nums; font-weight: 600; }
 /* a list of several films, shows or tools: how many it holds, on the type chip and in the detail sheet's eyebrow */
 .multi { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; padding-left: 6px; border-left: 1px solid rgb(255 255 255 / .45); font-weight: 700; }
 .multi .ticon { width: calc(12px * var(--ui-scale)); height: calc(12px * var(--ui-scale)); }
@@ -247,7 +252,7 @@ kbd { font: 11px ui-monospace, Menlo, monospace; font-size: calc(11px * var(--ui
   .card .meta { font-size: calc(11.5px * var(--ui-scale)); }
   .typechip { padding: 3px 5px; }
   .typechip .tlabel { display: none; }
-  .typechip .multi { margin-left: 0; padding-left: 0; border-left: 0; }
+  .typechip .multi, .typechip .elapsed { margin-left: 0; padding-left: 0; border-left: 0; }
   .verify-btn { font-size: calc(11px * var(--ui-scale)); padding: 3px 8px; right: 6px; top: 32px; }
 }
 @container (max-width: 110px) {

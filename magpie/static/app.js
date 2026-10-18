@@ -2694,8 +2694,25 @@ function coverHtml(item, { chip = true } = {}) {
     // wide pictures are shown whole, over a blurred, enlarged copy of themselves (the same URL, so no extra download)
     backdrop ? `<img class="cover-bd" src="${esc(pic)}" alt="" aria-hidden="true" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
-    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${multiBadge(item)}</span>` : ""}${flag}${reviewed}</div>`;
+    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${elapsedHtml(item)}${multiBadge(item)}</span>` : ""}${flag}${reviewed}</div>`;
 }
+
+// How long an analysis has been running, counted from when the item went to "processing" (its updated_at).
+// The markup holds only the start time, so a card keeps its element; tickElapsed() writes the time in.
+function elapsedHtml(item) {
+  if (item.status !== "processing" || item.batch_pending || item.pending_upload || !item.updated_at) return "";
+  return `<span class="elapsed" data-since="${esc(item.updated_at)}"></span>`;
+}
+
+function tickElapsed() {
+  document.querySelectorAll(".elapsed[data-since]").forEach((el) => {
+    const s = Math.max(0, Math.floor((Date.now() - Date.parse(el.dataset.since)) / 1000));   // a clock ahead of the server's shows 0:00
+    const text = s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`
+      : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    if (el.textContent !== text) el.textContent = text;
+  });
+}
+setInterval(tickElapsed, 1000);
 
 function cardMeta(item) {
   if (item.status === "error" && item.retry_at) return `Waiting for limit · retry ${untilText(item.retry_at)}`;
@@ -2744,6 +2761,7 @@ function renderGrid() {
   });
   const same = nodes.length === grid.children.length && nodes.every((el, i) => grid.children[i] === el);
   if (!same) grid.replaceChildren(...nodes);
+  tickElapsed();
 
   const active = [];
   state.tags.forEach((t) => active.push(`<span class="chip active">#${esc(t)}<button data-clear-tag="${esc(t)}" aria-label="Remove ${esc(t)}">×</button></span>`));
@@ -2864,7 +2882,7 @@ function statusHtml(item) {
   if (item.status === "error") return `<div class="error-box">Analysis failed: ${esc(item.error)}</div>`;
   if (item.pending_upload) return `<div class="meta-line">⏳ Saved on this device. It will be ${item.kind === "url" ? "looked up" : "uploaded and identified"} when the server is reachable.</div>`;
   if (item.batch_pending) return `<div class="meta-line">⏳ Queued for Claude batch processing (half price). Usually done within minutes to an hour, at most 24 h.</div>`;
-  if (item.status === "processing") return `<div class="meta-line">Analyzing… this usually takes 20–60 seconds.</div>`;
+  if (item.status === "processing") return `<div class="meta-line">Analyzing… ${elapsedHtml(item)} (this usually takes 20–60 seconds).</div>`;
   if (hasPendingOps(item.id)) return `<div class="meta-line">⟳ Changes waiting to sync</div>`;
   return "";
 }
