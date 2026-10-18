@@ -2748,7 +2748,7 @@ function renderGrid() {
     const html = `
     <article class="card ${esc(item.status)}${item.reviewed ? " reviewed" : ""}" data-id="${esc(item.id)}" tabindex="0" role="button" aria-label="${esc(cardTitle(item))}">
       ${coverHtml(item)}
-      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${esc(cardMeta(item))}</div>${item.status === "ready" && item.usage?.model ? `<div class="by-model" title="Resolved by ${esc(item.usage.model)}">${esc(item.usage.model)}</div>` : ""}</div>
+      <div class="card-text"><div class="title">${esc(cardTitle(item))}</div><div class="meta">${elapsedHtml(item)}${esc(cardMeta(item))}</div>${item.status === "ready" && item.usage?.model ? `<div class="by-model" title="Resolved by ${esc(item.usage.model)}">${esc(item.usage.model)}</div>` : ""}</div>
       ${isUnverified(item) ? `<button class="verify-btn" type="button" data-verify="${esc(item.id)}" title="Mark this identification as correct">✓ Verify</button>` : ""}
     </article>`;
     const old = kept.get(item.id);
