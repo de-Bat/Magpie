@@ -267,21 +267,36 @@ class LocalLLMAnalyzer:
         run = Run(self.name, model=self.model, mode="hosted")
         started = time.monotonic()
         try:
-            r = await self._post(req, url=GEMINI_NATIVE_URL.format(model=self.model.removeprefix("models/")),
-                                 headers={"x-goog-api-key": self.headers.get("Authorization", "").removeprefix("Bearer ")})
-            if r.status_code in (401, 403):
-                raise AnalysisError(f"The LLM server rejected the API key (GEMINI_API_KEY): {r.text[:200]}")
-            if r.status_code in (400, 404, 422):
-                log.info("Gemini model %s doesn't take Google Search (%s); answering without it", self.model, r.text[:200])
+            for attempt in range(2):
+                r = await self._post(req, url=GEMINI_NATIVE_URL.format(model=self.model.removeprefix("models/")),
+                                     headers={"x-goog-api-key": self.headers.get("Authorization", "").removeprefix("Bearer ")})
+                if r.status_code in (401, 403):
+                    raise AnalysisError(f"The LLM server rejected the API key (GEMINI_API_KEY): {r.text[:200]}")
+                if r.status_code in (400, 404, 422):
+                    log.info("Gemini model %s doesn't take Google Search (%s); answering without it", self.model, r.text[:200])
+                    return None
+                if r.status_code >= 400:
+                    raise AnalysisError(f"Gemini error {r.status_code}: {r.text[:300]}")
+                try:
+                    data = r.json()
+                except ValueError as e:
+                    raise AnalysisError(f"Unexpected reply from Gemini: {r.text[:300]}") from e
+                blocked = (data.get("promptFeedback") or {}).get("blockReason")
+                if blocked:
+                    raise AnalysisError(f"Gemini refused the request ({blocked})")
+                # Now and then Gemini answers with search on but writes nothing at all (no candidates, no output
+                # tokens): asked once more, then answered without search.
+                try:
+                    cand = data["candidates"][0]
+                    text = "".join(p.get("text", "") for p in cand["content"]["parts"] if not p.get("thought"))
+                except (KeyError, IndexError, TypeError):
+                    cand, text = {}, ""
+                if text.strip():
+                    break
+                log.info("Gemini wrote nothing (finish reason %s)%s", cand.get("finishReason"), "; asking again" if not attempt else "")
+            else:
+                convlog.event("decision", what="search_reply_empty", note="Gemini wrote nothing twice; answering without search")
                 return None
-            if r.status_code >= 400:
-                raise AnalysisError(f"Gemini error {r.status_code}: {r.text[:300]}")
-            try:
-                data = r.json()
-                cand = data["candidates"][0]
-                text = "".join(p.get("text", "") for p in cand["content"]["parts"] if not p.get("thought"))
-            except (KeyError, IndexError, ValueError, TypeError) as e:
-                raise AnalysisError(f"Unexpected reply from Gemini: {r.text[:300]}") from e
             extra: dict = {}
             grounding = cand.get("groundingMetadata") or {}
             queries = grounding.get("webSearchQueries") or []

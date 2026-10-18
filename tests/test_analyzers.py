@@ -445,6 +445,32 @@ def test_gemini_without_search_support_falls_back_to_the_screenshot_alone(tmp_pa
     assert seen[0].endswith(":generateContent") and seen[1].endswith("/chat/completions")
 
 
+def test_an_empty_gemini_reply_is_asked_again_then_answered_without_search(tmp_path):
+    seen = []
+    empty = {"usageMetadata": {"promptTokenCount": 6499, "totalTokenCount": 6499}, "modelVersion": "gemini-2.5-flash"}
+
+    def handler(request):
+        seen.append(request.url.path)
+        if "generateContent" in request.url.path:
+            return httpx.Response(200, json=empty)
+        return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(GOOD)}}], "usage": {}})
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None)
+    a = LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert asyncio.run(a.analyze(png(), "image/png"))["title"] == GOOD["title"]
+    assert [p.rsplit(":", 1)[-1].rsplit("/", 1)[-1] for p in seen] == ["generateContent", "generateContent", "completions"]
+
+
+def test_a_gemini_prompt_it_blocks_says_why(tmp_path):
+    def handler(request):
+        return httpx.Response(200, json={"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}, "usageMetadata": {"promptTokenCount": 10}})
+
+    s = Settings(data_dir=tmp_path, api_token=None, hosted_llm="gemini", gemini_api_key="k", analyzer="local", local_llm_url=None)
+    a = LocalLLMAnalyzer(s, httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(AnalysisError, match="PROHIBITED_CONTENT"):
+        asyncio.run(a.analyze(png(), "image/png"))
+
+
 def test_gemini_search_can_be_turned_off(tmp_path):
     seen = []
 
