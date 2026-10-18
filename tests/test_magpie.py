@@ -1738,6 +1738,27 @@ def test_items_can_be_flagged_and_unflagged_as_reviewed_and_filtered_by_it(setti
         assert client.get("/api/items", params={"reviewed": True}).json() == []
 
 
+def test_an_article_listing_tools_without_the_schema_is_one_app_item_holding_them_all(settings):
+    # Gemini with search, held to no schema: the tools as {name, url} and the list filed as an article
+    from magpie.analyzers import normalize
+    listicle = normalize({**analysis(category="article", title="7 dev tools you should try", canonical_url="https://blog.example/tools",
+                                     details=blank_details()),
+                          "mentions": [{"name": "uv", "url": "https://docs.astral.sh/uv/"},
+                                       {"name": "ruff", "url": "https://github.com/astral-sh/ruff"},
+                                       {"name": "Obsidian", "url": "https://obsidian.md"}]})
+    client, _ = make_client(settings, listicle, {"https://blog.example/tools": httpx.Response(200, text="<title>x</title>")})
+    with client:
+        item_id = client.post("/api/items", files={"file": ("s.png", png_bytes(), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{item_id}").json()
+        assert item["category"] == "app" and item["canonical_url"] == "https://blog.example/tools"
+        assert [(m["title"], m["category"]) for m in item["metadata"]["mentions"]] == [("uv", "app"), ("ruff", "github_repo"), ("Obsidian", "app")]
+        assert [l["label"] for l in item["links"][:3]] == ["uv", "ruff", "Obsidian"]
+    repos = normalize({"category": "github_repo", "mentions": [{"name": "ruff", "url": "https://github.com/astral-sh/ruff"},
+                                                               {"name": "rye", "url": "https://github.com/astral-sh/rye"},
+                                                               {"name": "Zed", "url": "https://zed.dev"}]})
+    assert [m["category"] for m in repos["mentions"]] == ["github_repo", "github_repo", "app"]   # a homepage is no repository
+
+
 def test_listed_shows_given_by_name_only_get_their_imdb_page(settings):
     named = [{"title": "Slow Horses", "category": "tv_show", "year": 2022, "url": None},
              {"title": "Paradise", "category": "tv_show", "year": 2025, "url": None},

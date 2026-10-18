@@ -216,6 +216,19 @@ def test_normalize_and_parse_helpers():
     assert n["alternatives"] == [{"title": "X", "category": "other", "year": None, "canonical_url": None, "why": ""}]
 
 
+def test_normalize_keeps_a_list_written_without_the_schema():
+    # Gemini with search, held to no schema, listed "10 best shows" as {name, url} and its links as bare addresses
+    n = normalize({"category": "tv_show", "links": ["https://www.brit.co/best-mystery-thriller-tv-shows/"],
+                   "related": [{"title": "Brit + Co", "url": "https://www.brit.co"}],
+                   "mentions": [{"name": "Furious", "url": "https://www.imdb.com/title/tt36303968/"},
+                                {"name": "Slow Horses", "url": "https://www.imdb.com/title/tt5875444/"},
+                                {"name": "uv", "url": "https://github.com/astral-sh/uv"}]})
+    assert [(m["title"], m["category"]) for m in n["mentions"]] == [("Furious", "tv_show"), ("Slow Horses", "tv_show"), ("uv", "github_repo")]
+    assert n["links"] == [{"label": "https://www.brit.co/best-mystery-thriller-tv-shows/", "url": "https://www.brit.co/best-mystery-thriller-tv-shows/"}]
+    assert n["related"][0]["label"] == "Brit + Co"
+    assert normalize({"category": "article", "mentions": [{"name": "Furious"}]})["mentions"] == []   # no kind to give it
+
+
 # ---- router ---------------------------------------------------------------------
 
 

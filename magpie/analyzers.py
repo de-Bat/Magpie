@@ -105,9 +105,14 @@ def normalize(raw: dict) -> dict:
     except (TypeError, ValueError):
         out["year"] = None
     out["tags"] = [str(t) for t in out["tags"]] if isinstance(out["tags"], list) else []
-    out["links"] = [l for l in out["links"] if isinstance(l, dict) and l.get("url")] if isinstance(out["links"], list) else []
-    out["related"] = clean_related(out["related"] if isinstance(out["related"], list) else [])
-    out["mentions"] = clean_mentions(out["mentions"])
+    # held to no schema (Gemini with search), a model may give a link as a bare address and name things `title` or `name`
+    links = out["links"] if isinstance(out["links"], list) else []
+    out["links"] = [{"label": l, "url": l} if isinstance(l, str) else l for l in links
+                    if (isinstance(l, str) and l.startswith(("http://", "https://"))) or (isinstance(l, dict) and l.get("url"))]
+    related = out["related"] if isinstance(out["related"], list) else []
+    out["related"] = clean_related([{**r, "label": r.get("label") or r.get("title") or r.get("name")} if isinstance(r, dict) else r
+                                    for r in related])
+    out["mentions"] = clean_mentions(out["mentions"], default_category=out["category"])
     out["alternatives"] = [
         {"title": str(a.get("title")), "category": a.get("category") if a.get("category") in CATEGORIES else "other",
          "year": a.get("year") if isinstance(a.get("year"), int) else None,
@@ -218,7 +223,9 @@ class LocalLLMAnalyzer:
         search = self.web_search and web and self.vision
         keys = FULL_SCHEMA["properties"] if search else SCHEMA["properties"]
         prompt += ("\n\nAnswer with JSON only, with these keys: " + ", ".join(keys) +
-                   ". confidence is an integer 0-100. details has these keys: " + ", ".join(DETAIL_KEYS) + ".")
+                   ". confidence is an integer 0-100. details has these keys: " + ", ".join(DETAIL_KEYS) + ". " +
+                   " ".join(f"Each of {k} is an object with keys {', '.join(v['items']['properties'])}." for k, v in keys.items()
+                            if v.get("type") == "array" and v["items"].get("type") == "object"))
 
         content: list[dict] = [{"type": "text", "text": prompt}]
         if self.vision and image is not None:

@@ -127,21 +127,41 @@ def clean_related(items, exclude: list[str | None] = (), limit: int = MAX_RELATE
 MENTION_KINDS = ("movie", "tv_show", "app", "github_repo")
 
 
-def clean_mentions(items) -> list[dict]:
+def mention_kind(url: str, default_category: str | None) -> str | None:
+    """What a listed thing given without a category is: a github.com repository is a repository; an IMDb page is a film
+    or show (which one only a list of films or shows can say); any other page in a list that isn't of films or shows
+    is an app's homepage (the article holding them is filed as an "article" now and then)."""
+    screen = default_category if default_category in ("movie", "tv_show") else None
+    if _host(url) == "github.com" and classify_url(url):
+        return "github_repo"
+    if _host(url).endswith("imdb.com"):
+        return screen
+    if screen or not url.startswith(("http://", "https://")):
+        return screen or (default_category if default_category in MENTION_KINDS else None)
+    return "app"
+
+
+def clean_mentions(items, default_category: str | None = None) -> list[dict]:
     """The films, shows, apps or repositories a capture lists ({title, category, year, url}): malformed ones and
-    repeats dropped, an address only when it is one."""
+    repeats dropped, an address only when it is one. A model held to no schema may call the title `name` and leave out
+    the category: then its address tells (`mention_kind`), else the list's own category (`default_category`)."""
     out, seen = [], set()
     for it in items if isinstance(items, list) else []:
-        if not isinstance(it, dict) or it.get("category") not in MENTION_KINDS:
+        if not isinstance(it, dict):
             continue
-        title = re.sub(r"\s+", " ", str(it.get("title") or "")).strip()[:120]
+        category = it.get("category")
+        if category not in MENTION_KINDS:
+            category = mention_kind(it.get("url") if isinstance(it.get("url"), str) else "", default_category)
+        if category not in MENTION_KINDS:
+            continue
+        title = re.sub(r"\s+", " ", str(it.get("title") or it.get("name") or "")).strip()[:120]
         url = it.get("url") if isinstance(it.get("url"), str) and it["url"].startswith(("http://", "https://")) else None
         key = norm_url(url) if url else title.lower()
         if not title or key in seen:
             continue
         seen.add(key)
         year = it.get("year") if isinstance(it.get("year"), int) and not isinstance(it.get("year"), bool) else None
-        out.append({"title": title, "category": it["category"], "year": year, "url": url.strip() if url else None})
+        out.append({"title": title, "category": category, "year": year, "url": url.strip() if url else None})
     return out
 
 
