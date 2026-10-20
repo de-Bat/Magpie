@@ -1845,3 +1845,22 @@ def test_a_homepage_that_is_another_projects_gives_way_to_the_repositorys_own():
     out = resolve(vscode, {"https://api.github.com/repos/microsoft/vscode": httpx.Response(200, json={"homepage": "https://code.visualstudio.com"})})
     assert out["category"] == "app" and out["canonical_url"] == "https://code.visualstudio.com"
     assert {"label": "GitHub", "url": "https://github.com/microsoft/vscode"} in out["links"]
+
+
+def test_items_can_be_favorited_and_put_on_the_watchlist_and_filtered_by_either(settings):
+    client, analyzer = make_client(settings, analysis())
+    with client:
+        first = client.post("/api/items", files={"file": ("a.png", png_bytes(), "image/png")}).json()["id"]
+        analyzer.result = analysis(title="pypa/pip", canonical_url="https://github.com/pypa/pip", details=blank_details())
+        second = client.post("/api/items", files={"file": ("b.png", png_bytes((50, 70)), "image/png")}).json()["id"]
+        item = client.get(f"/api/items/{first}").json()
+        assert item["favorite"] is False and item["watchlist"] is False
+        assert client.patch(f"/api/items/{first}", json={"favorite": True}).json()["favorite"] is True
+        assert client.patch(f"/api/items/{second}", json={"watchlist": True}).json()["watchlist"] is True
+        assert [i["id"] for i in client.get("/api/items", params={"favorite": True}).json()] == [first]
+        assert [i["id"] for i in client.get("/api/items", params={"watchlist": True}).json()] == [second]
+        assert [i["id"] for i in client.get("/api/items", params={"favorite": False}).json()] == [second]
+        client.post(f"/api/items/{first}/reanalyze")   # your flags outlive a new identification
+        assert client.get(f"/api/items/{first}").json()["favorite"] is True
+        assert client.patch(f"/api/items/{first}", json={"favorite": False}).json()["favorite"] is False
+        assert client.get("/api/items", params={"favorite": True}).json() == []

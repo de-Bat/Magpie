@@ -117,6 +117,8 @@ MIGRATIONS = {
     "captures": "TEXT NOT NULL DEFAULT '[]'",    # further screenshots of the same thing: [{image_file, image_hash, original_hash?, created_at}]
     "original_hash": "TEXT",                     # SHA256 of the photo as it was on the device, when the client converted it before upload
     "reviewed": "INTEGER NOT NULL DEFAULT 0",    # the user has gone over this item (a flag of their own, whatever Magpie found)
+    "favorite": "INTEGER NOT NULL DEFAULT 0",    # the user's favorite
+    "watchlist": "INTEGER NOT NULL DEFAULT 0",   # the user wants to watch / read / try it later
 }
 # Below this confidence an identification is flagged for the user to check.
 REVIEW_THRESHOLD = 60
@@ -127,7 +129,7 @@ VERIFYING_SOURCES = {"github", "tmdb", "tmdb+omdb", "omdb", "openlibrary", "sche
 EDITABLE_COLUMNS = {
     "status", "error", "note", "category", "source_platform", "title", "subtitle",
     "summary", "canonical_url", "image_url", "metadata", "links", "analysis",
-    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "reviewed", "related", "retry_at", "captures",
+    "confidence", "confidence_reason", "alternatives", "corrected", "confirmed", "reviewed", "favorite", "watchlist", "related", "retry_at", "captures",
 }
 
 
@@ -255,6 +257,8 @@ class Database:
         unverified: bool = False,
         to_check: bool = False,
         reviewed: bool | None = None,
+        favorite: bool | None = None,
+        watchlist: bool | None = None,
         limit: int = 200,
         offset: int = 0,
     ) -> list[dict]:
@@ -270,9 +274,10 @@ class Database:
         if category:
             where.append("i.category = ?")
             params.append(category)
-        if reviewed is not None:
-            where.append("i.reviewed = ?")
-            params.append(int(reviewed))
+        for flag, wanted in (("reviewed", reviewed), ("favorite", favorite), ("watchlist", watchlist)):
+            if wanted is not None:
+                where.append(f"i.{flag} = ?")
+                params.append(int(wanted))
         if needs_review:
             where.append(f"i.status = 'ready' AND i.corrected = 0 AND i.confidence < {REVIEW_THRESHOLD}")
         for tag in tags or []:
@@ -511,7 +516,8 @@ class Database:
         )
         sources = (item.get("metadata") or {}).get("sources") or []
         item["confirmed"] = bool(item.get("confirmed"))
-        item["reviewed"] = bool(item.get("reviewed"))
+        for flag in ("reviewed", "favorite", "watchlist"):
+            item[flag] = bool(item.get(flag))
         item["verified"] = (item["corrected"] or item["confirmed"] or bool(VERIFYING_SOURCES.intersection(sources))
                             or (item.get("confidence") or 0) >= self.verified_confidence())
         item["to_check"] = (item.get("status") == "error" or item["needs_review"]

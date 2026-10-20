@@ -196,6 +196,15 @@ kbd { font: 11px ui-monospace, Menlo, monospace; font-size: calc(11px * var(--ui
 .card.reviewed .cover { opacity: .78; }
 .card.reviewed:hover .cover, .card.reviewed:focus-visible .cover { opacity: 1; }
 .review-btn[aria-pressed="true"] { background: #1f9d55; color: #fff; border-color: #1f9d55; }
+/* your favorites and watchlist: small badges in the cover's bottom corner, and lit toggles in the details */
+.list-marks { position: absolute; right: 8px; bottom: 8px; z-index: 2; display: flex; gap: 4px; }
+.list-mark { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: calc(12px * var(--ui-scale)); line-height: 1;
+  background: rgb(0 0 0 / .55); box-shadow: 0 0 0 1.5px rgb(255 255 255 / .7); }
+.list-mark.favorite { color: #ffc531; }
+.cover:has(.list-marks) .cover-title { right: calc(7% + 26px); }
+.cover:has(.list-mark + .list-mark) .cover-title { right: calc(7% + 52px); }
+.favorite-btn[aria-pressed="true"] { background: #e8a300; color: #fff; border-color: #e8a300; }
+.watchlist-btn[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: var(--accent); }
 .cover.busy::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: linear-gradient(90deg, transparent, #fff, transparent) 0 0 / 60% 100% no-repeat; animation: slide 1.4s linear infinite; }
 @keyframes slide { from { background-position: -60% 0; } to { background-position: 160% 0; } }
 @media (prefers-reduced-motion: reduce) { .cover.busy::after { animation: none; background: #fff; opacity: .6; } .cover, .card:hover .cover { transition: none; transform: none; } }
@@ -220,6 +229,8 @@ kbd { font: 11px ui-monospace, Menlo, monospace; font-size: calc(11px * var(--ui
 .grid.list .typechip, .grid.list .flag { display: none; }
 .grid.list .cover.busy::after { inset: 0; height: auto; background: none; animation: none; border: 3px solid oklch(0.82 0.17 85); border-radius: inherit; }
 .grid.list .rev-mark { right: 4px; top: 4px; width: 18px; height: 18px; font-size: calc(10px * var(--ui-scale)); }
+.grid.list .list-marks { right: 3px; bottom: 3px; gap: 2px; }
+.grid.list .list-mark { width: 16px; height: 16px; font-size: calc(9px * var(--ui-scale)); }
 .grid.list .cover.has-img .cover-img, .grid.list .cover.wide-img .cover-img { top: 0; height: 100%; object-fit: cover; filter: none; }
 .grid.list .cover.logo-img .cover-img { inset: 0; left: 0; top: 0; width: 100%; height: 100%; transform: none; border-radius: 0; box-shadow: none; padding: 12%; }
 .grid.list .cover.logo-img .glyph { display: none; }
@@ -408,7 +419,7 @@ details pre { white-space: pre-wrap; font-size: calc(12px * var(--ui-scale)); ba
   .subbar { gap: 6px; padding-top: 10px; padding-bottom: 10px; }
   .subbar .seg { padding: 2px; }
   .subbar .seg button { padding: 4px 9px; font-size: calc(12.5px * var(--ui-scale)); }
-  #reviewed-count, #unreviewed-count { display: none; }   /* the reviewed filters fit beside the others; their counts don't */
+  #reviewed-count, #unreviewed-count, #favorite-count, #watchlist-count { display: none; }   /* the reviewed filters fit beside the others; their counts don't */
   .subbar #tag-btn { padding: 4px 10px; }
   .subbar .count { margin-left: 2px; }
   .cols-pick { padding: 2px 0 2px 8px; gap: 0; }
@@ -846,6 +857,15 @@ button.act-main:hover .act-text { text-decoration: underline; }
 
 .lbl-short { display: none; }
 @media (max-width: 400px) { .subbar .lbl-short { display: inline; } }
+/* favorites and watchlist filters: their icon alone below desktop width, so the Show row still fits */
+@media (max-width: 900px) {
+  .subbar .flag-filter .lbl-full { display: none; }
+  .subbar .flag-filter .lbl-short { display: inline; }
+  /* when the filters still don't fit, they scroll sideways instead of pushing Tags, columns and layout to a second row */
+  .subbar .show-seg { flex: 1000 1 0; min-width: 0; max-width: max-content; overflow-x: auto; scrollbar-width: none; }
+  .subbar .show-seg::-webkit-scrollbar { display: none; }
+  .subbar .show-seg button { flex-shrink: 0; white-space: nowrap; }
+}
 .fab-split { direction: ltr; }   /* the arrow stays on the right-hand end, also in right-to-left languages */
 
 /* GitHub repo badges */

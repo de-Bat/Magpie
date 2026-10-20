@@ -84,6 +84,8 @@ class ItemPatch(BaseModel):
     tags: list[str] | None = None
     confirmed: bool | None = None   # the user says this identification is right
     reviewed: bool | None = None    # the user has gone over this item
+    favorite: bool | None = None
+    watchlist: bool | None = None   # to watch / read / try later
 
 
 class BulkRequest(BaseModel):
@@ -476,11 +478,13 @@ def create_app(
         unverified: bool = Query(False, description="Only items no metadata source (TMDB, GitHub, ...) confirmed and you haven't corrected"),
         to_check: bool = Query(False, description="Only items that failed, are unsure, or that nothing confirmed"),
         reviewed: bool | None = Query(None, description="Only items you marked as reviewed (true) or haven't (false)"),
+        favorite: bool | None = Query(None, description="Only your favorites (true) or the rest (false)"),
+        watchlist: bool | None = Query(None, description="Only items on your watchlist (true) or not (false)"),
         limit: int = Query(200, le=500),
         offset: int = 0,
     ):
         return db.list_items(q=q, category=category, tags=tag, needs_review=needs_review, unverified=unverified, to_check=to_check,
-                             reviewed=reviewed, limit=limit, offset=offset)
+                             reviewed=reviewed, favorite=favorite, watchlist=watchlist, limit=limit, offset=offset)
 
     @app.get("/api/items/{item_id}")
     def get_item(item_id: str):
@@ -495,7 +499,7 @@ def create_app(
         tags = fields.pop("tags", None)
         if tags is not None:
             db.set_tags(item_id, tags)
-        for flag in ("confirmed", "reviewed"):
+        for flag in ("confirmed", "reviewed", "favorite", "watchlist"):
             if fields.get(flag) is not None:
                 fields[flag] = int(bool(fields[flag]))
             else:

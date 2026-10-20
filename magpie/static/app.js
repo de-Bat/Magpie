@@ -586,6 +586,18 @@ async function toggleReviewed(id) {
   toast(tr(item.reviewed ? "Marked as not reviewed." : "Marked as reviewed."));
 }
 
+// Your own lists: favorites, and things to watch / read / try later.
+const LIST_FLAGS = {
+  favorite: { icon: "★", on: "Favorite: remove from favorites", off: "Add to favorites", added: "Added to favorites.", removed: "Removed from favorites." },
+  watchlist: { icon: "👁", on: "On your watchlist: remove", off: "Add to watchlist", added: "Added to your watchlist.", removed: "Removed from your watchlist." },
+};
+async function toggleFlag(id, flag) {
+  const item = state.items.get(id);
+  if (!item) return;
+  await editItem(id, { [flag]: !item[flag] });
+  toast(tr(item[flag] ? LIST_FLAGS[flag].removed : LIST_FLAGS[flag].added));
+}
+
 async function verifyItem(id) {
   await editItem(id, { confirmed: true });
   toast("Marked as correct.");
@@ -2365,6 +2377,7 @@ function filteredItems() {
       if (state.show === "check" && !needsCheck(item)) return false;
       if (state.show === "reviewed" && !item.reviewed) return false;
       if (state.show === "unreviewed" && item.reviewed) return false;
+      if (state.show in LIST_FLAGS && !item[state.show]) return false;
       if (tags.some((t) => !(item.tags || []).some((x) => x === t || x.startsWith(t)))) return false;
       if (!words.length) return true;
       const tokens = searchBlob(item).split(/[^\p{L}\p{N}]+/u);
@@ -2631,6 +2644,7 @@ function renderFilters() {
   const reviewed = items.filter((i) => i.reviewed).length;
   $("#reviewed-count").textContent = reviewed || "";
   $("#unreviewed-count").textContent = items.length - reviewed || "";
+  for (const flag in LIST_FLAGS) $(`#${flag}-count`).textContent = items.filter((i) => i[flag]).length || "";
   document.querySelectorAll("[data-show]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.show === state.show)));
   document.querySelectorAll("[data-layout]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === state.layout)));
 
@@ -2685,6 +2699,8 @@ function coverHtml(item, { chip = true } = {}) {
     : item.status === "error" ? `<span class="flag err" title="Analysis failed">!</span>`
     : item.needs_review ? `<span class="flag warn" title="Not sure (${esc(item.confidence)}%). ${esc(item.confidence_reason || "")}">!</span>`
     : isUnverified(item) ? `<span class="flag unv" title="No source such as TMDB or GitHub confirmed this">○</span>` : "";
+  const marks = Object.keys(LIST_FLAGS).filter((f) => item[f]);
+  const listMarks = marks.length ? `<span class="list-marks">${marks.map((f) => `<span class="list-mark ${f}" title="${esc(tr(f === "favorite" ? "Favorite" : "Watchlist"))}" aria-label="${esc(tr(f === "favorite" ? "Favorite" : "Watchlist"))}">${LIST_FLAGS[f].icon}</span>`).join("")}</span>` : "";
   const reviewed = item.reviewed ? `<span class="rev-mark" title="${esc(tr("Reviewed"))}" aria-label="${esc(tr("Reviewed"))}">✓</span>` : "";
   const label = item.status === "error" ? (item.retry_at ? "Waiting" : "Failed") : busy ? (item.batch_pending ? "Queued" : "Analyzing") : typeName(item.category);
   return `<div class="cover t-${themeOf(item.category)} ${pic ? (logo ? "logo-img" : wide ? `wide-img${backdrop ? " bd" : ""}` : "has-img") : ""} ${busy ? "busy" : ""}">${
@@ -2694,7 +2710,7 @@ function coverHtml(item, { chip = true } = {}) {
     // wide pictures are shown whole, over a blurred, enlarged copy of themselves (the same URL, so no extra download)
     backdrop ? `<img class="cover-bd" src="${esc(pic)}" alt="" aria-hidden="true" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
     pic ? `<img class="cover-img" src="${esc(pic)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ""}${
-    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${elapsedHtml(item)}${multiBadge(item)}</span>` : ""}${flag}${reviewed}</div>`;
+    chip ? `<span class="typechip">${typeIcon(themeOf(item.category))}<span class="tlabel">${esc(label)}</span>${elapsedHtml(item)}${multiBadge(item)}</span>` : ""}${flag}${reviewed}${listMarks}</div>`;
 }
 
 // How long an analysis has been running, counted from when the item went to "processing" (its updated_at).
@@ -3030,6 +3046,7 @@ function renderDetail(source) {
       <div class="actions primary-actions">
         ${canonical ? `<a class="btn primary open-src" href="${esc(canonical)}" target="_blank" rel="noopener" aria-label="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}" title="${esc(tr("Open {host}", { host: hostOf(canonical) || "source" }))}"><span class="open-ico" aria-hidden="true">${sourceIconHtml(hostOf(canonical))}</span> ↗</a>` : ""}
         ${item.pending_upload ? "" : `<button class="btn icon-btn review-btn" type="button" data-action="review" aria-pressed="${!!item.reviewed}" title="${esc(tr(item.reviewed ? "Reviewed: mark as not reviewed" : "Mark as reviewed"))}" aria-label="${esc(tr(item.reviewed ? "Reviewed: mark as not reviewed" : "Mark as reviewed"))}"><span aria-hidden="true">${item.reviewed ? "✓" : "○"}</span></button>`}
+        ${item.pending_upload ? "" : Object.entries(LIST_FLAGS).map(([f, l]) => `<button class="btn icon-btn flag-btn ${f}-btn" type="button" data-action="${f}" aria-pressed="${!!item[f]}" title="${esc(tr(item[f] ? l.on : l.off))}" aria-label="${esc(tr(item[f] ? l.on : l.off))}"><span aria-hidden="true">${l.icon}</span></button>`).join("")}
         ${item.status === "ready" && fixing !== item.id ? iconButton("fix", "✎", item.needs_review ? "Is this wrong? Fix it" : "Wrong? Fix it") : ""}
         ${item.pending_upload ? "" : iconButton("refresh", "⟳", "Refresh metadata")}
         <details class="menu"><summary class="btn icon-btn" title="${esc(tr("More"))}" aria-label="${esc(tr("More"))}">⋯</summary><div class="menu-list">
@@ -3601,6 +3618,7 @@ document.addEventListener("click", async (e) => {
       case "toggle-cover-size": return toggleDetailCoverSize();
       case "verify": return verifyItem(id);
       case "review": return toggleReviewed(id);
+      case "favorite": case "watchlist": return toggleFlag(id, t.dataset.action);
       case "fix": fixing = id; renderDetail(item); return $("#correct-form input[name=title]")?.focus();
       case "cancel-fix": fixing = null; return renderDetail(item);
       case "refresh": return refreshItemMetadata(id);
