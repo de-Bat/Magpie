@@ -279,10 +279,30 @@ def _extract_page_urls(page: Page) -> list[str]:
     return urls
 
 
-async def _outbound_article_link(page: Page, title: str, wanted_hosts: list[str], http: httpx.AsyncClient) -> str | None:
+_AGGREGATOR_REDIRECT = re.compile(r"^/r/[^/]+/?$")   # daily.dev's "Read post" button: api.daily.dev/r/<id> -> the article
+
+
+async def _follow_redirect(url: str, http: httpx.AsyncClient) -> str | None:
+    """Where an aggregator's redirect link leads (the publisher may wall the page off: its address is all we need)."""
+    try:
+        r = await safe_get(http, url, headers={"User-Agent": SEARCH_UA}, timeout=8)
+    except (httpx.HTTPError, BlockedURL):
+        return None
+    target = str(r.url)
+    return target if target != url and not is_aggregator(target) else None
+
+
+async def _outbound_article_link(page: Page, title: str, wanted_hosts: list[str], http: httpx.AsyncClient,
+                                 publisher: str | None = None) -> str | None:
+    """The original article an aggregator's page links to. The aggregator links to it as this post's source, so a
+    publisher that walls servers off (XDA answers 403) is trusted on a partial fit of the address, as the model's own sources are."""
     raw_urls = _extract_page_urls(page)
     candidates: list[str] = []
     page_host = _site(page.url)
+
+    for u in list(raw_urls):
+        if is_aggregator(u) and _AGGREGATOR_REDIRECT.match(urlsplit(u).path) and (target := await _follow_redirect(u, http)):
+            raw_urls.append(strip_tracking(target) or target)
 
     for u in raw_urls:
         u_host = _site(u)
@@ -299,7 +319,7 @@ async def _outbound_article_link(page: Page, title: str, wanted_hosts: list[str]
         return None
 
     def score(u: str) -> tuple[int, float]:
-        on_wanted = 1 if any(_site(u) == wh or _site(u).endswith("." + wh) for wh in wanted_hosts) else 0
+        on_wanted = 1 if _on_site(u, wanted_hosts, publisher) else 0
         slug_fit = _share(title, _slug_words(u))
         return (on_wanted, slug_fit)
 
@@ -307,7 +327,7 @@ async def _outbound_article_link(page: Page, title: str, wanted_hosts: list[str]
     scored.sort(key=score, reverse=True)
 
     for cand in scored[:4]:
-        verdict, found = await judge(title, cand, "", wanted_hosts, http)
+        verdict, found = await judge(title, cand, "", wanted_hosts, http, publisher, trusted=True)
         if found:
             return found
 
@@ -469,7 +489,7 @@ async def repair_link(analysis: dict, http: httpx.AsyncClient) -> dict:
                 wanted_hosts.append(pub_host)
         real = None
         if page:
-            real = await _outbound_article_link(page, title, wanted_hosts, http)
+            real = await _outbound_article_link(page, title, wanted_hosts, http, publisher)
         if not real:
             real = await find_article_url(title, None, http, publisher, capture_sites(analysis), sources, source_titles=source_titles)
         if real:
