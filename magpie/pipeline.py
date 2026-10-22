@@ -605,6 +605,14 @@ class Pipeline:
             new_image = existing_img or fresh_img
             new_kind = existing_kind if new_image == existing_img else fresh_kind
 
+        if self.settings.enrich and new_image and not any(e.image_url == new_image for e in enrichments):
+            # A picture no source returned this time (kept, or only the model's guess) may be dead: check it,
+            # and fall back to whatever cover the sources did find.
+            if not await best_image(self.http, [new_image]):
+                enrichment = next((e for e in enrichments if e.image_url), None)
+                new_image = enrichment.image_url if enrichment else None
+                new_kind = enrichment.image_kind if enrichment else None
+
         page_canonical = fresh.get("canonical_url") if (from_page and not is_aggregator(fresh.get("canonical_url"))) else None
         target_url = page_canonical or canonical_after_repair or fresh.get("canonical_url") or analysis.get("canonical_url")
 
