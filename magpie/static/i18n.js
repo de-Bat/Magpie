@@ -186,7 +186,7 @@ function getLanguage() {
     const saved = localStorage.getItem("magpie.lang");
     if (saved && supportedLanguage(saved)) return saved;
   } catch {}
-  for (const code of navigator.languages || [navigator.language]) {
+  for (const code of typeof navigator === "undefined" ? [] : navigator.languages || [navigator.language]) {
     const found = supportedLanguage(code);
     if (found) return found;
   }
