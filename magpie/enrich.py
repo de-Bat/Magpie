@@ -270,13 +270,12 @@ async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient,
 
     # 1. Prefer logo: project logo from README, or organization avatar
     logo_candidates = readme_logos(readme, full_name)
-    if not logo_candidates:   # the README shows no logo: look for a logo file committed in the repository
-        logo_candidates = await repo_logos(http, full_name)
+    logo = await best_image(http, logo_candidates, verified_only=True, allow_svg=True) if logo_candidates else None
+    if not logo:   # the README shows no usable logo: look for a logo file committed in the repository
+        logo = await best_image(http, await repo_logos(http, full_name), verified_only=True, allow_svg=True)
     owner = (repo.get("owner") if isinstance(repo, dict) else None) or {}
-    if owner.get("type") == "Organization" and owner.get("avatar_url"):
-        logo_candidates.append(owner["avatar_url"])
-
-    logo = await best_image(http, logo_candidates, verified_only=True, allow_svg=True)
+    if not logo and owner.get("type") == "Organization" and owner.get("avatar_url"):
+        logo = await best_image(http, [owner["avatar_url"]], verified_only=True, allow_svg=True)
     if logo:
         return logo, "logo"
 
