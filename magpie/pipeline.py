@@ -29,6 +29,8 @@ from .enrich import Enrichment, github_homepage, is_multi, run_enrichers
 
 log = logging.getLogger(__name__)
 
+_REPO_LOGO_URL = re.compile(r"avatars\.githubusercontent\.com|[_\-/.](?:logo|icon|brand)[_\-/.]", re.I)   # as in app.js coverHtml
+
 
 LOOSE_CATEGORIES = {None, "", "other", "article", "app", "product"}
 
@@ -545,7 +547,10 @@ class Pipeline:
     async def _clear_logo_background(self, fields: dict) -> None:
         """A logo published on a solid background is kept as a PNG with that background transparent."""
         metadata, image_url = fields.get("metadata") or {}, fields.get("image_url")
-        if image_url and metadata.get("image_kind") == "logo" and self.settings.enrich:
+        category = fields.get("category") or (fields.get("analysis") or {}).get("category")
+        # the card also shows a repository's avatar or logo-named picture as a logo, even without image_kind
+        repo_logo = category == "github_repo" and bool(image_url) and bool(_REPO_LOGO_URL.search(image_url))
+        if image_url and (metadata.get("image_kind") == "logo" or repo_logo) and self.settings.enrich:
             fields["image_url"] = await transparent_logo(self.http, image_url) or image_url
 
     async def _mark_opaque(self, metadata: dict, image_url: str | None) -> None:
