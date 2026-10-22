@@ -1619,6 +1619,39 @@ async def test_daily_dev_link_resolved_to_publisher_article_via_search(settings)
     assert any(l.get("url") == aggregator_url for l in fixed.get("links") or [])
 
 
+async def test_daily_dev_link_resolved_to_walled_xda_article(settings):
+    # XDA answers servers with 403: the article daily.dev links to is still the original, its address fits the headline
+    from magpie.findlink import repair_link
+    aggregator_url = "https://app.daily.dev/posts/two-old-gpus-salvaged-xyz"
+    real_url = "https://www.xda-developers.com/salvaged-two-old-gpus-work/"
+    routes = {
+        aggregator_url: httpx.Response(200, text=f'<html><head><title>{TITLE} | daily.dev</title></head><body><a href="{real_url}">Read on XDA Developers</a></body></html>', headers={"content-type": "text/html"}),
+        "https://www.xda-developers.com/": httpx.Response(403),
+    }
+    a = analysis(category="article", title=TITLE, canonical_url=aggregator_url, details={**blank_details(), "publisher": "XDA"})
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real_url
+    assert (fixed.get("details") or {}).get("post_url") == aggregator_url
+
+
+async def test_daily_dev_read_post_redirect_leads_to_xda_article(settings):
+    # daily.dev's "Read post" button is api.daily.dev/r/<id>, a redirect to the article (with daily.dev's tracking)
+    from magpie.findlink import repair_link
+    aggregator_url = "https://app.daily.dev/posts/two-old-gpus-salvaged-abc"
+    redirect = "https://api.daily.dev/r/abc123"
+    real_url = "https://www.xda-developers.com/salvaged-two-old-gpus-work/"
+    routes = {
+        aggregator_url: httpx.Response(200, text=f'<html><head><title>{TITLE} | daily.dev</title></head><body><a href="{redirect}">Read post</a></body></html>', headers={"content-type": "text/html"}),
+        redirect: httpx.Response(302, headers={"location": real_url + "?utm_source=daily.dev"}),
+        "https://www.xda-developers.com/": httpx.Response(403),
+    }
+    a = analysis(category="article", title=TITLE, canonical_url=aggregator_url, details={**blank_details(), "publisher": "XDA"})
+    async with mock_http(routes) as http:
+        fixed = await repair_link(a, http)
+    assert fixed["canonical_url"] == real_url
+
+
 def test_refresh_metadata_resolves_daily_dev_and_updates_card_image(settings):
     aggregator_url = "https://app.daily.dev/posts/two-old-gpus-salvaged"
     real_url = "https://www.xda-developers.com/salvaged-two-old-gpus-work/"
