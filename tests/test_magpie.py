@@ -1705,6 +1705,24 @@ def test_refresh_metadata_preserves_candidate_image_on_walled_site(settings):
         assert (item.get("metadata") or {}).get("image_kind") != "logo"
 
 
+def test_refresh_metadata_replaces_a_dead_cover_with_the_one_the_page_offers(settings):
+    page = "https://blog.example/gpu-post"
+    dead_img, page_img = "https://cdn.example/dead.jpg", "https://blog.example/og-cover.jpg"
+    routes = {
+        page: httpx.Response(200, text=f'<html><head><title>{TITLE}</title><meta property="og:image" content="{page_img}"></head></html>',
+                             headers={"content-type": "text/html"}),
+        dead_img: httpx.Response(404),
+        page_img: httpx.Response(200, content=png_bytes((400, 300)), headers={"content-type": "image/jpeg"}),
+    }
+    init_a = analysis(category="article", title=TITLE, canonical_url=page, image_url=None, details=blank_details())
+    client, _ = make_client(settings, init_a, routes)
+    with client:
+        item_id = client.post("/api/items", files={"file": ("shot.png", png_bytes(), "image/png")}).json()["id"]
+        client.patch(f"/api/items/{item_id}", json={"image_url": dead_img})
+        item = client.post(f"/api/items/{item_id}/refresh-metadata").json()
+        assert item["image_url"] == page_img
+
+
 
 SHOWS = [{"title": "The Bear", "category": "tv_show", "year": 2022, "url": "https://www.imdb.com/title/tt14452776/"},
          {"title": "Severance", "category": "tv_show", "year": 2022, "url": "https://www.imdb.com/title/tt11280740/"},
