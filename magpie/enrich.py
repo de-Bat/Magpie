@@ -21,7 +21,7 @@ from .config import Settings
 from .fetch import MAX_BYTES, BlockedURL, safe_get
 from .related import outbound_related, readme_related, same_site, text_related
 from .images import (LOGO_ASPECT, best_image, manifest_icons, oembed_thumbnail, origin_icons, package_logos, page_image_candidates,
-                     page_pictures, readme_images, readme_logos, site_logos, verify_image, youtube_thumbnails)
+                     page_pictures, readme_images, readme_logos, repo_logos, site_logos, verify_image, youtube_thumbnails)
 
 log = logging.getLogger(__name__)
 
@@ -270,6 +270,8 @@ async def github_image(full_name: str, headers: dict, http: httpx.AsyncClient,
 
     # 1. Prefer logo: project logo from README, or organization avatar
     logo_candidates = readme_logos(readme, full_name)
+    if not logo_candidates:   # the README shows no logo: look for a logo file committed in the repository
+        logo_candidates = await repo_logos(http, full_name)
     owner = (repo.get("owner") if isinstance(repo, dict) else None) or {}
     if owner.get("type") == "Organization" and owner.get("avatar_url"):
         logo_candidates.append(owner["avatar_url"])

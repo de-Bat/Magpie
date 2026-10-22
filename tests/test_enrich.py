@@ -83,6 +83,25 @@ async def test_github_image_prefers_logo_over_social_preview():
         assert kind == "logo"
 
 
+async def test_github_image_uses_a_committed_logo_file_when_readme_shows_none():
+    import httpx
+    from magpie.enrich import github_image
+
+    listing = {"files": [{"name": "/src/index.js"}, {"name": "/docs/img/logo.png"}, {"name": "/logo.png"}, {"name": "/node_modules/x/logo.png"}]}
+    routes = {
+        "https://data.jsdelivr.com/v1/packages/gh/john/myrepo@HEAD?structure=flat": httpx.Response(200, json=listing),
+        "https://cdn.jsdelivr.net/gh/john/myrepo@HEAD/logo.png": httpx.Response(200, content=_png((256, 256)), headers={"content-type": "image/png"}),
+    }
+
+    def handler(request):
+        return routes.get(str(request.url), httpx.Response(404))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        url, kind = await github_image("john/myrepo", {}, http, readme="# MyRepo\nNo picture.", repo={"owner": {"login": "john", "type": "User"}})
+        assert url == "https://cdn.jsdelivr.net/gh/john/myrepo@HEAD/logo.png"
+        assert kind == "logo"
+
+
 async def test_github_image_uses_org_avatar_when_no_readme_logo():
     import httpx
     from magpie.enrich import github_image

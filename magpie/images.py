@@ -285,6 +285,21 @@ async def package_logos(http: httpx.AsyncClient, name: str, version: str | None)
     return [f"https://cdn.jsdelivr.net/npm/{name}@{version}{f}" for f in hits[:3]]
 
 
+_REPO_LOGO_FILE = re.compile(r"(^|/)(logo|icon)[^/]*\.(png|jpe?g|webp)$", re.I)
+
+
+async def repo_logos(http: httpx.AsyncClient, full_name: str) -> list[str]:
+    """Logo files committed in a repository (jsDelivr lists them) for READMEs that don't show one, shallowest first."""
+    try:
+        r = await http.get(f"https://data.jsdelivr.com/v1/packages/gh/{full_name}@HEAD?structure=flat", timeout=8)
+        files = [f.get("name", "") for f in r.json().get("files", [])] if r.status_code == 200 else []
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return []
+    hits = sorted((f for f in files if _REPO_LOGO_FILE.search(f) and not re.search(r"node_modules|/tests?/|/vendor/|favicon", f, re.I)),
+                  key=lambda f: (f.count("/"), len(f)))
+    return [f"https://cdn.jsdelivr.net/gh/{full_name}@HEAD{f}" for f in hits[:3]]
+
+
 def origin_icons(url: str) -> list[str]:
     """The site's logo at addresses that work without loading its pages (for sites that block us):
     the touch icon at its conventional address, then Google's copy of its icon at the largest size."""
