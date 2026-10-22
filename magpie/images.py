@@ -172,6 +172,79 @@ async def _verify(http: httpx.AsyncClient, url: str, max_aspect: float = MAX_ASP
     return min(w, h) >= MIN_SIDE and max(w, h) / max(1, min(w, h)) <= max_aspect
 
 
+def cut_out_background(data: bytes, tolerance: int = 24) -> bytes | None:
+    """A PNG of an opaque logo with its flat edge background made transparent, or None when it has no such background
+    (already transparent, a photo, or edges of different colours). Only background connected to the edge goes, so
+    white inside the mark stays."""
+    try:
+        from PIL import Image, ImageChops
+        with Image.open(io.BytesIO(data)) as im:
+            if getattr(im, "is_animated", False):
+                return None
+            rgba = im.convert("RGBA")
+        if rgba.getchannel("A").getextrema()[0] < 250:
+            return None
+        rgba.thumbnail((512, 512))
+        w, h = rgba.size
+        px = rgba.load()
+        edge = [px[x, y][:3] for x in range(w) for y in (0, h - 1)] + [px[x, y][:3] for y in range(h) for x in (0, w - 1)]
+        bg = tuple(sorted(c[i] for c in edge)[len(edge) // 2] for i in range(3))
+        near = sum(1 for c in edge if max(abs(c[i] - bg[i]) for i in range(3)) <= tolerance)
+        if near < len(edge) * 0.95:
+            return None
+        # pixels close to the background colour, then only those reachable from the edge
+        diff = ImageChops.difference(rgba.convert("RGB"), Image.new("RGB", rgba.size, bg)).convert("L")
+        like = diff.point(lambda v: 255 if v <= tolerance else 0)
+        seen = bytearray(w * h)
+        stack = [(x, y) for x in range(w) for y in (0, h - 1)] + [(x, y) for y in range(h) for x in (0, w - 1)]
+        lp = like.load()
+        mask = Image.new("L", (w, h), 255)
+        mp = mask.load()
+        while stack:
+            x, y = stack.pop()
+            if x < 0 or y < 0 or x >= w or y >= h or seen[y * w + x] or not lp[x, y]:
+                continue
+            seen[y * w + x] = 1
+            mp[x, y] = 0
+            stack.extend(((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))
+        keyed = sum(seen) / (w * h)
+        if not 0.05 <= keyed <= 0.98:   # nothing worth keying out, or nothing left of the logo
+            return None
+        rgba.putalpha(mask)
+        out = io.BytesIO()
+        rgba.save(out, "PNG", optimize=True)
+        return out.getvalue()
+    except Exception as e:   # Pillow missing, or not a picture it can read
+        log.info("Couldn't cut out a logo background: %s", e)
+        return None
+
+
+async def transparent_logo(http: httpx.AsyncClient, url: str) -> str | None:
+    """The address (/media/logo-<hash>.png) of a raster logo with its solid background made transparent, or None
+    when it needs no change or can't be changed. The same picture is processed once."""
+    if _store is None or url.startswith("/media/") or _is_svg_url(url):
+        return None
+    name = f"logo-{hashlib.sha1(('bg:' + url).encode()).hexdigest()[:20]}.png"
+    target = _store / name
+    if target.is_file():
+        return f"/media/{name}"
+    try:
+        r = await safe_get(http, url, headers={"User-Agent": BROWSER_UA, "Accept": "image/*,*/*;q=0.5"}, timeout=8)
+    except (httpx.HTTPError, BlockedURL) as e:
+        log.info("Couldn't fetch logo %s: %s", url, e)
+        return None
+    png = cut_out_background(r.content) if r.status_code == 200 and len(r.content) <= 5_000_000 else None
+    if not png:
+        return None
+    try:
+        _store.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(png)
+    except OSError as e:
+        log.warning("Couldn't keep the logo %s: %s", name, e)
+        return None
+    return f"/media/{name}"
+
+
 PROBE_BYTES = 1_500_000
 
 

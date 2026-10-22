@@ -20,7 +20,7 @@ from .usage import Run, claude_cost
 from . import convlog, links, readability
 from .findlink import is_aggregator, repair_link
 from .related import clean_mentions, clean_related, drop_dead, outbound_related, same_site, text_related
-from .images import best_image, picture_is_opaque
+from .images import best_image, picture_is_opaque, transparent_logo
 from .enrich import fetch_page, link_is_gone
 from .catalog import entry_analysis
 from .config import Settings
@@ -542,6 +542,12 @@ class Pipeline:
 
         return await self._run(item_id, "correct", fixed(), corrected=True)
 
+    async def _clear_logo_background(self, fields: dict) -> None:
+        """A logo published on a solid background is kept as a PNG with that background transparent."""
+        metadata, image_url = fields.get("metadata") or {}, fields.get("image_url")
+        if image_url and metadata.get("image_kind") == "logo" and self.settings.enrich:
+            fields["image_url"] = await transparent_logo(self.http, image_url) or image_url
+
     async def _mark_opaque(self, metadata: dict, image_url: str | None) -> None:
         """Record whether the cover picture is fully opaque (the card then adds a blurred backdrop behind it)."""
         metadata.pop("image_opaque", None)
@@ -636,6 +642,7 @@ class Pipeline:
             changes["metadata"]["image_kind"] = new_kind
         else:
             changes["metadata"].pop("image_kind", None)
+        await self._clear_logo_background(changes)
         await self._mark_opaque(changes["metadata"], changes["image_url"])
         return self.db.update_item(item_id, **changes)
 
@@ -710,6 +717,7 @@ class Pipeline:
                     fields["metadata"]["image_kind"] = enrichment_kind
                 else:
                     fields["metadata"].pop("image_kind", None)
+        await self._clear_logo_background(fields)
         await self._mark_opaque(fields["metadata"], fields["image_url"])
 
         # Replace the tags generated for the previous identification, keep the user's own.
