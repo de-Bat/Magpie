@@ -19,7 +19,7 @@ jobs:
             requirements-dev.txt
       - uses: actions/setup-node@v4   # a few tests check the front-end scripts
         with:
-          node-version: 20
+          node-version: 22
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: node --check magpie/static/app.js && node --check magpie/static/i18n.js
       - run: python -m pytest -q
