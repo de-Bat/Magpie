@@ -215,6 +215,11 @@ struct APIClient {
         return response.releases ?? []
     }
 
+    /// Built-in and uploaded colour themes.
+    func themes() async throws -> [AppTheme] {
+        try await send(request("api/themes"))
+    }
+
     /// A server-hosted file such as a plugin icon, fetched with the token.
     func data(path: String) async throws -> Data {
         try await raw(request(String(path.drop(while: { $0 == "/" }))))

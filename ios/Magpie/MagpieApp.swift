@@ -5,8 +5,8 @@ import SwiftUI
 struct MagpieApp: App {
     @StateObject private var store: LibraryStore
     @StateObject private var sync: SyncEngine
+    @StateObject private var themes = ThemeStore()
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage(Appearance.storageKey, store: Appearance.store) private var appearance = Appearance.system
     @AppStorage(Preferences.textSizeKey) private var textSize = TextSizeChoice.standard
 
     static let backgroundTaskID = (Bundle.main.bundleIdentifier ?? "magpie") + ".sync"
@@ -22,11 +22,13 @@ struct MagpieApp: App {
             LibraryView()
                 .environmentObject(store)
                 .environmentObject(sync)
-                .preferredColorScheme(appearance.colorScheme)
+                .themedRoot()                   // reads ThemeStore from the environment, so it goes inside this:
+                .environmentObject(themes)
                 .dynamicTypeSize(textSize.dynamicType)
                 .task(id: scenePhase) {
                     // While the app is open, pick up captures other devices add (and their progress).
                     guard scenePhase == .active else { return }
+                    await themes.refresh()
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .seconds(10))
                         if Task.isCancelled { break }

@@ -38,6 +38,7 @@ enum Appearance: String, CaseIterable, Identifiable {
     }
 
     static var current: Appearance {
-        Appearance(rawValue: store.string(forKey: storageKey) ?? "") ?? .system
+        get { Appearance(rawValue: store.string(forKey: storageKey) ?? "") ?? .system }
+        set { store.set(newValue.rawValue, forKey: storageKey) }
     }
 }

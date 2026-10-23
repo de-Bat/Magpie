@@ -16,7 +16,7 @@ struct CleanupView: View {
         Form {
             switch cleanup.phase {
             case .needsAccess:
-                Section {
+                ThemedSection {
                     Text("Magpie needs access to your photos to find the ones it has already saved.")
                     Button("Open Settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
@@ -28,6 +28,7 @@ struct CleanupView: View {
             progress
             result
         }
+        .themedScreen()
         .navigationTitle("Clean up photos")
         .navigationBarTitleDisplayMode(.inline)
         .task {
@@ -45,7 +46,7 @@ struct CleanupView: View {
 
     @ViewBuilder
     private var setup: some View {
-        Section {
+        ThemedSection {
             ForEach(cleanup.albums) { album in
                 Button {
                     albumID = album.id
@@ -70,7 +71,7 @@ struct CleanupView: View {
             }
         }
 
-        Section {
+        ThemedSection {
             Picker("Mode", selection: $mode) {
                 ForEach(CleanupMode.allCases) { Text($0.label).tag($0) }
             }
@@ -93,18 +94,18 @@ struct CleanupView: View {
     private var progress: some View {
         switch cleanup.phase {
         case .preparing:
-            Section { HStack { ProgressView(); Text("Reading your captures…").padding(.leading, 8) } }
+            ThemedSection { HStack { ProgressView(); Text("Reading your captures…").padding(.leading, 8) } }
         case .scanning(let done, let total):
             progressSection("Checking photos…", done: done, total: total)
         case .deleting:
-            Section { HStack { ProgressView(); Text("Deleting…").padding(.leading, 8) } }
+            ThemedSection { HStack { ProgressView(); Text("Deleting…").padding(.leading, 8) } }
         default:
             EmptyView()
         }
     }
 
     private func progressSection(_ title: String, done: Int, total: Int) -> some View {
-        Section {
+        ThemedSection {
             VStack(alignment: .leading, spacing: 8) {
                 Text(title)
                 ProgressView(value: Double(done), total: Double(max(total, 1)))
@@ -118,9 +119,9 @@ struct CleanupView: View {
     private var result: some View {
         switch cleanup.phase {
         case .failed(let message):
-            Section { Label(message, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
+            ThemedSection { Label(message, systemImage: "xmark.octagon.fill").foregroundStyle(.red) }
         case .finished(let report):
-            Section {
+            ThemedSection {
                 LabeledContent("Photos checked", value: "\(report.scanned)")
                 LabeledContent("Shaped like a capture", value: "\(report.sent)")
                 LabeledContent(report.mode == .dryRun ? "Would delete" : "Deleted",
@@ -129,7 +130,7 @@ struct CleanupView: View {
                 Text(report.cancelled ? "Cancelled" : report.mode == .dryRun ? "Dry run result" : "Done")
             }
             if report.mode == .dryRun, !report.matches.isEmpty {
-                Section("Already in Magpie") {
+                ThemedSection("Already in Magpie") {
                     ForEach(report.matches.prefix(100)) { match in
                         HStack(spacing: 12) {
                             AssetThumbnail(assetID: match.id)

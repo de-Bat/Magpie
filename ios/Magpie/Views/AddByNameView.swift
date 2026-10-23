@@ -66,6 +66,7 @@ struct AddByNameView: View {
             .overlay { if searching || adding { ProgressView() } }
             .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Name of the \(kind.label.lowercased())")
             .onSubmit(of: .search) { Task { await search() } }
+            .themedScreen()
             .navigationTitle("Add a \(kind.label.lowercased())")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

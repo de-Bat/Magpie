@@ -12,13 +12,13 @@ struct SettingsView: View {
     @State private var confirmReset = false
     @State private var usage: UsageReport?
     @State private var usageError: String?
-    @AppStorage(Appearance.storageKey, store: Appearance.store) private var appearance = Appearance.system
+    @EnvironmentObject private var themes: ThemeStore
     @AppStorage(Preferences.textSizeKey) private var textSize = TextSizeChoice.standard
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
+                ThemedSection {
                     TextField("http://192.168.1.20:8000", text: $serverURL)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
@@ -44,11 +44,12 @@ struct SettingsView: View {
                     Text("The self-hosted server that identifies screenshots and stores your library. Use its LAN, Tailscale or public address.")
                 }
 
-                Section {
-                    Picker("Appearance", selection: $appearance) {
-                        ForEach(Appearance.allCases) { Text($0.label).tag($0) }
+                ThemedSection {
+                    NavigationLink {
+                        ThemePickerView()
+                    } label: {
+                        LabeledContent("Theme", value: themes.current?.name ?? Appearance.current.label)
                     }
-                    .pickerStyle(.segmented)
                     Picker("Text size", selection: $textSize) {
                         ForEach(TextSizeChoice.allCases) { Text($0.label).tag($0) }
                     }
@@ -58,7 +59,7 @@ struct SettingsView: View {
                     Text("System follows your iPhone's light or dark setting. Also used by “Share → Magpie”. Columns and layout are in the library's ▦ menu.")
                 }
 
-                Section("Sync") {
+                ThemedSection("Sync") {
                     LabeledContent("Status", value: statusText)
                     LabeledContent("Waiting to sync", value: "\(store.pending.count)")
                     LabeledContent("Items on this phone", value: "\(store.items.count)")
@@ -69,7 +70,7 @@ struct SettingsView: View {
                         .disabled(serverURL.isEmpty)
                 }
 
-                Section {
+                ThemedSection {
                     if let usage {
                         LabeledContent("Total", value: formatUSD(usage.totals.costUsd))
                         LabeledContent("Per screenshot", value: formatUSD(usage.perScreenshotUsd))
@@ -91,7 +92,7 @@ struct SettingsView: View {
                     Text("Measured on your server from real token and search usage, at list prices.")
                 }
 
-                Section {
+                ThemedSection {
                     NavigationLink {
                         LibraryJobsView()
                     } label: {
@@ -106,7 +107,7 @@ struct SettingsView: View {
                     Text("Clean up finds photos that are already saved in Magpie and deletes them from your photo library.")
                 }
 
-                Section {
+                ThemedSection {
                     NavigationLink {
                         WhatsNewView()
                     } label: {
@@ -122,13 +123,13 @@ struct SettingsView: View {
                     Text("About")
                 }
 
-                Section {
+                ThemedSection {
                     Button("Re-download library", role: .destructive) { confirmReset = true }
                 } footer: {
                     Text("Clears the offline copy and downloads everything from the server again. Changes waiting to sync are kept.")
                 }
             }
-            .preferredColorScheme(appearance.colorScheme)
+            .themedScreen()
             .task { await loadUsage() }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

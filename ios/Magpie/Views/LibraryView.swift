@@ -54,6 +54,7 @@ struct LibraryView: View {
                 }
                 .padding(.horizontal)
             }
+            .themedScreen()
             .navigationTitle("Magpie")
             .navigationDestination(for: String.self) { ItemDetailView(itemID: $0) }
             .searchable(text: $query, prompt: "Search everything you saved")
@@ -212,6 +213,7 @@ struct LibraryView: View {
 }
 
 struct ItemCard: View {
+    @Environment(\.palette) private var palette
     @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var sync: SyncEngine
     let item: Item
@@ -257,9 +259,9 @@ struct ItemCard: View {
             }
             .padding(dense ? 6 : 10)
         }
-        .background(Color(.systemBackground))
+        .background(palette.surface)
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.separator), lineWidth: 0.5))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 0.5))
     }
 
     @ViewBuilder private var badge: some View {
@@ -303,6 +305,7 @@ struct ItemCard: View {
 
 /// One line per item, for the list layout.
 struct ItemRow: View {
+    @Environment(\.palette) private var palette
     let item: Item
 
     private var category: Category? { Category(rawValue: item.category ?? "") }
@@ -324,8 +327,8 @@ struct ItemRow: View {
             if item.watchlist { Image(systemName: "eye.fill").foregroundStyle(.blue) }
         }
         .padding(8)
-        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.separator), lineWidth: 0.5))
+        .background(palette.surface, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(palette.border, lineWidth: 0.5))
     }
 }
 
@@ -362,6 +365,7 @@ struct TagFilterSheet: View {
             }
             .searchable(text: $search, prompt: "Filter tags")
             .overlay { if store.tagCounts.isEmpty { ContentUnavailableView("No tags yet", systemImage: "number") } }
+            .themedScreen()
             .navigationTitle("Tags")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -374,6 +378,7 @@ struct TagFilterSheet: View {
 }
 
 struct Chip: View {
+    @Environment(\.palette) private var palette
     let label: String
     var systemImage: String?
     var active = false
@@ -387,7 +392,7 @@ struct Chip: View {
             }
             .font(.footnote)
             .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(active ? Color.accentColor.opacity(0.18) : Color(.secondarySystemBackground), in: Capsule())
+            .background(active ? Color.accentColor.opacity(0.18) : palette.surface2, in: Capsule())
             .overlay(Capsule().stroke(active ? Color.accentColor : .clear))
         }
         .buttonStyle(.plain)
@@ -422,6 +427,7 @@ struct SyncStatusIcon: View {
 
 /// Explains why things aren't syncing, only when it matters.
 struct SyncBanner: View {
+    @Environment(\.palette) private var palette
     @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var sync: SyncEngine
     let onOpenSettings: () -> Void
@@ -448,6 +454,6 @@ struct SyncBanner: View {
             if let action { Button(action, action: onOpenSettings).font(.footnote.bold()) }
         }
         .padding(12)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .background(palette.surface2, in: RoundedRectangle(cornerRadius: 12))
     }
 }

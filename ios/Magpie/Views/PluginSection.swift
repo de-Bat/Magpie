@@ -14,7 +14,7 @@ struct PluginSection: View {
         Group {
             if !actions.isEmpty {
                 ForEach(actions) { action in
-                    Section(action.label) {
+                    ThemedSection(action.label) {
                         actionRow(action)
                         if let section = action.section { details(section) }
                     }

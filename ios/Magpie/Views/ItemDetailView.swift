@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ItemDetailView: View {
+    @Environment(\.palette) private var palette
     let itemID: String
     @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var sync: SyncEngine
@@ -30,7 +31,7 @@ struct ItemDetailView: View {
     private func content(_ item: Item) -> some View {
         let category = Category(rawValue: item.category ?? "")
         return List {
-            Section {
+            ThemedSection {
                 HStack(alignment: .top, spacing: 14) {
                     ItemImage(item: item)
                         .frame(width: 110, height: category?.isPortrait == true ? 165 : 80)
@@ -59,7 +60,7 @@ struct ItemDetailView: View {
                 .filter { !Self.hiddenKeys.contains($0.key) && $0.value.string != nil }
                 .sorted { $0.key < $1.key }
             if !facts.isEmpty {
-                Section("Details") {
+                ThemedSection("Details") {
                     ForEach(facts, id: \.key) { key, value in
                         LabeledContent(key.replacingOccurrences(of: "_", with: " ").capitalized) {
                             Text(value.string ?? "").multilineTextAlignment(.trailing)
@@ -73,7 +74,7 @@ struct ItemDetailView: View {
             }
 
             if !item.related.isEmpty {
-                Section("Related") {
+                ThemedSection("Related") {
                     ForEach(item.related, id: \.url) { r in
                         if let url = URL(string: r.url) {
                             Link(destination: url) {
@@ -94,17 +95,17 @@ struct ItemDetailView: View {
             }
 
             if let ingredients = item.metadata["ingredients"]?.strings, !ingredients.isEmpty {
-                Section("Ingredients") { ForEach(ingredients, id: \.self) { Text($0) } }
+                ThemedSection("Ingredients") { ForEach(ingredients, id: \.self) { Text($0) } }
             }
             if let steps = item.metadata["instructions"]?.strings, !steps.isEmpty {
-                Section("Instructions") {
+                ThemedSection("Instructions") {
                     ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
                         Text("\(i + 1). \(step)")
                     }
                 }
             }
 
-            Section("Tags") {
+            ThemedSection("Tags") {
                 if !item.tags.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack {
@@ -123,14 +124,14 @@ struct ItemDetailView: View {
                     }
             }
 
-            Section("Note") {
+            ThemedSection("Note") {
                 TextField("Why did you save this?", text: $note, axis: .vertical)
                     .onSubmit { saveNote(item) }
                     .onAppear { note = item.note ?? "" }
                     .onDisappear { saveNote(item) }
             }
 
-            Section {
+            ThemedSection {
                 Picker("Category", selection: Binding(
                     get: { item.category ?? "other" },
                     set: { value in edit(item) { $0.category = value } }
@@ -155,7 +156,7 @@ struct ItemDetailView: View {
             }
 
             if let usage = item.usage, usage.runs > 0 {
-                Section("Identification") {
+                ThemedSection("Identification") {
                     LabeledContent("Cost", value: formatUSD(usage.costUsd))
                     if usage.webSearches > 0 { LabeledContent("Web searches", value: "\(usage.webSearches)") }
                     if let sources = item.metadata["sources"]?.strings, !sources.isEmpty {
@@ -165,9 +166,10 @@ struct ItemDetailView: View {
             }
 
             if let text = item.meta("screenshot_text") {
-                Section("Text in screenshot") { Text(text).font(.footnote).foregroundStyle(.secondary) }
+                ThemedSection("Text in screenshot") { Text(text).font(.footnote).foregroundStyle(.secondary) }
             }
         }
+        .themedScreen()
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Delete this item?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -280,7 +282,7 @@ struct ItemDetailView: View {
                 }
             }
             .padding(10)
-            .background(item.needsReview ? Color.orange.opacity(0.12) : Color(.secondarySystemBackground),
+            .background(item.needsReview ? Color.orange.opacity(0.12) : palette.surface2,
                         in: RoundedRectangle(cornerRadius: 10))
         }
     }
@@ -301,7 +303,7 @@ struct ItemDetailView: View {
                             Text(label).font(.caption2).foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                        .background(palette.surface2, in: RoundedRectangle(cornerRadius: 10))
                     }
                 }
             }
@@ -390,7 +392,7 @@ private struct CorrectionSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
+                ThemedSection {
                     TextField("Title", text: $title)
                     Picker("Type", selection: $category) {
                         ForEach(Category.allCases) { Label($0.label, systemImage: $0.symbol).tag($0.rawValue) }
@@ -403,7 +405,7 @@ private struct CorrectionSheet: View {
                 } footer: {
                     Text("Magpie looks up posters, scores and details for what you enter.")
                 }
-                Section {
+                ThemedSection {
                     TextField("e.g. “It's the 2019 remake, not the original”", text: $hint, axis: .vertical)
                 } header: {
                     Text("Or describe it")
@@ -411,6 +413,7 @@ private struct CorrectionSheet: View {
                     Text("Claude looks at the screenshot again with your description.")
                 }
             }
+            .themedScreen()
             .navigationTitle("Fix identification")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

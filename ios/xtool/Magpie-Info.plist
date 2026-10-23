@@ -2,8 +2,164 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.example.magpie.sync</string>
+		<string>XTL-VZX9L3FVF8.com.example.magpie.sync</string>
+	</array>
 	<key>CFBundleDisplayName</key>
 	<string>Magpie</string>
+	<key>CFBundleIcons</key>
+	<dict>
+		<key>CFBundleAlternateIcons</key>
+		<dict>
+			<key>icon-atom-one-dark</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-atom-one-dark</string>
+				</array>
+			</dict>
+			<key>icon-atom-one-dark-vivid</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-atom-one-dark-vivid</string>
+				</array>
+			</dict>
+			<key>icon-atom-one-light</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-atom-one-light</string>
+				</array>
+			</dict>
+			<key>icon-dracula</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-dracula</string>
+				</array>
+			</dict>
+			<key>icon-gruvbox-dark</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-gruvbox-dark</string>
+				</array>
+			</dict>
+			<key>icon-nord</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-nord</string>
+				</array>
+			</dict>
+			<key>icon-solarized-dark</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-solarized-dark</string>
+				</array>
+			</dict>
+			<key>icon-solarized-light</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-solarized-light</string>
+				</array>
+			</dict>
+		</dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>icon-1024</string>
+			</array>
+		</dict>
+	</dict>
+	<key>CFBundleIcons~ipad</key>
+	<dict>
+		<key>CFBundleAlternateIcons</key>
+		<dict>
+			<key>icon-atom-one-dark</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-atom-one-dark</string>
+				</array>
+			</dict>
+			<key>icon-atom-one-dark-vivid</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-atom-one-dark-vivid</string>
+				</array>
+			</dict>
+			<key>icon-atom-one-light</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-atom-one-light</string>
+				</array>
+			</dict>
+			<key>icon-dracula</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-dracula</string>
+				</array>
+			</dict>
+			<key>icon-gruvbox-dark</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-gruvbox-dark</string>
+				</array>
+			</dict>
+			<key>icon-nord</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-nord</string>
+				</array>
+			</dict>
+			<key>icon-solarized-dark</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-solarized-dark</string>
+				</array>
+			</dict>
+			<key>icon-solarized-light</key>
+			<dict>
+				<key>CFBundleIconFiles</key>
+				<array>
+					<string>icon-solarized-light</string>
+				</array>
+			</dict>
+		</dict>
+		<key>CFBundlePrimaryIcon</key>
+		<dict>
+			<key>CFBundleIconFiles</key>
+			<array>
+				<string>icon-1024</string>
+			</array>
+		</dict>
+	</dict>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Magpie connects to your self-hosted Magpie server on your network.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Magpie saves the screenshots you pick so it can identify and catalogue them, and can delete photos it has already saved when you ask it to clean up.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
@@ -11,25 +167,6 @@
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Magpie saves the screenshots you pick so it can identify and catalogue them, and can delete photos it has already saved when you ask it to clean up.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Magpie connects to your self-hosted Magpie server on your network.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<true/>
-	</dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>fetch</string>
-	</array>
-	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array>
-		<string>com.example.magpie.sync</string>
-		<!-- xtool prefixes the bundle ID with the signing team: the app builds its task ID from the bundle ID -->
-		<string>XTL-VZX9L3FVF8.com.example.magpie.sync</string>
 	</array>
 </dict>
 </plist>

@@ -32,7 +32,7 @@ struct LibraryJobsView: View {
 
     var body: some View {
         Form {
-            Section {
+            ThemedSection {
                 Picker("Scope", selection: $scope) {
                     ForEach(Scope.allCases) { Text($0.label).tag($0) }
                 }
@@ -41,7 +41,7 @@ struct LibraryJobsView: View {
                 Text("About \(count) item\(count == 1 ? "" : "s"). The “leave out” switch only applies to re-analyzing.")
             }
 
-            Section {
+            ThemedSection {
                 if let state, state.running {
                     ProgressView(value: Double(state.done), total: Double(max(state.total, 1)))
                     Text("\(state.kind == "reanalyze" ? "Re-analyzing" : "Refreshing") \(state.done) of \(state.total)"
@@ -62,6 +62,7 @@ struct LibraryJobsView: View {
                 Text("Refreshing looks up posters, scores and links again, with no AI model and no cost. Re-analyzing identifies items again with your AI provider, which costs money.")
             }
         }
+        .themedScreen()
         .navigationTitle("Library jobs")
         .navigationBarTitleDisplayMode(.inline)
         .task { await watch() }
@@ -103,6 +104,61 @@ struct LibraryJobsView: View {
     }
 }
 
+/// System / Light / Dark, then every theme. Choosing a built-in theme also switches the app icon to its tinted variant.
+struct ThemePickerView: View {
+    @EnvironmentObject private var themes: ThemeStore
+
+    var body: some View {
+        List {
+            ThemedSection {
+                row("System", detail: "Follows the iPhone's light or dark setting", choice: "system", colors: nil)
+                row("Light", detail: nil, choice: "light", colors: nil)
+                row("Dark", detail: nil, choice: "dark", colors: nil)
+            }
+            ThemedSection("Built in") {
+                ForEach(themes.themes.filter { $0.builtin == true }) { t in
+                    row(t.name, detail: t.isDark ? "Dark" : "Light", choice: "custom:" + t.id, colors: t)
+                }
+            }
+            if themes.themes.contains(where: { $0.builtin != true }) {
+                ThemedSection("Uploaded to your server") {
+                    ForEach(themes.themes.filter { $0.builtin != true }) { t in
+                        row(t.name, detail: t.isDark ? "Dark" : "Light", choice: "custom:" + t.id, colors: t)
+                    }
+                }
+            }
+        }
+        .themedScreen()
+        .navigationTitle("Theme")
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await themes.refresh() }
+    }
+
+    private func row(_ title: String, detail: String?, choice: String, colors: AppTheme?) -> some View {
+        Button {
+            themes.select(choice)
+        } label: {
+            HStack(spacing: 12) {
+                if let colors {
+                    HStack(spacing: -6) {
+                        ForEach(["bg", "surface", "text", "accent"], id: \.self) { key in
+                            Circle().fill(colors.color(key) ?? .gray).frame(width: 22, height: 22)
+                                .overlay(Circle().stroke(Color.gray.opacity(0.4), lineWidth: 0.5))
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                    if let detail { Text(detail).font(.caption).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                if themes.choice == choice { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+}
+
 /// The server's release notes, newest first.
 struct WhatsNewView: View {
     @State private var releases: [ReleaseNote] = []
@@ -112,7 +168,7 @@ struct WhatsNewView: View {
     var body: some View {
         List {
             ForEach(releases) { release in
-                Section(release.version == "next" ? "Coming next" : "\(release.version)" + (release.date.map { " · \($0)" } ?? "")) {
+                ThemedSection(release.version == "next" ? "Coming next" : "\(release.version)" + (release.date.map { " · \($0)" } ?? "")) {
                     ForEach(release.features) { feature in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(feature.title).font(.subheadline.weight(.semibold))
@@ -126,6 +182,7 @@ struct WhatsNewView: View {
             if !loaded { ProgressView() }
             else if releases.isEmpty { ContentUnavailableView("No release notes", systemImage: "sparkles", description: Text(error ?? "Connect a server to see what's new.")) }
         }
+        .themedScreen()
         .navigationTitle("What's new")
         .navigationBarTitleDisplayMode(.inline)
         .task {

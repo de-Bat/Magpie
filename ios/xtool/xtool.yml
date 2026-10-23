@@ -3,3 +3,30 @@ bundleID: com.example.magpie
 product: Magpie
 infoPath: Magpie-Info.plist
 iconPath: icon-1024.png
+# icons:begin (written by tools/gen_icons.py)
+resources:
+  - icons/icon-atom-one-dark-vivid@2x.png
+  - icons/icon-atom-one-dark-vivid@3x.png
+  - icons/icon-atom-one-dark-vivid~ipad@2x.png
+  - icons/icon-atom-one-dark@2x.png
+  - icons/icon-atom-one-dark@3x.png
+  - icons/icon-atom-one-dark~ipad@2x.png
+  - icons/icon-atom-one-light@2x.png
+  - icons/icon-atom-one-light@3x.png
+  - icons/icon-atom-one-light~ipad@2x.png
+  - icons/icon-dracula@2x.png
+  - icons/icon-dracula@3x.png
+  - icons/icon-dracula~ipad@2x.png
+  - icons/icon-gruvbox-dark@2x.png
+  - icons/icon-gruvbox-dark@3x.png
+  - icons/icon-gruvbox-dark~ipad@2x.png
+  - icons/icon-nord@2x.png
+  - icons/icon-nord@3x.png
+  - icons/icon-nord~ipad@2x.png
+  - icons/icon-solarized-dark@2x.png
+  - icons/icon-solarized-dark@3x.png
+  - icons/icon-solarized-dark~ipad@2x.png
+  - icons/icon-solarized-light@2x.png
+  - icons/icon-solarized-light@3x.png
+  - icons/icon-solarized-light~ipad@2x.png
+# icons:end
