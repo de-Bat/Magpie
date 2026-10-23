@@ -246,8 +246,12 @@ struct ItemCard: View {
                     .font(dense ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
                     .lineLimit(2, reservesSpace: true)
                 if !dense {
-                    Text(item.subtitle ?? " ").font(.caption).foregroundStyle(palette.muted).lineLimit(1, reservesSpace: true)
-                    Text(cardFacts.isEmpty ? " " : cardFacts.joined(separator: " · "))
+                    // A list capture shows what it holds (first titles, then the kinds) instead of one item's facts.
+                    Text(item.multiCount > 0 ? item.mentionSummary : (item.subtitle ?? " "))
+                        .font(.caption).foregroundStyle(palette.muted).lineLimit(1, reservesSpace: true)
+                    Text(item.multiCount > 0
+                         ? item.mentionBreakdown.map { "\($0.0.label) ×\($0.1)" }.joined(separator: " · ")
+                         : (cardFacts.isEmpty ? " " : cardFacts.joined(separator: " · ")))
                         .font(.caption2).foregroundStyle(palette.muted).lineLimit(1, reservesSpace: true)
                 }
             }

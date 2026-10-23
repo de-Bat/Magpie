@@ -292,6 +292,19 @@ extension Item {
         }
     }
 
+    /// What kinds of things the capture lists, most first: [(movie, 3), (tv_show, 2)].
+    var mentionBreakdown: [(Category, Int)] {
+        let counts = Dictionary(grouping: mentions.compactMap(\.category), by: { $0 }).mapValues(\.count)
+        return Category.allCases.compactMap { c in counts[c].map { (c, $0) } }.sorted { $0.1 > $1.1 }
+    }
+
+    /// "Dune · Arrival · Heat +4 more": the first few titles, for a card.
+    var mentionSummary: String {
+        let all = mentions
+        let first = all.prefix(3).map(\.title).joined(separator: " · ")
+        return all.count > 3 ? first + " +\(all.count - 3)" : first
+    }
+
     /// How many things the capture holds when it is a list (two or more), else 0.
     var multiCount: Int {
         let n = mentions.count

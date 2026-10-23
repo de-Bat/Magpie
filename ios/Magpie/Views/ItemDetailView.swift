@@ -45,7 +45,6 @@ struct ItemDetailView: View {
                 statusRow(item)
                 flagsRow(item)
                 verifyNotice(item)
-                confidenceSection(item)
                 scores(item)
                 if let summary = item.summary { Text(summary) }
                 if let url = item.canonicalUrl.flatMap(URL.init(string:)) {
@@ -54,6 +53,10 @@ struct ItemDetailView: View {
                 ForEach(item.links, id: \.url) { link in
                     if let url = URL(string: link.url) { Link(link.label, destination: url) }
                 }
+            }
+
+            if item.multiCount > 0 {
+                CaptureList(item: item)
             }
 
             let facts = item.metadata
@@ -66,16 +69,6 @@ struct ItemDetailView: View {
                             Text(value.string ?? "").multilineTextAlignment(.trailing)
                         }
                     }
-                }
-            }
-
-            if item.multiCount > 0 {
-                ThemedSection {
-                    ForEach(item.mentions) { MentionRow(mention: $0, parentID: item.id) }
-                } header: {
-                    Text("In this capture · \(item.multiCount)")
-                } footer: {
-                    Text("This capture lists several things. Save any of them as its own item.")
                 }
             }
 
@@ -177,6 +170,11 @@ struct ItemDetailView: View {
 
             if let text = item.meta("screenshot_text") {
                 ThemedSection("Text in screenshot") { Text(text).font(.footnote).foregroundStyle(.secondary) }
+            }
+
+            // How sure Magpie is, why, the alternatives and the fix-it button: last, since it is reference rather than content.
+            if item.status == "ready", !item.pendingUpload {
+                ThemedSection("How sure Magpie is") { confidenceSection(item) }
             }
         }
         .themedScreen()
@@ -344,82 +342,6 @@ struct ItemDetailView: View {
         change(&patch)
         store.update(item.id, patch)
         sync.requestSync()
-    }
-}
-
-/// One film, show, app or repository listed in a capture: open its page, or save it as an item of its own.
-private struct MentionRow: View {
-    let mention: Mention
-    let parentID: String
-
-    @Environment(\.palette) private var palette
-    @EnvironmentObject private var store: LibraryStore
-    @EnvironmentObject private var sync: SyncEngine
-    @State private var working = false
-    @State private var problem: String?
-
-    /// Films, shows and books are looked up by name on the server; anything with a link is saved as a link.
-    private var byName: Bool { mention.category.map { [.movie, .tv_show, .book].contains($0) } ?? false }
-    private var canSave: Bool { byName || mention.url != nil }
-
-    private var alreadySaved: Bool {
-        let title = mention.title.lowercased()
-        return store.items.contains { other in
-            guard other.id != parentID else { return false }
-            if let url = mention.url, other.sourceUrl == url || other.canonicalUrl == url { return true }
-            return other.title?.lowercased() == title
-        }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                if let category = mention.category { TypeBadge(category: category, size: 28) }
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(mention.title).font(.subheadline.weight(.semibold))
-                    if let sub = [mention.category?.label, mention.year.map(String.init)].compactMap({ $0 }).joined(separator: " · ") as String?, !sub.isEmpty {
-                        Text(sub).font(.caption).foregroundStyle(palette.muted)
-                    }
-                }
-                Spacer(minLength: 0)
-                if let url = mention.url.flatMap(URL.init(string:)) {
-                    Link(destination: url) { Image(systemName: "arrow.up.right.square") }
-                        .buttonStyle(.borderless)
-                        .accessibilityLabel("Open \(mention.title)")
-                }
-                if alreadySaved {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(palette.ok).accessibilityLabel("Saved")
-                } else if canSave {
-                    Button { Task { await save() } } label: {
-                        if working { ProgressView() } else { Image(systemName: "plus.circle") }
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(working)
-                    .accessibilityLabel("Save \(mention.title)")
-                }
-            }
-            if let problem { Text(problem).font(.caption).foregroundStyle(palette.err) }
-        }
-    }
-
-    private func save() async {
-        problem = nil
-        if byName, let category = mention.category {
-            guard let api = ServerSettings.client else { problem = "Connect your server to add by name."; return }
-            working = true
-            defer { working = false }
-            do {
-                let item = try await api.addEntry(EntryBody(category: category.rawValue, title: mention.title, year: mention.year,
-                                                            id: "ios-" + UUID().uuidString.lowercased()))
-                store.adopt(item)
-                sync.requestSync()
-            } catch {
-                problem = error.localizedDescription
-            }
-        } else if let url = mention.url.flatMap(URL.init(string:)) {
-            store.addLink(url)     // works offline: the link is queued like any other
-            sync.requestSync()
-        }
     }
 }
 
