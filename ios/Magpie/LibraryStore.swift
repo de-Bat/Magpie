@@ -24,18 +24,29 @@ final class LibraryStore: ObservableObject {
 
     func item(_ id: String) -> Item? { items.first { $0.id == id } }
 
-    func filtered(query: String, category: Category?, tag: String?, needsReview: Bool = false) -> [Item] {
-        let words = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+    /// `tags` are ANDed and match by prefix, like the web app ("rec" finds "recipe"); `#tag` in the query is a tag too.
+    func filtered(query: String, category: Category?, tags: Set<String> = [], show: ShowFilter = .all) -> [Item] {
+        var words: [String] = []
+        var tagFilters = tags.map { $0.lowercased() }
+        for part in query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            .split(whereSeparator: { $0.isWhitespace }).map(String.init) {
+            if part.hasPrefix("#"), part.count > 1 {
+                tagFilters.append(String(part.dropFirst()))
+            } else {
+                words += part.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).map(String.init)
+            }
+        }
         return items.filter { item in
             if let category, item.category != category.rawValue { return false }
-            if let tag, !item.tags.contains(tag) { return false }
-            if needsReview && !item.needsReview { return false }
+            if !show.matches(item) { return false }
+            if !tagFilters.allSatisfy({ f in item.tags.contains { $0.hasPrefix(f) } }) { return false }
             guard !words.isEmpty else { return true }
             let blob = item.searchBlob
             return words.allSatisfy { blob.contains($0) }
         }
     }
+
+    func count(for show: ShowFilter) -> Int { items.filter(show.matches).count }
 
     var categoryCounts: [(Category, Int)] {
         let counts = Dictionary(grouping: items.compactMap { $0.category.flatMap(Category.init(rawValue:)) }, by: { $0 })
@@ -105,6 +116,12 @@ final class LibraryStore: ObservableObject {
         return host + (u.path.hasSuffix("/") ? String(u.path.dropLast()) : u.path).lowercased()
     }
 
+    /// An item the server created (added by name): it is already on the server, so nothing is queued.
+    func adopt(_ item: Item) {
+        merge(item)
+        save()
+    }
+
     /// The server already had this link under another id: swap the local placeholder for it.
     func replaceLocal(_ localID: String, with server: Item) {
         items.removeAll { $0.id == localID }
@@ -135,6 +152,13 @@ final class LibraryStore: ObservableObject {
         if let note = patch.note { items[i].note = note }
         if let category = patch.category { items[i].category = category }
         if let tags = patch.tags { items[i].tags = Self.normalize(tags) }
+        if let v = patch.reviewed { items[i].reviewed = v }
+        if let v = patch.favorite { items[i].favorite = v }
+        if let v = patch.watchlist { items[i].watchlist = v }
+        if let v = patch.confirmed {
+            items[i].confirmed = v
+            if v { items[i].verified = true; items[i].needsReview = false }
+        }
         var patch = patch
         patch.tags = patch.tags.map(Self.normalize)
         pending.append(PendingOp(itemID: id, kind: .update(patch)))

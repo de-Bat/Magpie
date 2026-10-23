@@ -13,6 +13,7 @@ struct SettingsView: View {
     @State private var usage: UsageReport?
     @State private var usageError: String?
     @AppStorage(Appearance.storageKey, store: Appearance.store) private var appearance = Appearance.system
+    @AppStorage(Preferences.textSizeKey) private var textSize = TextSizeChoice.standard
 
     var body: some View {
         NavigationStack {
@@ -48,10 +49,13 @@ struct SettingsView: View {
                         ForEach(Appearance.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    Picker("Text size", selection: $textSize) {
+                        ForEach(TextSizeChoice.allCases) { Text($0.label).tag($0) }
+                    }
                 } header: {
                     Text("Appearance")
                 } footer: {
-                    Text("System follows your iPhone's light or dark setting. Also used by “Share → Magpie”.")
+                    Text("System follows your iPhone's light or dark setting. Also used by “Share → Magpie”. Columns and layout are in the library's ▦ menu.")
                 }
 
                 Section("Sync") {
@@ -89,12 +93,33 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink {
+                        LibraryJobsView()
+                    } label: {
+                        Label("Refresh or re-analyze library", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    NavigationLink {
                         CleanupView()
                     } label: {
                         Label("Clean up photos", systemImage: "trash.slash")
                     }
                 } footer: {
-                    Text("Find photos that are already saved in Magpie and delete them from your photo library.")
+                    Text("Clean up finds photos that are already saved in Magpie and deletes them from your photo library.")
+                }
+
+                Section {
+                    NavigationLink {
+                        WhatsNewView()
+                    } label: {
+                        Label("What's new", systemImage: "sparkles")
+                    }
+                    Link(destination: URL(string: "https://github.com/de-Bat/Magpie")!) {
+                        Label("GitHub", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
+                    Link(destination: URL(string: "https://github.com/de-Bat/Magpie/issues")!) {
+                        Label("Report an issue", systemImage: "exclamationmark.bubble")
+                    }
+                } header: {
+                    Text("About")
                 }
 
                 Section {

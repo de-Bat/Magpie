@@ -4,16 +4,29 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var store: LibraryStore
     @EnvironmentObject private var sync: SyncEngine
+    @Environment(\.horizontalSizeClass) private var sizeClass
 
     @State private var query = ""
     @State private var category: Category?
-    @State private var tag: String?
-    @State private var needsReview = false
+    @State private var tags: Set<String> = []
+    @State private var show: ShowFilter = .all
     @State private var picked: [PhotosPickerItem] = []
     @State private var showSettings = false
+    @State private var showTags = false
+    @State private var addByName: CatalogKind?
     @State private var message: String?
+    @AppStorage(Preferences.columnsKey) private var columns = 0
+    @AppStorage(Preferences.layoutKey) private var layout = LibraryLayout.grid
 
-    private var results: [Item] { store.filtered(query: query, category: category, tag: tag, needsReview: needsReview) }
+    private var results: [Item] { store.filtered(query: query, category: category, tags: tags, show: show) }
+    private var maxColumns: Int { sizeClass == .regular ? 8 : 4 }
+
+    private var gridColumns: [GridItem] {
+        let n = min(columns, maxColumns)
+        return n == 0
+            ? [GridItem(.adaptive(minimum: 150), spacing: 12)]
+            : Array(repeating: GridItem(.flexible(), spacing: 12), count: n)
+    }
 
     var body: some View {
         NavigationStack {
@@ -23,10 +36,17 @@ struct LibraryView: View {
                     filters
                     if results.isEmpty {
                         emptyState
-                    } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
+                    } else if layout == .list {
+                        LazyVStack(spacing: 8) {
                             ForEach(results) { item in
-                                NavigationLink(value: item.id) { ItemCard(item: item) }
+                                NavigationLink(value: item.id) { ItemRow(item: item) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    } else {
+                        LazyVGrid(columns: gridColumns, spacing: 12) {
+                            ForEach(results) { item in
+                                NavigationLink(value: item.id) { ItemCard(item: item, dense: columns >= 3) }
                                     .buttonStyle(.plain)
                             }
                         }
@@ -36,13 +56,20 @@ struct LibraryView: View {
             }
             .navigationTitle("Magpie")
             .navigationDestination(for: String.self) { ItemDetailView(itemID: $0) }
-            .searchable(text: $query, prompt: "Titles, tags, text in screenshots…")
+            .searchable(text: $query, prompt: "Search everything you saved")
             .refreshable { await sync.sync() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { SyncStatusIcon() }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    viewMenu
+                    Menu {
+                        ForEach(CatalogKind.allCases) { kind in
+                            Button { addByName = kind } label: { Label(kind.label, systemImage: kind.symbol) }
+                        }
+                    } label: { Image(systemName: "text.magnifyingglass") }
+                        .accessibilityLabel("Add by name")
                     Button { pasteFromClipboard() } label: { Image(systemName: "doc.on.clipboard") }
                         .accessibilityLabel("Paste a screenshot or link")
                     // .current: the photo's own bytes, not a JPEG copy, so cleanup can later recognise it by its hash
@@ -53,6 +80,14 @@ struct LibraryView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showTags) { TagFilterSheet(selected: $tags) }
+            .sheet(item: $addByName) { kind in
+                AddByNameView(kind: kind) { id in
+                    flash("Added")
+                    sync.requestSync()
+                    _ = id
+                }
+            }
             .onChange(of: picked) { _, newValue in addPicked(newValue) }
             .overlay(alignment: .bottom) {
                 if let message {
@@ -66,22 +101,49 @@ struct LibraryView: View {
         }
     }
 
+    /// Layout and number of columns, remembered on this device.
+    private var viewMenu: some View {
+        Menu {
+            Picker("Layout", selection: $layout) {
+                ForEach(LibraryLayout.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
+            }
+            if layout == .grid {
+                Picker("Columns", selection: $columns) {
+                    Text("Auto").tag(0)
+                    ForEach(1...maxColumns, id: \.self) { Text("\($0)").tag($0) }
+                }
+            }
+        } label: { Image(systemName: layout == .list ? "list.bullet" : "square.grid.2x2") }
+            .accessibilityLabel("Layout and columns")
+    }
+
     private var filters: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                if store.needsReviewCount > 0 {
-                    Chip(label: "Needs review \(store.needsReviewCount)", systemImage: "exclamationmark.triangle", active: needsReview) {
-                        needsReview.toggle()
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Menu {
+                        Picker("Show", selection: $show) {
+                            ForEach(ShowFilter.allCases) { f in
+                                Label("\(f.label) \(store.count(for: f))", systemImage: f.symbol).tag(f)
+                            }
+                        }
+                    } label: {
+                        Chip(label: show == .all ? "Show: All" : show.label, systemImage: show.symbol, active: show != .all) {}
+                            .allowsHitTesting(false)
+                    }
+                    Chip(label: tags.isEmpty ? "# Tags" : "# Tags \(tags.count)", active: !tags.isEmpty) { showTags = true }
+                    ForEach(tags.sorted(), id: \.self) { t in
+                        Chip(label: "#\(t)  ✕", active: true) { tags.remove(t) }
                     }
                 }
-                ForEach(store.categoryCounts, id: \.0) { c, count in
-                    Chip(label: "\(c.label) \(count)", systemImage: c.symbol, active: category == c) {
-                        category = category == c ? nil : c
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(store.categoryCounts, id: \.0) { c, count in
+                        Chip(label: "\(c.label) \(count)", systemImage: c.symbol, active: category == c) {
+                            category = category == c ? nil : c
+                        }
                     }
-                }
-                if !store.tagCounts.isEmpty { Divider().frame(height: 20) }
-                ForEach(store.tagCounts.prefix(30), id: \.0) { t, _ in
-                    Chip(label: "#\(t)", active: tag == t) { tag = tag == t ? nil : t }
                 }
             }
         }
@@ -92,8 +154,8 @@ struct LibraryView: View {
             Label(store.items.isEmpty ? "Nothing saved yet" : "No matches", systemImage: "pin")
         } description: {
             Text(store.items.isEmpty
-                 ? "Share a screenshot to Magpie from Photos or right after taking it, tap + to pick one, or copy a link and tap the clipboard."
-                 : "Try a different search or filter.")
+                 ? "Tap + to pick a screenshot, copy a link and tap the clipboard, or add a film, show or book by name."
+                 : "Clear the search or change the filters.")
         }
         .padding(.top, 60)
     }
@@ -120,8 +182,12 @@ struct LibraryView: View {
             store.addScreenshot(data)
             flash("Screenshot saved")
         } else if let url = board.url ?? board.string.flatMap(Self.link(from:)) {
-            store.addLink(url)
-            flash("Link saved")
+            if store.items.contains(where: { $0.sourceUrl == url.absoluteString }) {
+                flash("Already saved")
+            } else {
+                store.addLink(url)
+                flash("Link saved")
+            }
         } else {
             flash("Copy a screenshot or a link first")
             return
@@ -146,7 +212,10 @@ struct LibraryView: View {
 }
 
 struct ItemCard: View {
+    @EnvironmentObject private var store: LibraryStore
+    @EnvironmentObject private var sync: SyncEngine
     let item: Item
+    var dense = false
 
     private var category: Category? { Category(rawValue: item.category ?? "") }
 
@@ -155,12 +224,8 @@ struct ItemCard: View {
             ItemImage(item: item)
                 .aspectRatio(category?.isPortrait == true ? 2 / 3 : 16 / 10, contentMode: .fit)
                 .overlay(alignment: .topLeading) { badge.padding(6) }
-                .overlay(alignment: .topTrailing) {
-                    if item.needsReview, let c = item.confidence {
-                        Label("\(c)%", systemImage: "questionmark.circle.fill").badgeStyle(.orange).padding(6)
-                            .accessibilityLabel("Not sure: \(c) percent confident")
-                    }
-                }
+                .overlay(alignment: .topTrailing) { flag.padding(6) }
+                .overlay(alignment: .bottomTrailing) { marks.padding(6) }
                 .overlay {
                     if item.status == "processing" || item.status == "queued" {
                         Color.black.opacity(0.35)
@@ -172,16 +237,25 @@ struct ItemCard: View {
                     }
                 }
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
-                if let subtitle = item.subtitle {
+                Text(item.displayTitle).font(dense ? .caption.weight(.semibold) : .subheadline.weight(.semibold)).lineLimit(2)
+                if !dense, let subtitle = item.subtitle {
                     Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 let facts = cardFacts
-                if !facts.isEmpty {
+                if !dense, !facts.isEmpty {
                     Text(facts.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 }
+                if !dense, item.status == "ready", !item.verified {
+                    Button {
+                        store.update(item.id, ItemPatch(confirmed: true))
+                        sync.requestSync()
+                    } label: {
+                        Label("Verify", systemImage: "checkmark.seal").font(.caption2.bold())
+                    }
+                    .buttonStyle(.bordered).controlSize(.mini)
+                }
             }
-            .padding(10)
+            .padding(dense ? 6 : 10)
         }
         .background(Color(.systemBackground))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -196,6 +270,25 @@ struct ItemCard: View {
         }
     }
 
+    /// "!" when it failed or Magpie isn't sure, "○" when nothing confirmed it.
+    @ViewBuilder private var flag: some View {
+        if item.needsReview, let c = item.confidence {
+            Label("\(c)%", systemImage: "questionmark.circle.fill").badgeStyle(.orange)
+                .accessibilityLabel("Not sure: \(c) percent confident")
+        } else if item.status == "ready", !item.verified {
+            Image(systemName: "circle.dotted").badgeStyle(.gray)
+                .accessibilityLabel("Not confirmed by any source")
+        }
+    }
+
+    @ViewBuilder private var marks: some View {
+        HStack(spacing: 4) {
+            if item.reviewed { Image(systemName: "checkmark.circle.fill").badgeStyle(.green) }
+            if item.favorite { Image(systemName: "star.fill").badgeStyle(.yellow) }
+            if item.watchlist { Image(systemName: "eye.fill").badgeStyle(.blue) }
+        }
+    }
+
     private var cardFacts: [String] {
         var out: [String] = []
         if let r = item.meta("imdb_rating") ?? item.meta("tmdb_rating") { out.append("★ " + r.replacingOccurrences(of: "/10", with: "")) }
@@ -205,6 +298,78 @@ struct ItemCard: View {
         if let time = item.meta("total_time") { out.append(time) }
         if let year = item.meta("year"), category?.isPortrait == true { out.append(year) }
         return Array(out.prefix(3))
+    }
+}
+
+/// One line per item, for the list layout.
+struct ItemRow: View {
+    let item: Item
+
+    private var category: Category? { Category(rawValue: item.category ?? "") }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ItemImage(item: item)
+                .frame(width: 56, height: 56)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
+                Text([category?.label, item.meta("year"), item.subtitle].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if item.needsChecking { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+            if item.reviewed { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+            if item.favorite { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+            if item.watchlist { Image(systemName: "eye.fill").foregroundStyle(.blue) }
+        }
+        .padding(8)
+        .background(Color(.systemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color(.separator), lineWidth: 0.5))
+    }
+}
+
+/// Pick tags to filter by: several can be on at once and all must match.
+struct TagFilterSheet: View {
+    @EnvironmentObject private var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selected: Set<String>
+    @State private var search = ""
+
+    private var shown: [(String, Int)] {
+        let all = Array(store.tagCounts.prefix(80))
+        guard !search.isEmpty else { return all }
+        let f = search.lowercased().replacingOccurrences(of: "#", with: "")
+        return all.filter { $0.0.contains(f) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(shown, id: \.0) { tag, count in
+                    Button {
+                        if selected.contains(tag) { selected.remove(tag) } else { selected.insert(tag) }
+                    } label: {
+                        HStack {
+                            Text("#\(tag)")
+                            Spacer()
+                            Text("\(count)").foregroundStyle(.secondary)
+                            if selected.contains(tag) { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
+            }
+            .searchable(text: $search, prompt: "Filter tags")
+            .overlay { if store.tagCounts.isEmpty { ContentUnavailableView("No tags yet", systemImage: "number") } }
+            .navigationTitle("Tags")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Clear") { selected = [] }.disabled(selected.isEmpty) }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -229,7 +394,7 @@ struct Chip: View {
     }
 }
 
-private extension View {
+extension View {
     func badgeStyle(_ color: Color) -> some View {
         font(.caption2.bold())
             .labelStyle(.titleAndIcon)

@@ -42,6 +42,8 @@ struct ItemDetailView: View {
                     }
                 }
                 statusRow(item)
+                flagsRow(item)
+                verifyNotice(item)
                 confidenceSection(item)
                 scores(item)
                 if let summary = item.summary { Text(summary) }
@@ -61,6 +63,31 @@ struct ItemDetailView: View {
                     ForEach(facts, id: \.key) { key, value in
                         LabeledContent(key.replacingOccurrences(of: "_", with: " ").capitalized) {
                             Text(value.string ?? "").multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+
+            if item.status == "ready", !item.pendingUpload {
+                PluginSection(itemID: item.id, category: item.category)
+            }
+
+            if !item.related.isEmpty {
+                Section("Related") {
+                    ForEach(item.related, id: \.url) { r in
+                        if let url = URL(string: r.url) {
+                            Link(destination: url) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack {
+                                        Text(r.label).foregroundStyle(.primary)
+                                        if let kind = r.kind { Text(kind.capitalized).font(.caption2).foregroundStyle(.secondary) }
+                                        Spacer()
+                                        Text(url.host?.replacingOccurrences(of: "www.", with: "") ?? "")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    if let why = r.why { Text(why).font(.caption).foregroundStyle(.secondary) }
+                                }
+                            }
                         }
                     }
                 }
@@ -172,6 +199,46 @@ struct ItemDetailView: View {
             Label("Identifying… this usually takes under a minute.", systemImage: "sparkles").font(.footnote).foregroundStyle(.secondary)
         } else if store.hasPendingOps(for: item.id) {
             Label("Changes waiting to sync", systemImage: "arrow.triangle.2.circlepath").font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// Reviewed / Favorite / Watchlist: the user's own flags, whatever Magpie found.
+    private func flagsRow(_ item: Item) -> some View {
+        HStack(spacing: 8) {
+            flagButton("Reviewed", on: item.reviewed, symbol: "checkmark.circle", tint: .green) {
+                edit(item) { $0.reviewed = !item.reviewed }
+            }
+            flagButton("Favorite", on: item.favorite, symbol: "star", tint: .yellow) {
+                edit(item) { $0.favorite = !item.favorite }
+            }
+            flagButton("Watchlist", on: item.watchlist, symbol: "eye", tint: .blue) {
+                edit(item) { $0.watchlist = !item.watchlist }
+            }
+        }
+    }
+
+    private func flagButton(_ title: String, on: Bool, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: on ? symbol + ".fill" : symbol)
+                .font(.footnote.weight(.medium))
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .tint(on ? tint : .secondary)
+        .controlSize(.small)
+    }
+
+    /// Nothing confirmed this identification: let the user say it is right.
+    @ViewBuilder
+    private func verifyNotice(_ item: Item) -> some View {
+        if item.status == "ready", !item.pendingUpload, !item.verified, !item.needsReview {
+            HStack {
+                Text("No source confirmed this. If it looks right, mark it as correct.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Spacer()
+                Button("Mark as correct") { edit(item) { $0.confirmed = true } }
+                    .buttonStyle(.bordered).controlSize(.small)
+            }
         }
     }
 

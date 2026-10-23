@@ -28,6 +28,8 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.example.magpie.sync</string>
+		<!-- xtool prefixes the bundle ID with the signing team: the app builds its task ID from the bundle ID -->
+		<string>XTL-VZX9L3FVF8.com.example.magpie.sync</string>
 	</array>
 </dict>
 </plist>

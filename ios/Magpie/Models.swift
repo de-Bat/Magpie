@@ -138,6 +138,12 @@ struct Item: Codable, Identifiable, Equatable {
     var kind: String                   // screenshot | url
     var sourceUrl: String?             // the shared link (kind == "url")
     var originalHash: String?          // SHA256 of the photo before the app converted it for upload
+    var reviewed: Bool                 // the user has gone over this item
+    var favorite: Bool
+    var watchlist: Bool                // to watch / read / try later
+    var confirmed: Bool                // the user marked the identification as correct
+    var verified: Bool                 // corrected, confirmed, sure enough, or a source confirmed it (computed by the server)
+    var related: [RelatedLink]
 
     // Local-only state
     var localImage: String?            // file name in AppGroup.images
@@ -153,6 +159,7 @@ struct Item: Codable, Identifiable, Equatable {
         case usage, batchPending = "batch_pending"
         case kind, sourceUrl = "source_url"
         case originalHash = "original_hash"
+        case reviewed, favorite, watchlist, confirmed, verified, related
     }
 
     init(localID: String, localImage: String, note: String?, createdAt: Date) {
@@ -172,6 +179,12 @@ struct Item: Codable, Identifiable, Equatable {
         needsReview = false
         batchPending = false
         kind = "screenshot"
+        reviewed = false
+        favorite = false
+        watchlist = false
+        confirmed = false
+        verified = true
+        related = []
     }
 
     /// A link saved on this device, waiting to be sent to the server.
@@ -184,6 +197,9 @@ struct Item: Codable, Identifiable, Equatable {
     }
 
     var isLink: Bool { kind == "url" }
+
+    /// Failed, unsure, or nothing confirmed it (the PWA's "To check").
+    var needsChecking: Bool { status == "error" || needsReview || (status == "ready" && !verified) }
     var hasScreenshot: Bool { localImage != nil || !(imageFile ?? "").isEmpty }
 
     init(from decoder: Decoder) throws {
@@ -215,6 +231,12 @@ struct Item: Codable, Identifiable, Equatable {
         kind = (try? c.decodeIfPresent(String.self, forKey: .kind)) ?? "screenshot"
         sourceUrl = try? c.decodeIfPresent(String.self, forKey: .sourceUrl)
         originalHash = try? c.decodeIfPresent(String.self, forKey: .originalHash)
+        reviewed = (try? c.decodeIfPresent(Bool.self, forKey: .reviewed)) ?? false
+        favorite = (try? c.decodeIfPresent(Bool.self, forKey: .favorite)) ?? false
+        watchlist = (try? c.decodeIfPresent(Bool.self, forKey: .watchlist)) ?? false
+        confirmed = (try? c.decodeIfPresent(Bool.self, forKey: .confirmed)) ?? false
+        verified = (try? c.decodeIfPresent(Bool.self, forKey: .verified)) ?? true
+        related = (try? c.decodeIfPresent([RelatedLink].self, forKey: .related)) ?? []
         if imageFile?.isEmpty == true { imageFile = nil }  // links have no screenshot
         localImage = try c.decodeIfPresent(String.self, forKey: .localImage)
         pendingUpload = try c.decodeIfPresent(Bool.self, forKey: .pendingUpload) ?? false
@@ -253,6 +275,91 @@ struct ItemPatch: Codable, Equatable {
     var note: String?
     var category: String?
     var tags: [String]?
+    var confirmed: Bool?
+    var reviewed: Bool?
+    var favorite: Bool?
+    var watchlist: Bool?
+}
+
+/// Something worth a look that an item points to: its repository, the paper behind it, ...
+struct RelatedLink: Codable, Equatable, Hashable {
+    var kind: String?
+    var label: String
+    var url: String
+    var why: String?
+}
+
+/// A candidate from GET /api/catalog/search (movie, TV show or book to add by name).
+struct CatalogResult: Codable, Identifiable {
+    var title: String
+    var year: Int?
+    var category: String
+    var subtitle: String?
+    var overview: String?
+    var imageUrl: String?
+    var author: String?
+    var tmdb: [JSONValue]?
+    var imdbId: String?
+
+    var id: String { "\(category)|\(title)|\(year ?? 0)|\(imdbId ?? "")" }
+
+    enum CodingKeys: String, CodingKey {
+        case title, year, category, subtitle, overview, author, tmdb
+        case imageUrl = "image_url", imdbId = "imdb_id"
+    }
+}
+
+/// POST /api/items/entry body.
+struct EntryBody: Encodable {
+    var category: String
+    var title: String
+    var year: Int?
+    var author: String?
+    var overview: String?
+    var imageUrl: String?
+    var tmdb: [JSONValue]?
+    var imdbId: String?
+    var id: String?
+
+    enum CodingKeys: String, CodingKey {
+        case category, title, year, author, overview, tmdb, id
+        case imageUrl = "image_url", imdbId = "imdb_id"
+    }
+}
+
+/// An integration (Radarr, Sonarr, ...) that applies to an item, with its current state.
+struct PluginAction: Decodable, Identifiable {
+    struct Download: Decodable {
+        var state: String
+        var label: String?
+        var percent: Double?
+        var eta: String?
+    }
+    struct Row: Decodable, Identifiable {
+        var label: String
+        var value: String?
+        var date: String?
+        var id: String { label }
+    }
+    struct Section: Decodable {
+        var title: String?
+        var download: Download?
+        var rows: [Row]?
+    }
+
+    var id: String
+    var label: String
+    var actionLabel: String?
+    var state: String?                 // available | added | unavailable
+    var message: String?
+    var url: String?
+    var icon: String?                  // path on the server, e.g. /api/plugins/radarr/icon
+    var section: Section?
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, state, message, url, section, icon
+        case actionLabel = "action_label"
+    }
 }
 
 /// A change made on this device that the server hasn't seen yet. Replayed in order.

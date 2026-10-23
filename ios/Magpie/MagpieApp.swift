@@ -7,6 +7,7 @@ struct MagpieApp: App {
     @StateObject private var sync: SyncEngine
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(Appearance.storageKey, store: Appearance.store) private var appearance = Appearance.system
+    @AppStorage(Preferences.textSizeKey) private var textSize = TextSizeChoice.standard
 
     static let backgroundTaskID = (Bundle.main.bundleIdentifier ?? "magpie") + ".sync"
 
@@ -22,6 +23,7 @@ struct MagpieApp: App {
                 .environmentObject(store)
                 .environmentObject(sync)
                 .preferredColorScheme(appearance.colorScheme)
+                .dynamicTypeSize(textSize.dynamicType)
                 .task(id: scenePhase) {
                     // While the app is open, pick up captures other devices add (and their progress).
                     guard scenePhase == .active else { return }

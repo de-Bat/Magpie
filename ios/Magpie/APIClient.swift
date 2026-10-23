@@ -171,6 +171,55 @@ struct APIClient {
         return try await send(req)
     }
 
+    /// Movies, TV shows or books matching a name, to add by name. Online only.
+    func catalogSearch(kind: String, query: String) async throws -> CatalogSearchResponse {
+        var comps = URLComponents()
+        comps.queryItems = [URLQueryItem(name: "kind", value: kind), URLQueryItem(name: "q", value: query)]
+        return try await send(request("api/catalog/search?" + (comps.percentEncodedQuery ?? "")))
+    }
+
+    func addEntry(_ body: EntryBody) async throws -> Item {
+        var req = request("api/items/entry", method: "POST", timeout: 60)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        return try await send(req)
+    }
+
+    /// Integrations (Radarr, Sonarr, ...) that apply to an item.
+    func itemPlugins(id: String) async throws -> [PluginAction] {
+        try await send(request("api/items/\(id)/plugins", timeout: 30))
+    }
+
+    func runPlugin(itemID: String, pluginID: String) async throws -> PluginAction {
+        try await send(request("api/items/\(itemID)/plugins/\(pluginID)", method: "POST", timeout: 60))
+    }
+
+    func bulkStatus() async throws -> BulkState {
+        try await send(request("api/bulk"))
+    }
+
+    func startBulk(refresh: Bool, scope: String, skipConfirmed: Bool) async throws -> BulkState {
+        var req = request(refresh ? "api/bulk/refresh-metadata" : "api/bulk/reanalyze", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: ["scope": scope, "skip_confirmed": skipConfirmed])
+        return try await send(req)
+    }
+
+    func cancelBulk() async throws {
+        _ = try await raw(request("api/bulk/cancel", method: "POST"))
+    }
+
+    /// Release notes ("What's new"), from GET /api/settings.
+    func releases() async throws -> [ReleaseNote] {
+        let response: SettingsEnvelope = try await send(request("api/settings"))
+        return response.releases ?? []
+    }
+
+    /// A server-hosted file such as a plugin icon, fetched with the token.
+    func data(path: String) async throws -> Data {
+        try await raw(request(String(path.drop(while: { $0 == "/" }))))
+    }
+
     func usage(days: Int = 30) async throws -> UsageReport {
         try await send(request("api/usage?days=\(days)"))
     }
@@ -254,6 +303,47 @@ struct APIClient {
 
 private extension Data {
     mutating func append(_ string: String) { append(Data(string.utf8)) }
+}
+
+struct CatalogSearchResponse: Decodable {
+    let results: [CatalogResult]
+    let note: String?
+}
+
+/// GET /api/bulk and the POSTs that start a job.
+struct BulkState: Decodable {
+    let running: Bool
+    let kind: String?
+    let total: Int
+    let done: Int
+    let failed: Int
+    let cancelled: Bool
+}
+
+/// One entry of the server's release notes. `version` is "next" for what's coming.
+struct ReleaseNote: Decodable, Identifiable {
+    struct Feature: Decodable, Identifiable {
+        let title: String
+        let text: String?
+        var id: String { title }
+    }
+    let version: String
+    let date: String?
+    let features: [Feature]
+    var id: String { version }
+
+    private enum CodingKeys: String, CodingKey { case version, date, features }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(String.self, forKey: .version)
+        date = try? c.decodeIfPresent(String.self, forKey: .date)
+        features = (try? c.decodeIfPresent([Feature].self, forKey: .features)) ?? []
+    }
+}
+
+private struct SettingsEnvelope: Decodable {
+    let releases: [ReleaseNote]?
 }
 
 /// GET /api/cleanup/shapes
