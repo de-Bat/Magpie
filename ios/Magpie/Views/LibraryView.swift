@@ -268,7 +268,15 @@ struct ItemCard: View {
         if item.status == "error" {
             Label("Failed", systemImage: "exclamationmark.triangle.fill").badgeStyle(.red)
         } else if let category {
-            Label(category.label, systemImage: category.symbol).badgeStyle(.black.opacity(0.6))
+            // Icon on the type's colour; the name is still read out by VoiceOver.
+            Image(systemName: category.symbol)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(category.color, in: Circle())
+                .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
+                .accessibilityElement()
+                .accessibilityLabel(category.label)
         }
     }
 
@@ -300,6 +308,29 @@ struct ItemCard: View {
         if let time = item.meta("total_time") { out.append(time) }
         if let year = item.meta("year"), category?.isPortrait == true { out.append(year) }
         return Array(out.prefix(3))
+    }
+}
+
+extension Category {
+    /// Each type's colour, for its badge on a card.
+    var color: Color {
+        switch self {
+        case .movie: return Color(red: 0.86, green: 0.25, blue: 0.27)
+        case .tv_show: return Color(red: 0.55, green: 0.33, blue: 0.85)
+        case .github_repo: return Color(red: 0.20, green: 0.23, blue: 0.29)
+        case .recipe: return Color(red: 0.92, green: 0.53, blue: 0.16)
+        case .book: return Color(red: 0.62, green: 0.40, blue: 0.24)
+        case .music: return Color(red: 0.90, green: 0.30, blue: 0.58)
+        case .podcast: return Color(red: 0.42, green: 0.35, blue: 0.80)
+        case .video: return Color(red: 0.88, green: 0.18, blue: 0.18)
+        case .article: return Color(red: 0.24, green: 0.45, blue: 0.75)
+        case .product: return Color(red: 0.88, green: 0.66, blue: 0.10)
+        case .place: return Color(red: 0.20, green: 0.62, blue: 0.40)
+        case .event: return Color(red: 0.30, green: 0.36, blue: 0.82)
+        case .app: return Color(red: 0.10, green: 0.62, blue: 0.75)
+        case .course: return Color(red: 0.08, green: 0.58, blue: 0.55)
+        case .other: return Color(red: 0.45, green: 0.47, blue: 0.52)
+        }
     }
 }
 
