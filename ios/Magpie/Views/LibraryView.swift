@@ -260,10 +260,13 @@ struct ItemCard: View {
     }
 
     @ViewBuilder private var badge: some View {
-        if item.status == "error" {
-            Label("Failed", systemImage: "exclamationmark.triangle.fill").badgeStyle(.red)
-        } else if let category {
-            TypeBadge(category: category)
+        HStack(spacing: 4) {
+            if item.status == "error" {
+                Label("Failed", systemImage: "exclamationmark.triangle.fill").badgeStyle(.red)
+            } else if let category {
+                TypeBadge(category: category)
+            }
+            if item.multiCount > 0 { StackBadge(count: item.multiCount) }
         }
     }
 
@@ -311,6 +314,21 @@ struct ItemCard: View {
         if let time = item.meta("total_time") { out.append(time) }
         if let year = item.meta("year"), category?.isPortrait == true { out.append(year) }
         return Array(out.prefix(3))
+    }
+}
+
+/// "×N": this capture lists several films, shows, apps or repositories.
+struct StackBadge: View {
+    let count: Int
+
+    var body: some View {
+        Label("×\(count)", systemImage: "square.on.square")
+            .font(.caption2.bold())
+            .labelStyle(.titleAndIcon)
+            .padding(.horizontal, 7).frame(height: 28)
+            .background(.black.opacity(0.65), in: Capsule())
+            .foregroundStyle(.white)
+            .accessibilityLabel("\(count) in one capture")
     }
 }
 
@@ -375,6 +393,7 @@ struct ItemRow: View {
                     .font(.caption).foregroundStyle(palette.muted).lineLimit(1)
             }
             Spacer(minLength: 0)
+            if item.multiCount > 0 { StackBadge(count: item.multiCount) }
             if item.needsChecking { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
             if item.reviewed { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
             if item.favorite { Image(systemName: "star.fill").foregroundStyle(.yellow) }

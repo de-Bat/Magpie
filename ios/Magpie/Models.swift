@@ -269,6 +269,36 @@ struct Item: Codable, Identifiable, Equatable {
     }
 }
 
+/// One of several films, shows, apps or repositories a capture lists (a "10 shows to watch" post or article).
+struct Mention: Identifiable, Equatable {
+    var title: String
+    var category: Category?
+    var year: Int?
+    var url: String?
+
+    var id: String { url ?? title }
+}
+
+extension Item {
+    /// The things this capture lists, from the server's `metadata.mentions`.
+    var mentions: [Mention] {
+        guard case .array(let list)? = metadata["mentions"] else { return [] }
+        return list.compactMap { value in
+            guard case .object(let o) = value, let title = o["title"]?.string else { return nil }
+            var year: Int?
+            if case .number(let n)? = o["year"] { year = Int(n) }
+            return Mention(title: title, category: o["category"]?.string.flatMap(Category.init(rawValue:)),
+                           year: year, url: o["url"]?.string)
+        }
+    }
+
+    /// How many things the capture holds when it is a list (two or more), else 0.
+    var multiCount: Int {
+        let n = mentions.count
+        return n >= 2 ? n : 0
+    }
+}
+
 /// Edits sent with PATCH /api/items/{id}. Nil fields are omitted.
 struct ItemPatch: Codable, Equatable {
     var title: String?
