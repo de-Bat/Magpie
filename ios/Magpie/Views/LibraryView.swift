@@ -223,11 +223,13 @@ struct ItemCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // One shape for every card, so the grid stays even whatever the type (posters crop a little, screenshots too).
             ItemImage(item: item)
-                .aspectRatio(category?.isPortrait == true ? 2 / 3 : 16 / 10, contentMode: .fit)
+                .aspectRatio(2 / 3, contentMode: .fit)
                 .overlay(alignment: .topLeading) { badge.padding(6) }
                 .overlay(alignment: .topTrailing) { flag.padding(6) }
                 .overlay(alignment: .bottomTrailing) { marks.padding(6) }
+                .overlay(alignment: .bottomLeading) { verifyButton.padding(6) }
                 .overlay {
                     if item.status == "processing" || item.status == "queued" {
                         Color.black.opacity(0.35)
@@ -238,25 +240,18 @@ struct ItemCard: View {
                         .foregroundStyle(.white)
                     }
                 }
+            // Lines are reserved even when empty, so every card has the same height.
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.displayTitle).font(dense ? .caption.weight(.semibold) : .subheadline.weight(.semibold)).lineLimit(2)
-                if !dense, let subtitle = item.subtitle {
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                }
-                let facts = cardFacts
-                if !dense, !facts.isEmpty {
-                    Text(facts.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                }
-                if !dense, item.status == "ready", !item.verified {
-                    Button {
-                        store.update(item.id, ItemPatch(confirmed: true))
-                        sync.requestSync()
-                    } label: {
-                        Label("Verify", systemImage: "checkmark.seal").font(.caption2.bold())
-                    }
-                    .buttonStyle(.bordered).controlSize(.mini)
+                Text(item.displayTitle)
+                    .font(dense ? .caption.weight(.semibold) : .subheadline.weight(.semibold))
+                    .lineLimit(2, reservesSpace: true)
+                if !dense {
+                    Text(item.subtitle ?? " ").font(.caption).foregroundStyle(palette.muted).lineLimit(1, reservesSpace: true)
+                    Text(cardFacts.isEmpty ? " " : cardFacts.joined(separator: " · "))
+                        .font(.caption2).foregroundStyle(palette.muted).lineLimit(1, reservesSpace: true)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(dense ? 6 : 10)
         }
         .background(palette.surface)
@@ -268,15 +263,23 @@ struct ItemCard: View {
         if item.status == "error" {
             Label("Failed", systemImage: "exclamationmark.triangle.fill").badgeStyle(.red)
         } else if let category {
-            // Icon on the type's colour; the name is still read out by VoiceOver.
-            Image(systemName: category.symbol)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(category.color, in: Circle())
-                .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
-                .accessibilityElement()
-                .accessibilityLabel(category.label)
+            TypeBadge(category: category)
+        }
+    }
+
+    /// Nothing confirmed this identification: one tap says it is right.
+    @ViewBuilder private var verifyButton: some View {
+        if !dense, item.status == "ready", !item.verified {
+            Button {
+                store.update(item.id, ItemPatch(confirmed: true))
+                sync.requestSync()
+            } label: {
+                Label("Verify", systemImage: "checkmark.seal.fill")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+            .buttonStyle(.borderless)
         }
     }
 
@@ -308,6 +311,23 @@ struct ItemCard: View {
         if let time = item.meta("total_time") { out.append(time) }
         if let year = item.meta("year"), category?.isPortrait == true { out.append(year) }
         return Array(out.prefix(3))
+    }
+}
+
+/// The type as an icon on its colour. The name is still read out by VoiceOver.
+struct TypeBadge: View {
+    let category: Category
+    var size: CGFloat = 28
+
+    var body: some View {
+        Image(systemName: category.symbol)
+            .font(.system(size: size * 0.46, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(category.color, in: Circle())
+            .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1))
+            .accessibilityElement()
+            .accessibilityLabel(category.label)
     }
 }
 
@@ -346,10 +366,13 @@ struct ItemRow: View {
             ItemImage(item: item)
                 .frame(width: 56, height: 56)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .topLeading) {
+                    if let category { TypeBadge(category: category, size: 22).padding(3) }
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(2)
                 Text([category?.label, item.meta("year"), item.subtitle].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption).foregroundStyle(palette.muted).lineLimit(1)
             }
             Spacer(minLength: 0)
             if item.needsChecking { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
