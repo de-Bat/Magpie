@@ -206,7 +206,7 @@ struct ItemDetailView: View {
 
     /// Reviewed / Favorite / Watchlist: the user's own flags, whatever Magpie found.
     private func flagsRow(_ item: Item) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 14) {
             flagButton("Reviewed", on: item.reviewed, symbol: "checkmark.circle", tint: .green) {
                 edit(item) { $0.reviewed = !item.reviewed }
             }
@@ -219,15 +219,19 @@ struct ItemDetailView: View {
         }
     }
 
+    /// An icon-only toggle, a fixed size so it stays tidy at any text size.
     private func flagButton(_ title: String, on: Bool, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(title, systemImage: on ? symbol + ".fill" : symbol)
-                .font(.footnote.weight(.medium))
-                .frame(maxWidth: .infinity)
+            Image(systemName: on ? symbol + ".fill" : symbol)
+                .font(.system(size: 20))
+                .foregroundStyle(on ? tint : palette.muted)
+                .frame(width: 44, height: 44)
+                .background(on ? tint.opacity(0.15) : palette.surface2, in: Circle())
         }
-        .buttonStyle(.bordered)
-        .tint(on ? tint : .secondary)
-        .controlSize(.small)
+        .buttonStyle(.borderless)
+        .accessibilityLabel(title)
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityAddTraits(.isButton)
     }
 
     /// Nothing confirmed this identification: let the user say it is right.
