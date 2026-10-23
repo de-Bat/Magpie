@@ -1,0 +1,11 @@
+version: 1
+bundleID: com.example.magpie
+product: Magpie
+infoPath: Magpie-Info.plist
+entitlementsPath: Magpie.entitlements
+iconPath: icon-1024.png
+extensions:
+  - product: MagpieShare
+    bundleID: com.example.magpie.share
+    infoPath: MagpieShare-Info.plist
+    entitlementsPath: MagpieShare.entitlements
