@@ -97,11 +97,12 @@ class CleanupIndex:
 
     def captures(self) -> list[Capture]:
         """The screenshots of every finished capture, including further screenshots merged into it."""
-        rows = self.db.conn.execute(
-            "SELECT id, title, image_file, image_hash, original_hash, captures FROM items "
-            "WHERE kind = 'screenshot' AND status = 'ready' AND image_file != '' "
-            "AND (corrected = 1 OR confidence IS NULL OR confidence >= ?) "
-            "AND id NOT IN (SELECT item_id FROM batch_jobs)", (REVIEW_THRESHOLD,)).fetchall()
+        with self._lock:   # checks run in parallel threads; one sqlite connection can't serve two at once
+            rows = self.db.conn.execute(
+                "SELECT id, title, image_file, image_hash, original_hash, captures FROM items "
+                "WHERE kind = 'screenshot' AND status = 'ready' AND image_file != '' "
+                "AND (corrected = 1 OR confidence IS NULL OR confidence >= ?) "
+                "AND id NOT IN (SELECT item_id FROM batch_jobs)", (REVIEW_THRESHOLD,)).fetchall()
         result = []
         for row in rows:
             title = row["title"] or "Untitled"
